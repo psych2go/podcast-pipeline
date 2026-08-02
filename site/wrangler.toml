@@ -1,0 +1,8 @@
+name = "podcast-scripts"
+compatibility_date = "2026-07-29"
+
+pages_build_output_dir = "."
+
+[[r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "podcast-audio"

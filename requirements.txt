@@ -1,0 +1,22 @@
+# ===== 播客处理流水线 · Python 依赖 =====
+#
+# 默认安装（必需的运行依赖）：
+#   pip install -r requirements.txt
+#
+# 按需要选装可选组：
+#   pip install faster-whisper       # ASR 回退引擎（whisper）：~2GB
+#   pip install trafilatura          # 网页正文提取（推荐）
+#   pip install feedparser           # RSS 字幕检测
+#   pip install curl_cffi            # 反爬页面抓取（WSL2 下需 libcurl-impersonate）
+#   pip install playwright           # JS 渲染页面抓取（需先 playwright install）
+#
+# v5 ASR 引擎（默认 Parakeet，含说话人分离）—— 单条命令装全：
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+#   pip install "nemo_toolkit[asr]" pyannote.audio
+# 可选增强：
+#   pip install kenlm               # n-gram LM shallow fusion（需 python3-dev 头文件编译）
+
+# ===== 核心依赖 =====
+httpx>=0.28.0
+tqdm>=4.66.0
+soundfile>=0.12.1
