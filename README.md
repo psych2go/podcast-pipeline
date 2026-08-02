@@ -1,13 +1,30 @@
 # Podcast Pipeline · 英文播客 → 中文讲稿流水线
 
-把英文播客自动转为中文讲稿，产出 **TTS 中文音频 + HTML 阅读页面**，并部署到 Cloudflare（Pages + R2）。
+> 把英文播客自动转为中文讲稿，产出 **TTS 中文音频** 与 **自带播放器的 HTML 阅读页面**，一键部署到 Cloudflare（Pages + R2）。
 
-> 本仓库只包含**流水线方法论**（脚本、提示词、文档、部署配置）。
-> 每期播客的具体内容（转录、讲稿、MP3）属于私有数据，**不在仓库内**——由你运行流水线后在本地 `content/` 生成。
+一个完整的「抓取 → 转录 → 纠错 → 讲稿 → 朗读 → 排版 → 发布」流水线。讲稿由 Claude 按内置提示词生成，TTS 走 Fish Audio，阅读页面是精心设计的暖调书卷风（含音频播放器、折叠目录、章节编号）。
 
----
+> 📌 本仓库只含**方法论**（脚本、提示词、文档、部署配置）。每期播客的具体内容（转录、讲稿、MP3）属私有数据，**不在仓库内**——由你跑流水线后在本地 `content/` 生成。
 
-## 它做什么
+## 预览
+
+阅读页面长什么样？直接用浏览器打开示例文件：
+
+👉 **[`examples/reader-page-example.html`](./examples/reader-page-example.html)** — 下载后用浏览器打开，含完整播放器 + 折叠目录 + 章节编号。
+
+讲稿的输入格式参考 [`examples/sample-script.md`](./examples/sample-script.md) —— 一份带引言 + 三个章节的示例，喂给 `html_gen.py` 即可渲染出上面的页面。
+
+## 特性
+
+- 🎙️ **多源抓取**：网页字幕（含 JS 渲染页面、反爬站点降级）、RSS、本地 MP3（ASR 转录）
+- 📝 **分级纠错**：按来源类型决定——本地 ASR 强制纠错，官方一手字幕免纠错
+- ✍️ **讲稿由 Claude 生成**：按 `讲稿提示词.md` 的引言段、章节粒度（400–900 字）、说话人三级、漏点清单
+- 🔊 **Fish Audio TTS**：按 `## ` 标题切片、句边界断句、章间静音、断点续传、`--force-tts` 全量重生
+- 📖 **自包含阅读页**：暖调书卷设计、内置播放器（播放/倍速/音量/下载）、折叠目录、章节编号自动生成
+- ☁️ **Cloudflare 部署**：Pages 托管站点，R2 流式分发音频（支持 Range 拖动进度）
+- 🤖 **一键收尾**：`catalog.py finish` 自动完成台账 + 站点 + 首页 + R2 上传 + 部署
+
+## 流水线
 
 ```
 英文播客 URL / MP3
@@ -45,7 +62,14 @@ content.html
 
 ```
 podcast-pipeline/
+├── README.md              # 你正在看
 ├── CLAUDE.md              # 完整工作流文档（最详细）
+├── LICENSE                # MIT
+├── requirements.txt       # Python 依赖
+├── .env.example           # 环境变量模板
+├── examples/              # 输出样例（可浏览器直接打开）
+│   ├── reader-page-example.html   # 阅读页渲染样例
+│   └── sample-script.md           # 讲稿格式样例
 ├── scripts/
 │   ├── process.py         # 入口：抓取 + TTS 编排
 │   ├── fetcher.py         # 网页抓取 + ASR 转录
@@ -61,8 +85,7 @@ podcast-pipeline/
 ├── site/
 │   ├── deploy.sh          # Cloudflare Pages + R2 部署脚本
 │   └── wrangler.toml      # Cloudflare 配置
-├── content/               # ← 你的私有数据（gitignore，本地生成）
-└── .env.example           # 环境变量模板
+└── content/               # ← 你的私有数据（gitignore，本地生成）
 ```
 
 ## 配置
@@ -95,8 +118,9 @@ Cloudflare 部署需要 `wrangler`（`npx wrangler login` 完成 OAuth 登录即
 - **抓取/转录**：httpx + curl_cffi（反爬降级）+ Parakeet/Whisper ASR + pyannote 说话人分离
 - **讲稿**：Claude Code 按 `scripts/讲稿提示词.md` 生成（非外部 LLM API）
 - **TTS**：Fish Audio（按 `## ` 标题切片、句边界、章间静音、断点续传）
+- **阅读页**：原生 HTML/CSS/JS，零依赖、自包含，`html_gen.py` 从讲稿生成
 - **部署**：Cloudflare Pages（HTML 站点）+ R2（音频流式播放，支持 Range）
 
 ## License
 
-MIT
+MIT — 见 [`LICENSE`](./LICENSE)。
