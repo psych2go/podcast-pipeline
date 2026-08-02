@@ -1,3 +1,5 @@
+[English](./README.en.md) | **中文**
+
 # Podcast Pipeline · 英文播客 → 中文讲稿流水线
 
 > 把英文播客自动转为中文讲稿，产出 **TTS 中文音频** 与 **自带播放器的 HTML 阅读页面**，一键部署到 Cloudflare（Pages + R2）。
@@ -62,7 +64,8 @@ content.html
 
 ```
 podcast-pipeline/
-├── README.md              # 你正在看
+├── README.md              # 中文说明（你正在看）
+├── README.en.md           # English README
 ├── CLAUDE.md              # 完整工作流文档（最详细）
 ├── LICENSE                # MIT
 ├── requirements.txt       # Python 依赖
