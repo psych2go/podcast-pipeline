@@ -4,19 +4,19 @@
 #   pip install -r requirements.txt
 #
 # 按需要选装可选组：
-#   pip install faster-whisper       # ASR 回退引擎（whisper）：~2GB
-#   pip install trafilatura          # 网页正文提取（推荐）
-#   pip install feedparser           # RSS 字幕检测
-#   pip install curl_cffi            # 反爬页面抓取（WSL2 下需 libcurl-impersonate）
-#   pip install playwright           # JS 渲染页面抓取（需先 playwright install）
+#   pip install -r requirements-asr.txt
+#   pip install -r requirements-diarization.txt
+#   pip install trafilatura feedparser curl_cffi
+#   pip install playwright && playwright install chromium
+#   pip install -r requirements-benchmark.txt
 #
-# v5 ASR 引擎（默认 Parakeet，含说话人分离）—— 单条命令装全：
+# 旧版/重型说话人分离环境（按需安装）：
 #   pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
-#   pip install "nemo_toolkit[asr]" pyannote.audio
+#   pip install "nemo_toolkit[asr]"
 # 可选增强：
 #   pip install kenlm               # n-gram LM shallow fusion（需 python3-dev 头文件编译）
 
-# ===== 核心依赖 =====
+# ===== 核心依赖（抓取、配置、报告） =====
 httpx>=0.28.0
 tqdm>=4.66.0
 soundfile>=0.12.1

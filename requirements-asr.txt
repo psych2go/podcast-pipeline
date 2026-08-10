@@ -1,0 +1,2 @@
+# MP3 / WAV transcription
+faster-whisper>=1.2.0

@@ -17,14 +17,29 @@
     不会覆盖手工精修过的展示标题
 """
 import argparse
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
+
+from config import PAGES_BASE_URL, PAGES_PROJECT, R2_BUCKET, R2_PUBLIC_URL
+from episode import (
+    audio_key as episode_audio_key,
+    display_title as episode_display_title,
+    legacy_page_path as episode_legacy_page_path,
+    page_path as episode_page_path,
+    public_audio_url,
+    quality_metadata,
+    source_metadata,
+)
+from publish import verify_publish, write_publish_report
+from run_report import RunReport
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONTENT_DIR = BASE_DIR / "content"
@@ -72,6 +87,27 @@ def _gen_mp3(folder):
     return None
 
 
+def _audio_duration_minutes(mp3):
+    """优先用 ffprobe 读取真实时长；不可用时再回退文件大小估算。"""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(mp3),
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            seconds = float(result.stdout.strip())
+            if seconds > 0:
+                return max(1, round(seconds / 60))
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return round(mp3.stat().st_size / (1024 * 1024) / MAX_DURATION_MB_PER_MIN)
+
+
 def episode_stats(name):
     """返回 {chars, duration}。讲稿或 mp3 缺失时字段为 0。"""
     folder = CONTENT_DIR / name
@@ -82,7 +118,7 @@ def episode_stats(name):
     mp3 = _gen_mp3(folder)
     duration = 0
     if mp3:
-        duration = round(mp3.stat().st_size / (1024 * 1024) / MAX_DURATION_MB_PER_MIN)
+        duration = _audio_duration_minutes(mp3)
     return {"chars": chars, "duration": duration}
 
 
@@ -92,7 +128,14 @@ def _source_label(url):
 
 
 def _read_source(name):
-    """从 来源.md 读取 (url, label)。找不到返回 (None, None)。"""
+    """从 episode.json 读取来源；旧期自动回退 来源.md。"""
+    episode_source = source_metadata(CONTENT_DIR / name)
+    if episode_source.get("url"):
+        return (
+            episode_source["url"],
+            episode_source.get("label") or _source_label(
+                episode_source["url"]),
+        )
     src = CONTENT_DIR / name / "来源.md"
     if not src.exists():
         return None, None
@@ -112,68 +155,92 @@ def _source_cell(name):
 # ── 台账 ──────────────────────────────────────────────────────────
 
 def _display_title(name):
-    """从 site.json 查该期精修标题（带标点）；查不到回退文件夹名。
-
-    台账「播客」列、首页卡片、每期页 hero 都用它，保证全站标题一致。
-    """
-    site_json_path = SITE_DIR / "site.json"
     try:
-        for e in json.loads(site_json_path.read_text(encoding="utf-8")):
-            if e.get("folder") == name:
-                return e.get("title") or name
+        return episode_display_title(CONTENT_DIR / name)
     except Exception:
-        pass
-    return name
+        return name
 
 
 def add_to_catalog(name):
+    """兼容旧命令；验证目标单集后全量重建台账。"""
     folder = CONTENT_DIR / name
     if not folder.is_dir():
         sys.exit(f"[错误] 找不到播客目录: {folder}")
     if not _find_briefing(folder):
         sys.exit(f"[错误] 找不到讲稿: {folder}")
+    rebuild_catalog()
 
-    stats = episode_stats(name)
-    title = _display_title(name)
-    url, _ = _read_source(name)
-    source_cell = _source_cell(name)
-    body = f"{title} | {source_cell} | {stats['chars']//1000}K字 | {stats['duration']}min |"
 
-    text = CATALOG.read_text(encoding="utf-8") if CATALOG.exists() else ""
-    if not text.strip():
-        text = CATALOG_HEADER
+def _load_site_entries():
+    path = SITE_DIR / "site.json"
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return entries if isinstance(entries, list) else []
 
-    # 定位已有行：优先按转录来源 URL（唯一），其次按文件夹名（兼容旧行）
-    m = None
-    if url:
-        m = re.search(r"^.*" + re.escape(url) + r".*$", text, re.M)
-    if not m:
-        m = re.search(r"^(\|\s*\d+\s*\|\s*)" + re.escape(name) + r"\s*\|.*$", text, re.M)
 
-    if m:
-        line = m.group(0)
-        # 保留行号；来源单元格若新值缺失则沿用旧值
-        fields = [f.strip() for f in line.strip().strip("|").split("|")]
-        existing_source = fields[2] if len(fields) >= 3 else ""
-        source_cell = source_cell or existing_source
-        body = f"{title} | {source_cell} | {stats['chars']//1000}K字 | {stats['duration']}min |"
-        num_m = re.match(r"^\|\s*(\d+)\s*\|", line)
-        row = f"| {num_m.group(1)} | {body}" if num_m else f"| {body}"
-        lines = text.splitlines(keepends=True)
-        for i, ln in enumerate(lines):
-            if ln.rstrip("\n") == line.rstrip("\n"):
-                lines[i] = row + "\n"
-                break
-        text = "".join(lines)
-        print(f"[台账] 已更新 {name} 的行")
-    else:
-        nums = [int(n) for n in re.findall(r"^\|\s*(\d+)\s*\|", text, re.M)]
-        num = (max(nums) + 1) if nums else 1
-        text = text.rstrip() + "\n" + f"| {num} | " + body + "\n"
-        print(f"[台账] 已追加 {title} → 第 {num} 行")
+def _ordered_episode_names():
+    available = _episode_dirs()
+    available_set = set(available)
+    ordered = []
+    for entry in _load_site_entries():
+        name = entry.get("folder")
+        if name in available_set and name not in ordered:
+            ordered.append(name)
+    ordered.extend(name for name in available if name not in ordered)
+    return ordered
 
-    CATALOG.write_text(text, encoding="utf-8")
-    print(f"  {stats['chars']//1000}K字, {stats['duration']}min")
+
+def _catalog_text(names):
+    rows = []
+    for number, name in enumerate(names, start=1):
+        stats = episode_stats(name)
+        title = _display_title(name).replace("|", r"\|")
+        rows.append(
+            f"| {number} | {title} | {_source_cell(name)} | "
+            f"{stats['chars']//1000}K字 | {stats['duration']}min |"
+        )
+    return CATALOG_HEADER + "\n".join(rows) + ("\n" if rows else "")
+
+
+def rebuild_catalog():
+    """从 episode/content/site 顺序全量重建播客台账。"""
+    names = _ordered_episode_names()
+    CATALOG.parent.mkdir(parents=True, exist_ok=True)
+    CATALOG.write_text(_catalog_text(names), encoding="utf-8")
+    print(f"[台账] 已全量重建 {len(names)} 期 → {CATALOG.name}")
+    return names
+
+
+def catalog_consistency_errors():
+    """验证台账和 site.json 都与当前内容统计一致。"""
+    names = _ordered_episode_names()
+    errors = []
+    try:
+        actual_catalog = CATALOG.read_text(encoding="utf-8")
+    except OSError:
+        actual_catalog = ""
+    expected_catalog = _catalog_text(names)
+    if actual_catalog != expected_catalog:
+        errors.append("播客目录.md 与当前单集统计不一致，需运行 catalog.py rebuild")
+
+    entries = _load_site_entries()
+    entry_names = [entry.get("folder") for entry in entries]
+    if entry_names != names:
+        errors.append("site.json 顺序或单集集合与播客台账不一致")
+        return errors
+    for name, entry in zip(names, entries):
+        expected = _build_entry(name, entry)
+        for field in (
+                "title", "path", "slug", "duration", "words",
+                "source_name", "source_url", "quality_mode"):
+            if entry.get(field) != expected.get(field):
+                errors.append(
+                    f"{name}: site.json.{field}="
+                    f"{entry.get(field)!r}，当前应为 {expected.get(field)!r}"
+                )
+    return errors
 
 
 # ── 站点清单 ──────────────────────────────────────────────────────
@@ -194,14 +261,49 @@ def _build_entry(name, prev):
     folder = CONTENT_DIR / name
     stats = episode_stats(name)
     url, label = _read_source(name)
+    path = episode_page_path(folder)
     return {
-        "title": prev.get("title", name),
+        "title": _display_title(name),
         "folder": name,
+        "path": path,
+        "slug": path,
         "duration": stats["duration"],
         "words": stats["chars"],
-        "source_name": prev.get("source_name") or label or "",
-        "source_url": prev.get("source_url") or url or "",
+        "source_name": label or prev.get("source_name") or "",
+        "source_url": url or prev.get("source_url") or "",
+        "quality_mode": quality_metadata(folder).get(
+            "mode",
+            "strict" if (folder / "content_map.json").exists() else "legacy",
+        ),
     }
+
+
+def _site_readiness_errors(names, existing):
+    errors = []
+    try:
+        from quality_report import build_quality_report
+    except ImportError:
+        from scripts.quality_report import build_quality_report
+
+    for name in names:
+        folder = CONTENT_DIR / name
+        mp3 = _gen_mp3(folder)
+        html = folder / f"{name} - content.html"
+        if not mp3:
+            errors.append(f"{name}: 缺少最终 MP3")
+        if not html.exists():
+            errors.append(f"{name}: 缺少 content.html")
+
+        content_map = folder / "content_map.json"
+        if content_map.exists():
+            report = build_quality_report(folder, strict=True)
+            if not report.get("passed", False):
+                detail = "; ".join(report.get("errors", [])[:3])
+                errors.append(f"{name}: 严格质量门未通过: {detail}")
+        elif name not in existing:
+            errors.append(
+                f"{name}: 新期缺少 content_map.json，不能进入站点")
+    return errors
 
 
 def sync_site(only=None):
@@ -220,9 +322,14 @@ def sync_site(only=None):
         except Exception:
             existing = {}
 
-    names = _episode_dirs()
+    names = _ordered_episode_names()
     if only and only not in names:
         sys.exit(f"[错误] 找不到播客目录（或没有讲稿）: {only}")
+    readiness_errors = _site_readiness_errors(names, existing)
+    if readiness_errors:
+        for error in readiness_errors:
+            print(f"[站点][阻断] {error}")
+        sys.exit("[站点][阻断] 存在未就绪单集，未修改 site/")
 
     # 拷贝 content.html（--only 只影响这一步）；音频由 R2 公开 URL 提供，不放进 site/
     for name in names:
@@ -231,18 +338,17 @@ def sync_site(only=None):
         folder = CONTENT_DIR / name
         html = folder / f"{name} - content.html"
         if html.exists():
-            (SITE_DIR / name).mkdir(parents=True, exist_ok=True)
-            shutil.copy2(html, SITE_DIR / name / "content.html")
+            paths = {
+                episode_page_path(folder),
+                episode_legacy_page_path(folder),
+            } - {""}
+            for public_path in paths:
+                destination = SITE_DIR / public_path
+                destination.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(html, destination / "content.html")
 
     # 重建 site.json（始终覆盖全部期）
-    eps, seen = [], set()
-    for name in existing.keys():
-        if name in names:
-            eps.append(_build_entry(name, existing[name]))
-            seen.add(name)
-    for name in names:
-        if name not in seen:
-            eps.append(_build_entry(name, {}))
+    eps = [_build_entry(name, existing.get(name, {})) for name in names]
 
     SITE_DIR.mkdir(parents=True, exist_ok=True)
     site_json_path.write_text(
@@ -284,27 +390,47 @@ def gen_index():
     # 统计
     total_min = sum(e["duration"] for e in eps)
     total_words = sum(e["words"] for e in eps)
-    stats = (f'    <span>收录 {len(eps)} 期</span>\n'
-             f'    <span>总计 {total_min} 分钟</span>\n'
-             f'    <span>约 {total_words // 1000}K 字</span>')
+    stats = (
+        f'        <div class="stat"><strong>{len(eps):02d}</strong>'
+        f'<span>已收录节目</span></div>\n'
+        f'        <div class="stat"><strong>{total_min}</strong>'
+        f'<span>分钟中文音频</span></div>\n'
+        f'        <div class="stat"><strong>{total_words // 1000}K</strong>'
+        f'<span>字深度讲稿</span></div>'
+    )
 
-    # 卡片
+    # 卡片：site.json 保留台账顺序，首页倒序展示，让最新一期位于首屏。
     cards = []
-    for e in eps:
-        href = quote(e["folder"] + "/content.html", safe=",/+=")
+    for display_index, e in enumerate(reversed(eps), start=1):
+        href = quote(
+            (e.get("path") or e["folder"]) + "/content.html",
+            safe="/",
+        )
+        episode_no = len(eps) - display_index + 1
+        title = _esc(e["title"])
+        source_name = _esc(e.get("source_name", ""))
+        source_url = _esc(e.get("source_url", ""))
         cards.append(
-            f'    <div class="card" tabindex="0" role="link" data-href="{href}" '
-            f'onclick="window.location=\'{href}\'">\n'
-            f'        <div class="card-num">EPISODE</div>\n'
-            f'        <h3 class="card-title">{_esc(e["title"])}</h3>\n'
-            f'        <div class="card-meta">\n'
-            f'            <span class="dur">{e["duration"]}min</span>\n'
-            f'            <span class="words">{e["words"] // 1000}K字</span>\n'
-            f'            <a href="{_esc(e.get("source_url", ""))}" target="_blank" '
-            f'class="source" onclick="event.stopPropagation()">'
-            f'{_esc(e.get("source_name", ""))}</a>\n'
+            f'    <article class="episode-card" data-search="{title.lower()} {source_name.lower()}">\n'
+            f'        <a class="episode-card-main" href="{href}" '
+            f'aria-label="阅读和收听：{title}">\n'
+            f'            <div class="episode-card-top">\n'
+            f'                <span class="episode-index">{episode_no:02d}</span>\n'
+            f'                <span class="episode-format">中文讲稿 · 音频</span>\n'
+            f'            </div>\n'
+            f'            <h3 class="episode-title">{title}</h3>\n'
+            f'            <div class="episode-meta">\n'
+            f'                <span>{e["duration"]} 分钟</span>\n'
+            f'                <span>{e["words"] // 1000}K 字</span>\n'
+            f'            </div>\n'
+            f'        </a>\n'
+            f'        <div class="episode-card-bottom">\n'
+            f'            <a class="episode-open" href="{href}">阅读与收听 '
+            f'<span aria-hidden="true">↗</span></a>\n'
+            f'            <a href="{source_url}" target="_blank" rel="noopener" '
+            f'class="episode-source">{source_name}</a>\n'
             f'        </div>\n'
-            f'    </div>')
+            f'    </article>')
     cards_html = "\n".join(cards)
 
     text = index_path.read_text(encoding="utf-8")
@@ -355,53 +481,249 @@ def backfill_sources():
 
 # ── 一键收尾 ──────────────────────────────────────────────────────
 
-def _run(cmd, cwd, dry_run=False):
+def _run_with_output(cmd, cwd, dry_run=False):
     if dry_run:
         print("  [dry-run] " + " ".join(cmd))
-        return True
+        return True, "dry-run"
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=600)
-        out = (r.stdout or "").strip()
+        out = "\n".join(
+            value for value in ((r.stdout or "").strip(), (r.stderr or "").strip())
+            if value
+        )
         if out:
             print(out[-2000:])
         if r.returncode != 0:
-            err = (r.stderr or "").strip()
             print(f"[错误] 命令失败 (exit {r.returncode})，已跳过")
-            if err:
-                print(err[-1200:])
-            return False
-        return True
+            return False, out
+        return True, out
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         print(f"[错误] {type(exc).__name__}: {exc}，已跳过")
+        return False, str(exc)
+
+
+def _run(cmd, cwd, dry_run=False):
+    return _run_with_output(cmd, cwd, dry_run=dry_run)[0]
+
+
+def _verify_publish_with_retry(*args, attempts=4, delay=3):
+    """Retry only transient Pages propagation failures after a deployment."""
+    page_error_prefixes = (
+        "首页状态异常",
+        "首页未找到",
+        "单期页面状态异常",
+        "单期页面未找到",
+        "单期页面缺少",
+    )
+    report = None
+    for attempt in range(1, attempts + 1):
+        report = verify_publish(*args)
+        if report.get("passed", False):
+            return report
+        errors = report.get("errors", [])
+        page_only = errors and all(
+            error.startswith(page_error_prefixes) for error in errors)
+        if not page_only or attempt == attempts:
+            return report
+        print(
+            f"[发布验证] Pages 可能仍在传播，"
+            f"{delay}s 后重试 ({attempt}/{attempts})...")
+        time.sleep(delay)
+    return report
+
+
+def _publish_preflight(name):
+    """发布前验证内容质量、产物存在性、新鲜度和音频可解码性。"""
+    folder = CONTENT_DIR / name
+    if not folder.is_dir():
+        print(f"[发布前检查][阻断] 找不到播客目录: {folder}")
         return False
+
+    from quality_report import build_quality_report
+    report = build_quality_report(folder)
+    (folder / "quality_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if not report.get("passed", False):
+        for error in report.get("errors", []):
+            print(f"[发布前检查][阻断] {error}")
+        return False
+
+    briefing = _find_briefing(folder)
+    mp3 = _gen_mp3(folder)
+    html = folder / f"{name} - content.html"
+    if not briefing or not mp3 or not html.exists():
+        print("[发布前检查][阻断] 缺少讲稿、最终 MP3 或 content.html")
+        return False
+
+    briefing_sha256 = hashlib.sha256(briefing.read_bytes()).hexdigest()
+    html_text = html.read_text(encoding="utf-8")
+    html_hash_match = re.search(
+        r'<meta name="podcast-source-sha256" content="([0-9a-f]{64})">',
+        html_text,
+    )
+    if not html_hash_match or html_hash_match.group(1) != briefing_sha256:
+        print("[发布前检查][阻断] content.html 未绑定当前讲稿哈希，必须重新生成")
+        return False
+
+    from tts import validate_tts_manifest
+    tts_errors = validate_tts_manifest(folder, briefing.name, name)
+    if tts_errors:
+        for error in tts_errors:
+            print(f"[发布前检查][阻断] {error}")
+        return False
+
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=codec_name,duration",
+                "-of", "json", str(mp3),
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        payload = json.loads(probe.stdout or "{}")
+        streams = payload.get("streams", [])
+        if probe.returncode != 0 or not streams or streams[0].get("codec_name") != "mp3":
+            print("[发布前检查][阻断] 最终音频无法通过 ffprobe 解码")
+            return False
+    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        print(f"[发布前检查][阻断] 音频检查失败: {exc}")
+        return False
+
+    print("[发布前检查] 质量、哈希、产物新鲜度和音频格式均通过")
+    return True
+
+
+def _finish_impl(name, dry_run, run_report):
+    print(f"=== 一键收尾: {name} ===")
+    with run_report.stage("publish_preflight") as stage:
+        preflight_ok = _publish_preflight(name)
+        stage.metrics["passed"] = preflight_ok
+        if not preflight_ok:
+            stage.fail("publish preflight failed")
+            return False
+
+    with run_report.stage("sync_site") as stage:
+        sync_site(only=name)
+        stage.metrics["episode_count"] = len(_load_site_entries())
+
+    with run_report.stage("rebuild_catalog") as stage:
+        names = rebuild_catalog()
+        stage.metrics["episode_count"] = len(names)
+
+    with run_report.stage("generate_index"):
+        gen_index()
+
+    with run_report.stage("catalog_consistency") as stage:
+        consistency_errors = catalog_consistency_errors()
+        stage.metrics["error_count"] = len(consistency_errors)
+        if consistency_errors:
+            for error in consistency_errors:
+                print(f"[一致性][阻断] {error}")
+            stage.fail("; ".join(consistency_errors))
+            return False
+
+    mp3 = _gen_mp3(CONTENT_DIR / name)
+    with run_report.stage("upload_r2", {
+            "dry_run": dry_run,
+            "size_bytes": mp3.stat().st_size,
+    }) as stage:
+        print(f"[R2] 上传 {mp3.name} 到 R2 ...")
+        key = episode_audio_key(CONTENT_DIR / name)
+        uploaded = _run(
+            ["npx", "wrangler", "r2", "object", "put",
+             f"{R2_BUCKET}/{key}",
+             "--file", str(mp3), "--content-type", "audio/mpeg",
+             "--remote"],
+            cwd=BASE_DIR, dry_run=dry_run,
+        )
+        stage.metrics["object_key"] = key
+        if not uploaded:
+            stage.fail("R2 upload failed")
+            print("[发布] R2 上传失败，停止 Pages 部署")
+            return False
+
+    with run_report.stage("deploy_pages", {
+            "dry_run": dry_run,
+            "project": PAGES_PROJECT,
+    }) as stage:
+        print("[部署] Pages 部署 ...")
+        deployed, deploy_output = _run_with_output(
+            ["npx", "wrangler", "pages", "deploy", ".",
+             "--project-name", PAGES_PROJECT, "--branch", "main"],
+            cwd=SITE_DIR, dry_run=dry_run,
+        )
+        if not deployed:
+            stage.fail("Pages deployment failed")
+            print("[发布] Pages 部署失败")
+            return False
+
+    if dry_run:
+        print("[完成] dry-run：台账、site、首页、R2、Pages 命令已检查")
+        return True
+
+    if not R2_PUBLIC_URL:
+        print("[发布][阻断] R2_PUBLIC_URL 未配置，无法验证线上音频")
+        return False
+
+    display_title = _display_title(name)
+    public_path = quote(
+        episode_page_path(CONTENT_DIR / name), safe="")
+    episode_url = f"{PAGES_BASE_URL}/{public_path}/content.html"
+    audio_url = public_audio_url(CONTENT_DIR / name, R2_PUBLIC_URL)
+    with run_report.stage("verify_publish") as stage:
+        report = _verify_publish_with_retry(
+            PAGES_BASE_URL + "/",
+            episode_url,
+            audio_url,
+            display_title,
+            mp3,
+        )
+        stage.metrics["passed"] = bool(report.get("passed"))
+        stage.metrics["error_count"] = len(report.get("errors", []))
+        stage.metrics["statuses"] = {
+            check: values.get("status")
+            for check, values in report.get("checks", {}).items()
+        }
+        if not report.get("passed", False):
+            stage.fail("; ".join(report.get("errors", [])))
+    deployment_match = re.search(
+        r"https://[A-Za-z0-9-]+\." + re.escape(PAGES_PROJECT) + r"\.pages\.dev",
+        deploy_output,
+    )
+    if deployment_match:
+        report["deployment_url"] = deployment_match.group(0)
+    report["stable_url"] = PAGES_BASE_URL
+    report_path = CONTENT_DIR / name / "publish_report.json"
+    write_publish_report(report_path, report)
+    if not report.get("passed", False):
+        for error in report.get("errors", []):
+            print(f"[发布验证][阻断] {error}")
+        print(f"[发布验证] 失败，详情见 {report_path.name}")
+        return False
+    print(f"[发布验证] Pages、R2 和 Range 均通过 → {report_path.name}")
+    print("[完成] 台账、site、首页、R2、Pages 已处理")
+    return True
 
 
 def finish(name, dry_run=False):
-    """一键收尾：台账 → site → 首页 → R2 上传 → Pages 部署。
-
-    前置：已生成音频、已清理中间文件（转录_纠错.txt / audio/）。
-    """
-    print(f"=== 一键收尾: {name} ===")
-    add_to_catalog(name)
-    sync_site(only=name)
-    gen_index()
-
-    mp3 = _gen_mp3(CONTENT_DIR / name)
-    if not mp3:
-        print("[R2] 跳过：找不到生成的 mp3")
-    else:
-        print(f"[R2] 上传 {mp3.name} 到 R2 ...")
-        # 对象键不带桶名前缀；R2 公开 URL 据此提供流式音频
-        _run(["npx", "wrangler", "r2", "object", "put",
-              f"{name}/{name}.mp3",
-              "--file", str(mp3), "--ct", "audio/mpeg"],
-             cwd=BASE_DIR, dry_run=dry_run)
-
-    print("[部署] Pages 部署 ...")
-    _run(["npx", "wrangler", "pages", "deploy", ".",
-          "--project-name", "podcast-scripts", "--branch", "main"],
-         cwd=SITE_DIR, dry_run=dry_run)
-    print("[完成] 台账、site、首页、R2、Pages 已处理")
+    """一键收尾并将阶段耗时、失败和远端状态写入 run_report.json。"""
+    folder = CONTENT_DIR / name
+    folder.mkdir(parents=True, exist_ok=True)
+    run_report = RunReport(folder, "catalog.finish", {
+        "dry_run": dry_run,
+        "pages_project": PAGES_PROJECT,
+        "r2_bucket": R2_BUCKET,
+    })
+    try:
+        ok = _finish_impl(name, dry_run, run_report)
+    except BaseException as exc:
+        run_report.finish(False, exc)
+        raise
+    run_report.finish(ok, None if ok else "publish transaction failed")
+    return ok
 
 
 # ── CLI ───────────────────────────────────────────────────────────
@@ -416,6 +738,9 @@ def main():
 
     p_add = sub.add_parser("add", help="追加/更新某期到 播客目录.md")
     p_add.add_argument("name")
+
+    sub.add_parser("rebuild", help="从当前内容和 site 顺序全量重建播客目录")
+    sub.add_parser("check", help="校验播客目录、site.json 与当前内容统计一致")
 
     p_site = sub.add_parser("sync-site", help="同步 content.html + 重建 site.json")
     p_site.add_argument("--only", default=None, help="只同步某期")
@@ -436,6 +761,15 @@ def main():
         print(f"{args.name}: {s['chars']//1000}K字, {s['duration']}min")
     elif args.cmd == "add":
         add_to_catalog(args.name)
+    elif args.cmd == "rebuild":
+        rebuild_catalog()
+    elif args.cmd == "check":
+        errors = catalog_consistency_errors()
+        for error in errors:
+            print(f"[一致性][错误] {error}")
+        if not errors:
+            print("[一致性] 播客目录、site.json 与当前内容统计一致")
+        return 1 if errors else 0
     elif args.cmd == "sync-site":
         sync_site(args.only)
     elif args.cmd == "gen-index":
@@ -443,8 +777,9 @@ def main():
     elif args.cmd == "backfill-sources":
         backfill_sources()
     elif args.cmd == "finish":
-        finish(args.name, dry_run=args.dry_run)
+        return 0 if finish(args.name, dry_run=args.dry_run) else 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

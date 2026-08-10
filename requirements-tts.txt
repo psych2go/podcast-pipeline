@@ -1,0 +1,3 @@
+# Fish Audio TTS client path
+httpx>=0.28.0
+tqdm>=4.66.0

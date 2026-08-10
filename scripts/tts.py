@@ -17,16 +17,20 @@ if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
 import glob
+import hashlib
+import json
 import os
 import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from threading import Lock
 
 import httpx
 from tqdm import tqdm
 
-from config import FISH_KEY, FISH_VOICE, FISH_MODEL
+from config import FISH_VOICE, FISH_MODEL, require_fish_key
 from validator import smart_chunk
 
 
@@ -35,6 +39,237 @@ MAX_CHUNK_CHARS = 800
 MAX_RETRIES = 5
 DEFAULT_CONCURRENCY = 3
 SECTION_SILENCE_SECONDS = 0.8  # 章节之间的静音时长
+TTS_MANIFEST_SCHEMA_VERSION = 1
+
+
+@dataclass
+class TTSResult:
+    ok: bool
+    summary: str
+    expected_sections: int = 0
+    completed_sections: int = 0
+    failed_sections: list = field(default_factory=list)
+    manifest_path: str = ""
+
+    def __str__(self):
+        return self.summary
+
+
+@dataclass
+class TTSUsage:
+    api_requests: int = 0
+    retry_count: int = 0
+    synthesized_chunks: int = 0
+    synthesized_characters: int = 0
+    _lock: Lock = field(default_factory=Lock, repr=False)
+
+    def record_attempt(self, retry=False):
+        with self._lock:
+            self.api_requests += 1
+            if retry:
+                self.retry_count += 1
+
+    def record_chunks(self, chunks):
+        with self._lock:
+            self.synthesized_chunks += len(chunks)
+            self.synthesized_characters += sum(len(chunk) for chunk in chunks)
+
+    def as_dict(self):
+        return {
+            "api_requests": self.api_requests,
+            "retry_count": self.retry_count,
+            "synthesized_chunks": self.synthesized_chunks,
+            "synthesized_characters": self.synthesized_characters,
+        }
+
+
+def _sha256_bytes(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _write_manifest(path, payload):
+    tmp_path = str(path) + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    os.replace(tmp_path, path)
+
+
+def _load_manifest(path):
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if payload.get("schema_version") != TTS_MANIFEST_SCHEMA_VERSION:
+        return {}
+    return payload
+
+
+def _section_fingerprint(text, speed, read_titles):
+    payload = {
+        "text": text,
+        "voice": FISH_VOICE,
+        "model": FISH_MODEL,
+        "speed": speed,
+        "read_titles": read_titles,
+        "max_chunk_chars": MAX_CHUNK_CHARS,
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return _sha256_bytes(encoded)
+
+
+def build_tts_plan(folder, briefing_file, speed=1.0, read_titles=True):
+    briefing_path = Path(folder) / briefing_file
+    if not briefing_path.exists():
+        return []
+    text = briefing_path.read_text(encoding="utf-8")
+    sections = split_sections(text)
+    tts_lexicon = load_tts_lexicon(folder)
+    intended = []
+    for idx, (title, body) in enumerate(sections):
+        body = body.strip()
+        if title is None:
+            if len(body) < 5:
+                continue
+            filename = "00_开场.mp3"
+            spoken = body
+        else:
+            filename = f"{idx:02d}_{safe_filename(title)}.mp3"
+            spoken = (f"{title}。\n{body}").strip() if read_titles else body
+        normalized = apply_tts_lexicon(
+            normalize_for_tts(spoken), tts_lexicon)
+        if len(normalized) < 5:
+            continue
+        intended.append({
+            "filename": filename,
+            "text": normalized,
+            "fingerprint": _section_fingerprint(
+                normalized, speed, read_titles),
+        })
+    return intended
+
+
+def validate_tts_manifest(folder, briefing_file, merged_name):
+    folder = Path(folder)
+    manifest_path = folder / "tts_manifest.json"
+    manifest = _load_manifest(manifest_path)
+    errors = []
+    if not manifest:
+        return ["缺少或无法读取 tts_manifest.json"]
+    if not manifest.get("completed"):
+        errors.append("TTS manifest 未完成")
+    if manifest.get("failed_sections"):
+        errors.append(
+            f"TTS manifest 存在失败章节: {manifest['failed_sections']}")
+
+    config = manifest.get("config", {})
+    if config.get("voice") != FISH_VOICE:
+        errors.append("TTS 音色配置已变化")
+    if config.get("model") != FISH_MODEL:
+        errors.append("TTS 模型配置已变化")
+    speed = config.get("speed")
+    read_titles = config.get("read_titles")
+    if not isinstance(speed, (int, float)) or not isinstance(read_titles, bool):
+        errors.append("TTS manifest 缺少有效 speed/read_titles 配置")
+        return errors
+
+    current_plan = build_tts_plan(
+        folder, briefing_file, speed=speed, read_titles=read_titles)
+    manifest_sections = manifest.get("sections", [])
+    section_by_name = {
+        section.get("filename"): section
+        for section in manifest_sections
+        if isinstance(section, dict)
+    }
+    if manifest.get("expected_sections") != len(current_plan):
+        errors.append("TTS 章节数量与当前讲稿不一致")
+    for item in current_plan:
+        section = section_by_name.get(item["filename"])
+        if not section or section.get("status") != "complete":
+            errors.append(f"TTS 章节未完成: {item['filename']}")
+            continue
+        if section.get("fingerprint") != item["fingerprint"]:
+            errors.append(f"TTS 章节指纹已过期: {item['filename']}")
+
+    final_path = folder / f"{merged_name}.mp3"
+    final = manifest.get("final", {})
+    if not final_path.exists():
+        errors.append("最终 MP3 不存在")
+    else:
+        if final.get("size") != final_path.stat().st_size:
+            errors.append("最终 MP3 大小与 TTS manifest 不一致")
+        if final.get("sha256") != _sha256_file(final_path):
+            errors.append("最终 MP3 哈希与 TTS manifest 不一致")
+    return errors
+
+
+def backfill_tts_manifest(
+        folder, briefing_file, merged_name,
+        speed=1.0, read_titles=True):
+    """Create a manifest for verified existing section and final MP3 files."""
+    folder = Path(folder)
+    plan = build_tts_plan(
+        folder, briefing_file, speed=speed, read_titles=read_titles)
+    audio_dir = folder / "audio"
+    final_path = folder / f"{merged_name}.mp3"
+    missing = [
+        item["filename"] for item in plan
+        if not (audio_dir / item["filename"]).exists()
+        or (audio_dir / item["filename"]).stat().st_size <= 1024
+    ]
+    if missing:
+        raise RuntimeError(f"无法回填 TTS manifest，缺少章节: {missing}")
+    if not final_path.exists() or final_path.stat().st_size <= 1024:
+        raise RuntimeError("无法回填 TTS manifest，最终 MP3 不存在或体积异常")
+
+    sections = []
+    for item in plan:
+        path = audio_dir / item["filename"]
+        sections.append({
+            "filename": item["filename"],
+            "fingerprint": item["fingerprint"],
+            "output_sha256": _sha256_file(path),
+            "size": path.stat().st_size,
+            "status": "complete",
+            "cached": True,
+        })
+    manifest = {
+        "schema_version": TTS_MANIFEST_SCHEMA_VERSION,
+        "completed": True,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "briefing_file": briefing_file,
+        "final_file": final_path.name,
+        "config": {
+            "voice": FISH_VOICE,
+            "model": FISH_MODEL,
+            "speed": speed,
+            "read_titles": read_titles,
+            "max_chunk_chars": MAX_CHUNK_CHARS,
+        },
+        "expected_sections": len(plan),
+        "completed_sections": len(plan),
+        "sections": sections,
+        "failed_sections": [],
+        "final": {
+            "filename": final_path.name,
+            "size": final_path.stat().st_size,
+            "sha256": _sha256_file(final_path),
+        },
+        "backfilled": True,
+    }
+    manifest_path = folder / "tts_manifest.json"
+    _write_manifest(manifest_path, manifest)
+    return manifest_path
 
 
 # ── 朗读前轻量归一 ─────────────────────────────────────────────────
@@ -51,10 +286,45 @@ def normalize_for_tts(text):
     return text.strip()
 
 
+def load_tts_lexicon(folder):
+    path = Path(folder) / "tts_lexicon.json"
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("tts_lexicon.json 必须是字符串映射对象")
+    result = {str(key): str(value) for key, value in data.items()}
+    if any(not key for key in result):
+        raise ValueError("tts_lexicon.json 不允许空原词")
+    if any(not value for value in result.values()):
+        raise ValueError("tts_lexicon.json 不允许空朗读文本")
+    return result
+
+
+def apply_tts_lexicon(text, lexicon):
+    """一次性按长词优先替换，避免子串误替换和替换结果二次级联。"""
+    if not lexicon:
+        return text
+    if any(not isinstance(source, str) or not source for source in lexicon):
+        raise ValueError("TTS 词典原词必须是非空字符串")
+    keys = sorted(lexicon, key=len, reverse=True)
+    alternatives = []
+    for source in keys:
+        pattern = re.escape(source)
+        if source[0].isascii() and source[0].isalnum():
+            pattern = rf"(?<![A-Za-z0-9]){pattern}"
+        if source[-1].isascii() and source[-1].isalnum():
+            pattern = rf"{pattern}(?![A-Za-z0-9])"
+        alternatives.append(pattern)
+    matcher = re.compile("|".join(f"(?:{pattern})" for pattern in alternatives))
+    return matcher.sub(lambda match: lexicon[match.group(0)], text)
+
+
 # ── 底层 API 调用 ─────────────────────────────────────────────────
 
-def synth_chunk(client, text, speed=1.0):
+def synth_chunk(client, text, speed=1.0, usage=None):
     """调用 Fish Audio TTS API，返回音频 bytes。仅对可重试错误重试。"""
+    fish_key = require_fish_key()
     body = {
         "text": text,
         "reference_id": FISH_VOICE,
@@ -65,12 +335,14 @@ def synth_chunk(client, text, speed=1.0):
         "prosody": {"speed": speed, "volume": 0},
     }
     headers = {
-        "Authorization": f"Bearer {FISH_KEY}",
+        "Authorization": f"Bearer {fish_key}",
         "Content-Type": "application/json",
         "model": FISH_MODEL,
     }
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
+        if usage is not None:
+            usage.record_attempt(retry=attempt > 1)
         try:
             r = client.post(
                 API_URL, headers=headers, json=body,
@@ -107,15 +379,18 @@ def synth_chunk(client, text, speed=1.0):
     raise RuntimeError(f"TTS 重试 {MAX_RETRIES} 次后仍然失败: {last_err}")
 
 
-def synth_chunks_concurrent(client, chunks, speed, concurrency):
+def synth_chunks_concurrent(
+        client, chunks, speed, concurrency, usage=None):
     """并发合成多个 chunk，按输入顺序返回音频 bytes 列表。"""
+    if usage is not None:
+        usage.record_chunks(chunks)
     if concurrency <= 1 or len(chunks) <= 1:
-        return [synth_chunk(client, c, speed) for c in chunks]
+        return [synth_chunk(client, c, speed, usage) for c in chunks]
 
     results = [None] * len(chunks)
     with ThreadPoolExecutor(max_workers=concurrency) as ex:
         future_to_idx = {
-            ex.submit(synth_chunk, client, c, speed): i
+            ex.submit(synth_chunk, client, c, speed, usage): i
             for i, c in enumerate(chunks)
         }
         for fut in as_completed(future_to_idx):
@@ -192,8 +467,8 @@ def _make_silence(out_path, sample_rate, channels, seconds):
 
 def merge_mp3s(input_files, output_path, silence_seconds=SECTION_SILENCE_SECONDS):
     """
-    合并 MP3，章节之间插入短静音。优先 ffmpeg concat（-c copy）。
-    失败回退到裸字节拼接（无静音）。
+    使用 ffmpeg 合并 MP3，并在章节之间插入短静音。
+    任一准备或合并步骤失败都返回 False，由上层保留旧最终音频。
     """
     sorted_files = sorted(input_files)
     if not sorted_files:
@@ -206,7 +481,11 @@ def merge_mp3s(input_files, output_path, silence_seconds=SECTION_SILENCE_SECONDS
         if params:
             silence_path = output_path + ".silence.mp3"
             if not _make_silence(silence_path, params[0], params[1], silence_seconds):
-                silence_path = None
+                tqdm.write("  [TTS] 无法生成章节静音")
+                return False
+        else:
+            tqdm.write("  [TTS] 无法探测章节音频参数")
+            return False
 
     # Method 1: ffmpeg concat demuxer
     concat_list = None
@@ -214,9 +493,13 @@ def merge_mp3s(input_files, output_path, silence_seconds=SECTION_SILENCE_SECONDS
         concat_list = output_path + ".concat.txt"
         with open(concat_list, "w") as f:
             for i, mp3 in enumerate(sorted_files):
-                f.write(f"file '{mp3}'\n")
+                # concat demuxer uses single-quoted paths; escape apostrophes
+                # in episode names so ffmpeg does not truncate the filename.
+                escaped_mp3 = str(Path(mp3).resolve()).replace("\\", "\\\\").replace("'", "'\\''")
+                f.write(f"file '{escaped_mp3}'\n")
                 if silence_path and i < len(sorted_files) - 1:
-                    f.write(f"file '{silence_path}'\n")
+                    escaped_silence = str(Path(silence_path).resolve()).replace("\\", "\\\\").replace("'", "'\\''")
+                    f.write(f"file '{escaped_silence}'\n")
         result = subprocess.run(
             ["ffmpeg", "-f", "concat", "-safe", "0",
              "-i", concat_list, "-c", "copy", "-y", output_path],
@@ -224,23 +507,21 @@ def merge_mp3s(input_files, output_path, silence_seconds=SECTION_SILENCE_SECONDS
         )
         if result.returncode == 0 and os.path.exists(output_path):
             return True
-        tqdm.write(f"  [TTS] ffmpeg concat 失败 (rc={result.returncode})，回退裸拼接")
+        error = result.stderr.decode("utf-8", errors="replace").strip()
+        tqdm.write(
+            f"  [TTS] ffmpeg concat 失败 (rc={result.returncode}): "
+            f"{error[-300:]}")
     except FileNotFoundError:
-        tqdm.write("  [TTS] 未找到 ffmpeg，回退裸拼接")
+        tqdm.write("  [TTS] 未找到 ffmpeg")
     except (subprocess.CalledProcessError, OSError) as e:
-        tqdm.write(f"  [TTS] ffmpeg 异常 ({e})，回退裸拼接")
+        tqdm.write(f"  [TTS] ffmpeg 异常 ({e})")
     finally:
         if concat_list and os.path.exists(concat_list):
             os.unlink(concat_list)
         if silence_path and os.path.exists(silence_path):
             os.unlink(silence_path)
 
-    # Method 2: 裸字节拼接（fallback，无章节静音）
-    with open(output_path, "wb") as f:
-        for mp3 in sorted_files:
-            with open(mp3, "rb") as sf:
-                f.write(sf.read())
-    return True
+    return False
 
 
 # ── 主流程（库接口）─────────────────────────────────────────────────
@@ -260,44 +541,39 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
         concurrency: 单节内 chunk 并发数（默认读 TTS_CONCURRENCY 或 3）
 
     返回:
-        结果描述字符串，如 "12.3MB, ~45min"
+        TTSResult。任何章节失败时 ok=False，且不会覆盖最终 MP3。
     """
     audio_dir = os.path.join(folder, "audio")
     os.makedirs(audio_dir, exist_ok=True)
+    manifest_path = os.path.join(folder, "tts_manifest.json")
 
     # .tmp 永远是半成品，一律清掉
     for f in glob.glob(os.path.join(audio_dir, "*.tmp")):
         os.remove(f)
+    merged_tmp = os.path.join(folder, f"{merged_name}.tmp.mp3")
+    if os.path.exists(merged_tmp):
+        os.remove(merged_tmp)
 
     briefing_path = os.path.join(folder, briefing_file)
     if not os.path.exists(briefing_path):
         print(f"  [TTS] 找不到 {briefing_file}", flush=True)
-        return "NO FILE"
+        return TTSResult(False, "NO FILE", manifest_path=manifest_path)
 
-    txt = open(briefing_path, "r", encoding="utf-8").read()
-    sections = split_sections(txt)
+    intended = build_tts_plan(
+        folder, briefing_file, speed=speed, read_titles=read_titles)
 
-    # 计算每节目标文件名 + 要朗读的文本
-    intended = []
-    for idx, (title, body) in enumerate(sections):
-        body = body.strip()
-        if title is None:
-            if len(body) < 5:
-                continue
-            fname = "00_开场.mp3"
-            spoken = body
-        else:
-            fname = f"{idx:02d}_{safe_filename(title)}.mp3"
-            spoken = (f"{title}。\n{body}").strip() if read_titles else body
-        intended.append((fname, spoken))
-
-    intended_names = {f for f, _ in intended}
+    intended_names = {item["filename"] for item in intended}
+    if not intended:
+        return TTSResult(
+            False, "NO AUDIO", expected_sections=0, manifest_path=manifest_path)
 
     if fresh:
         for f in glob.glob(os.path.join(audio_dir, "*.mp3")):
             os.remove(f)
+        if os.path.exists(manifest_path):
+            os.remove(manifest_path)
     else:
-        # 断点续传：清掉不在目标集合里的孤儿 mp3，保留已完成的同名文件
+        # 清掉不在目标集合里的孤儿 mp3；同名文件是否可复用由 manifest 决定。
         for f in glob.glob(os.path.join(audio_dir, "*.mp3")):
             if os.path.basename(f) not in intended_names:
                 os.remove(f)
@@ -308,60 +584,174 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
         except ValueError:
             concurrency = DEFAULT_CONCURRENCY
 
+    previous = {} if fresh else _load_manifest(manifest_path)
+    previous_sections = {
+        item.get("filename"): item
+        for item in previous.get("sections", [])
+        if isinstance(item, dict) and item.get("filename")
+    }
+    manifest = {
+        "schema_version": TTS_MANIFEST_SCHEMA_VERSION,
+        "completed": False,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "briefing_file": briefing_file,
+        "final_file": f"{merged_name}.mp3",
+        "config": {
+            "voice": FISH_VOICE,
+            "model": FISH_MODEL,
+            "speed": speed,
+            "read_titles": read_titles,
+            "max_chunk_chars": MAX_CHUNK_CHARS,
+        },
+        "expected_sections": len(intended),
+        "sections": [],
+        "failed_sections": [],
+    }
+    usage = TTSUsage()
+
     total_kb = 0
-    fatal = False
-    # 源文件修改时间：断点续传时用于判断是否需要重录
-    briefing_mtime = os.path.getmtime(briefing_path)
     with httpx.Client() as client:
-        for fname, spoken in tqdm(intended, desc="[TTS] 章节", unit="个"):
+        for item in tqdm(intended, desc="[TTS] 章节", unit="个"):
+            fname = item["filename"]
             output_path = os.path.join(audio_dir, fname)
-
-            # 断点续传：文件存在、非空、且不比源文件旧 → 跳过
-            if not fresh and os.path.exists(output_path) \
-                    and os.path.getsize(output_path) > 1024 \
-                    and os.path.getmtime(output_path) >= briefing_mtime:
-                size_kb = os.path.getsize(output_path) // 1024
-                total_kb += size_kb
-                tqdm.write(f"  [TTS] 跳过(已存在) {fname} ({size_kb}KB)")
+            previous_item = previous_sections.get(fname, {})
+            cached = (
+                not fresh
+                and previous_item.get("status") == "complete"
+                and previous_item.get("fingerprint") == item["fingerprint"]
+                and os.path.exists(output_path)
+                and os.path.getsize(output_path) > 1024
+            )
+            if cached:
+                output_sha256 = _sha256_file(output_path)
+                cached = previous_item.get("output_sha256") == output_sha256
+            if cached:
+                size = os.path.getsize(output_path)
+                total_kb += size // 1024
+                manifest["sections"].append({
+                    "filename": fname,
+                    "fingerprint": item["fingerprint"],
+                    "output_sha256": output_sha256,
+                    "size": size,
+                    "status": "complete",
+                    "cached": True,
+                })
+                tqdm.write(f"  [TTS] 跳过(指纹一致) {fname} ({size // 1024}KB)")
                 continue
 
-            text = normalize_for_tts(spoken)
-            if len(text) < 5:
-                continue
-            chunks = smart_chunk(text, max_chars=MAX_CHUNK_CHARS)
+            chunks = smart_chunk(item["text"], max_chars=MAX_CHUNK_CHARS)
             tmp_path = output_path + ".tmp"
 
             try:
-                ordered = synth_chunks_concurrent(client, chunks, speed, concurrency)
+                ordered = synth_chunks_concurrent(
+                    client, chunks, speed, concurrency, usage)
                 with open(tmp_path, "wb") as f:
                     for audio in ordered:
                         f.write(audio)
-                os.rename(tmp_path, output_path)
-                size_kb = os.path.getsize(output_path) // 1024
-                total_kb += size_kb
-                tqdm.write(f"  [TTS] {fname} ({size_kb}KB, {len(chunks)}片)")
+                if os.path.getsize(tmp_path) <= 1024:
+                    raise RuntimeError("生成的章节音频体积异常")
+                os.replace(tmp_path, output_path)
+                size = os.path.getsize(output_path)
+                output_sha256 = _sha256_file(output_path)
+                total_kb += size // 1024
+                manifest["sections"].append({
+                    "filename": fname,
+                    "fingerprint": item["fingerprint"],
+                    "output_sha256": output_sha256,
+                    "size": size,
+                    "status": "complete",
+                    "cached": False,
+                })
+                tqdm.write(f"  [TTS] {fname} ({size // 1024}KB, {len(chunks)}片)")
             except Exception as e:
                 tqdm.write(f"  [TTS] 失败 {fname}: {e}")
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
-                if "401" in str(e) or "402" in str(e) or "403" in str(e):
-                    fatal = True
-                    break  # 致命错误，终止
+                manifest["sections"].append({
+                    "filename": fname,
+                    "fingerprint": item["fingerprint"],
+                    "status": "failed",
+                    "error": str(e),
+                })
+                manifest["failed_sections"].append(fname)
+                manifest["usage"] = usage.as_dict()
+                _write_manifest(manifest_path, manifest)
+                return TTSResult(
+                    False,
+                    f"ABORTED (章节失败: {fname})",
+                    expected_sections=len(intended),
+                    completed_sections=sum(
+                        section.get("status") == "complete"
+                        for section in manifest["sections"]
+                    ),
+                    failed_sections=[fname],
+                    manifest_path=manifest_path,
+                )
 
             time.sleep(0.3)
 
-    if fatal:
-        return "ABORTED (鉴权/余额错误)"
+    # 只按本次 intended 顺序合并；任何缺失都阻断，绝不使用额外或旧文件。
+    all_mp3s = [
+        os.path.join(audio_dir, item["filename"])
+        for item in intended
+    ]
+    missing = [path for path in all_mp3s if not os.path.exists(path)]
+    if missing:
+        manifest["failed_sections"] = [os.path.basename(path) for path in missing]
+        manifest["usage"] = usage.as_dict()
+        _write_manifest(manifest_path, manifest)
+        return TTSResult(
+            False,
+            f"ABORTED (缺少章节音频: {manifest['failed_sections']})",
+            expected_sections=len(intended),
+            completed_sections=len(intended) - len(missing),
+            failed_sections=manifest["failed_sections"],
+            manifest_path=manifest_path,
+        )
 
-    # 合并所有章节（章节间插静音）
-    all_mp3s = sorted(glob.glob(os.path.join(audio_dir, "*.mp3")))
-    if all_mp3s:
-        merged_path = os.path.join(folder, f"{merged_name}.mp3")
-        merge_mp3s(all_mp3s, merged_path)
-        mb = os.path.getsize(merged_path) / 1024 / 1024
-        approx_min = round(total_kb * 8 / 128 / 60)
-        return f"{mb:.1f}MB, ~{approx_min}min"
-    return "NO AUDIO"
+    merged_path = os.path.join(folder, f"{merged_name}.mp3")
+    try:
+        if not merge_mp3s(all_mp3s, merged_tmp):
+            raise RuntimeError("音频合并失败")
+        if not os.path.exists(merged_tmp) or os.path.getsize(merged_tmp) <= 1024:
+            raise RuntimeError("合并后的音频体积异常")
+        os.replace(merged_tmp, merged_path)
+    except Exception as exc:
+        if os.path.exists(merged_tmp):
+            os.remove(merged_tmp)
+        manifest["merge_error"] = str(exc)
+        manifest["usage"] = usage.as_dict()
+        _write_manifest(manifest_path, manifest)
+        return TTSResult(
+            False,
+            f"ABORTED (合并失败: {exc})",
+            expected_sections=len(intended),
+            completed_sections=len(intended),
+            manifest_path=manifest_path,
+        )
+
+    size = os.path.getsize(merged_path)
+    manifest["completed"] = True
+    manifest["completed_sections"] = len(intended)
+    manifest["final"] = {
+        "filename": os.path.basename(merged_path),
+        "size": size,
+        "sha256": _sha256_file(merged_path),
+    }
+    manifest["updated_at"] = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    manifest["usage"] = usage.as_dict()
+    _write_manifest(manifest_path, manifest)
+
+    mb = size / 1024 / 1024
+    approx_min = round(total_kb * 8 / 128 / 60)
+    return TTSResult(
+        True,
+        f"{mb:.1f}MB, ~{approx_min}min",
+        expected_sections=len(intended),
+        completed_sections=len(intended),
+        manifest_path=manifest_path,
+    )
 
 
 # ── CLI 入口 ───────────────────────────────────────────────────────
@@ -379,6 +769,11 @@ def cli_main():
     parser.add_argument("--no-titles", action="store_true", help="不在音频中朗读章节标题")
     parser.add_argument("--concurrency", type=int, default=None,
                         help="单节内 chunk 并发数（默认读 TTS_CONCURRENCY 或 3）")
+    parser.add_argument(
+        "--backfill-manifest",
+        action="store_true",
+        help="不调用 TTS，仅为现有章节音频和最终 MP3 回填 manifest",
+    )
 
     parsed = parser.parse_args()
     speed = parsed.speed
@@ -399,12 +794,21 @@ def cli_main():
     if not merged_name:
         merged_name = Path(input_md).stem
 
-    result = run_tts(
-        str(folder), briefing_file, merged_name, speed,
-        fresh=parsed.fresh,
-        read_titles=not parsed.no_titles,
-        concurrency=parsed.concurrency,
-    )
+    if parsed.backfill_manifest:
+        result = backfill_tts_manifest(
+            folder,
+            briefing_file,
+            merged_name,
+            speed=speed,
+            read_titles=not parsed.no_titles,
+        )
+    else:
+        result = run_tts(
+            str(folder), briefing_file, merged_name, speed,
+            fresh=parsed.fresh,
+            read_titles=not parsed.no_titles,
+            concurrency=parsed.concurrency,
+        )
     print(f"\n完成: {result}")
 
 

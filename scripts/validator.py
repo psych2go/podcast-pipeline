@@ -65,7 +65,11 @@ def validate_and_fix(text):
         issues.append(f"篇幅偏短（{len(text)}字，建议 >= 5000）")
 
     if issues:
-        print(f"[校验] 修复了 {len(issues)} 个问题: {'; '.join(issues)}", flush=True)
+        print(
+            f"[校验] 发现 {len(issues)} 个问题"
+            f"（可自动修复项已处理）: {'; '.join(issues)}",
+            flush=True,
+        )
     else:
         print("[校验] 通过，无问题", flush=True)
 

@@ -78,10 +78,11 @@ def estimate_speakers_via_llm(transcript):
 def estimate_speakers_heuristic(transcript):
     """启发式方法：硬编码名字 + 对话特征（fallback）。"""
     speakers = set()
-    # 常见说话人名样例——按你常处理的播客自行增补
     known_names = [
-        r"Host", r"Guest", r"Speaker_\d+", r"主持人",
-        r"Narrator", r"Interviewer", r"Co[-_]?host",
+        r"Chamath", r"Jason", r"David", r"Sacks", r"Friedberg",
+        r"Naval", r"Gary", r"Daniel", r"Farbood", r"Guillermo",
+        r"Blake", r"Max", r"Host", r"Speaker_\d+", r"主持人",
+        r"Chris", r"Alex", r"Williamson", r"Hormozi",
     ]
     for pattern in known_names:
         if re.search(pattern, transcript, re.IGNORECASE):

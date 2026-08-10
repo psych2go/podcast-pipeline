@@ -1,190 +1,211 @@
-# CLAUDE.md
+# Podcast Pipeline v7
 
-## 这是什么
+把英文播客转成可审计的中文完整笔记、中文讲稿、TTS 音频和移动端阅读页，并发布到 Cloudflare Pages + R2。
 
-将英文播客转为中文讲稿（TTS音频 + HTML阅读页面），部署到 Cloudflare 网站。
+## 标准流程
 
-## 工作流程（加新播客时按此步骤执行）
-
-### 第 1 步：抓取
+### 1. 抓取
 
 ```bash
-python scripts/process.py "https://转录来源链接"
+.venv/bin/python scripts/process.py "https://转录页面"
 ```
 
-这会自动从 URL 提取标题作为播客名，抓取转录原文保存到 `content/{播客名}/原始转录.txt`，并生成 `来源.md`（记录转录来源/类型，后续纠错关口、台账、site.json 都要读它，**保留不删**）。
+URL 会自动提取展示标题并创建 `content/<storage_name>/`。Podscripts 页面使用时间戳转录提取器，输出：
 
-> 如果来源是 HappyScribe 等 JS 渲染页面，fetcher 会自动用 curl_cffi 降级抓取。
-> 如果来源是 MP3 文件（需 ASR 转录）：`python scripts/process.py "音频.mp3" --name "播客名"`
+- `episode.json`：稳定 ID、展示标题、slug、来源、质量状态和发布路径
+- `来源.md`：可读来源记录
+- `原始转录.txt`：不可改写的原始证据
+- `transcript.raw.json`：带稳定 `S0001` segment ID 的结构化转录
 
-### 第 2 步：纠错（Claude 交互，按来源分级）
-
-读 `原始转录.txt` 和 `来源.md`，按 `scripts/纠错提示词.md` 的**纠错关口**分级处理：
-- 本地 ASR 转写（MP3）→ **强制纠错**，产出 `转录_纠错.txt`
-- 第三方转录站 → 抽查，可靠则免纠错（在 `来源.md` 标注「转录质量」）
-- 官方一手字幕 → 免纠错（在 `来源.md` 标注「转录质量」）
-
-### 第 3 步：写讲稿（Claude 交互）
-
-读 `转录_纠错.txt`（无则回退 `原始转录.txt`，回退前提是 `来源.md` 已标注转录质量可接受），按 `scripts/讲稿提示词.md` 写 `讲书稿.md`。
-
-### 第 3.5 步：讲稿核验（Claude 交互，重要期推荐）
-
-把 `讲书稿.md` 与转录文件并排对照通读，按 `scripts/讲稿提示词.md` 的「转录对照核验」逐项检查：脑补内容、张冠李戴、数字保真、论点覆盖、金句术语。发现的问题直接修进讲稿，再进 TTS。
-
-### 第 4 步：TTS 出音频 + 生成 HTML
+本地音频需要显式名称：
 
 ```bash
-python scripts/process.py --name "播客名" --tts-only
+.venv/bin/python scripts/process.py "episode.mp3" --name "播客名" --asr-quality max
 ```
 
-产出：`{播客名}.mp3` + `{播客名} - content.html`
+### 2. 纠错和证据台账
 
-> 运行前自动做**结构体检**（`validator.py`）：检查引言段、章节粒度（400–900 字/章）、`SPEAKER_XX` 残留、中文夹空格等，只报告不修改。有告警就回到第 3 步修讲稿再跑。
+按 `scripts/纠错提示词.md` 检查转录。第三方转录也要抽查人名、公司、数字和说话人；需要纠错时写 `转录_纠错.txt`，但不覆盖原始证据。
 
-### 第 5 步：清理中间文件
-
-删除 `转录_纠错.txt`、`audio/` 分章节目录（如有）。**保留 `来源.md`**——它是台账和 site.json 自动生成的元数据来源（第 6/7 步要读）。
-
-### 第 6 步：更新台账
-
-用脚本把该期追加到 `content/播客目录.md`（自动算中文字数和时长，转录来源从 `来源.md` 读取）：
+新一期必须建立 evidence v3 台账：
 
 ```bash
-python scripts/catalog.py add "播客名"
-# 只想看数字不写入：python scripts/catalog.py stats "播客名"
+.venv/bin/python scripts/content_map.py init \
+  "content/播客名/transcript.raw.json" \
+  "content/播客名/content_map.json" \
+  --title "展示标题"
 ```
 
-### 第 7 步：发布到 site/
+`content_map.json` 的每个 unit/claim 必须绑定转录 segment ID 和源文本
+SHA-256。多 claim 单元不得给所有 claim 复制整个 unit 的 segment 集合；
+每条 claim 还要记录证据置信度和选择理由。
 
-用脚本拷贝 content.html 到 site/ 并重建 site.json：
+### 3. 写中文内容
+
+按 `scripts/讲稿提示词.md`：
+
+1. 先写 `中文完整笔记.md`。
+2. 再写适合收听的 `讲书稿.md`。
+3. 写 `summary_map.json`，绑定章节正文哈希、unit/claim ID、笔记 claim ID 和笔记正文哈希。
+4. 专有名词需要控制读音时添加 `tts_lexicon.json`，格式为 `{"原词": "朗读文本"}`。
+
+`enrich-evidence` 只刷新 unit 证据和已有精确 claim 证据，不会再猜测多
+claim 单元的映射。历史数据需要按 unit 精炼：
 
 ```bash
-python scripts/catalog.py sync-site
-# 只同步某一期的 html：python scripts/catalog.py sync-site --only "播客名"
+.venv/bin/python scripts/content_map.py enrich-evidence "content/播客名"
+.venv/bin/python scripts/claim_evidence.py "content/播客名" --unit U0001
 ```
 
-重建首页 index.html 的统计和卡片列表（读取 site.json，自动生成）：
+已经发布且有成功 `publish_report.json` 的 evidence v2 单集可暂时兼容，
+但质量报告会持续告警；新单集不能使用 v2。
+
+### 4. AI 审查和确定性质量门
 
 ```bash
-python scripts/catalog.py gen-index
+.venv/bin/python scripts/ai_review.py "content/播客名" --model opus --effort max
+.venv/bin/python scripts/quality_report.py "content/播客名"
 ```
 
-### 第 8 步：上传音频到 R2
+以下任一情况都会阻断 TTS：
 
-R2 桶 `podcast-audio` 已开启**公开访问**（`wrangler r2 bucket dev-url enable podcast-audio`）。音频通过公开 URL 供播放器流式播放（支持 Range 分片，可拖动进度）。对象键**不带**桶名前缀：
+- 缺 `episode.json`、结构化转录、evidence v3、完整笔记或讲稿
+- segment/claim/章节/笔记哈希不匹配
+- high/medium claim 未覆盖
+- AI 审查过期或失败
+- 转录质量、覆盖率、事实性任一低于 90
+- 数字、归因、TTS 可读性或稿件内容发布状态失败
+- 结构体检存在错误
+
+AI 只审内容，HTML、MP3、R2 和 Pages 的新鲜度由后续确定性检查负责。修改任一受审文件后必须重审。
+
+### 5. TTS 和 HTML
 
 ```bash
-npx wrangler r2 object put "播客名/播客名.mp3" \
-  --file "content/播客名/播客名.mp3" --ct audio/mpeg
+.venv/bin/python scripts/process.py --name "播客名" --tts-only
 ```
 
-> 音频 URL = `https://{R2_PUBLIC_URL}/{播客名}/{播客名}.mp3`，`html_gen.py` 生成页面时自动用它拼播放器地址。
+TTS 使用内容与配置指纹缓存，而不是文件时间。`tts_manifest.json` 绑定实际朗读文本、音色、模型、语速、章节设置、每节音频 SHA-256 和最终 MP3 SHA-256。
 
-### 第 9 步：部署到 Cloudflare
+- 任一章节失败会立即阻断。
+- 失败时不会合并，也不会覆盖已有最终 MP3。
+- 成功后先生成临时合并文件，再原子替换最终 MP3。
+- HTML 只会在质量门和 TTS 都通过后生成。
+
+仅重建页面：
 
 ```bash
-cd site
-npx wrangler pages deploy . --project-name podcast-scripts --branch main
+.venv/bin/python scripts/process.py --name "播客名" --html-only --skip-ai-review
 ```
 
-> 部署只含 HTML/首页（音频在 R2，不再放进 site/），体积轻、速度快。
+旧期没有 `content_map.json` 时，必须显式使用：
 
-> **快捷方式**：第 6–9 步（台账 + site + 首页 + R2 + 部署）可一键完成，前提是音频已生成、中间文件已清理：
->
-> ```bash
-> python scripts/catalog.py finish "播客名"
-> # 先看会执行什么：python scripts/catalog.py finish "播客名" --dry-run
-> ```
-
----
-
-## 命名约定
-
-文件夹与最终 MP3 都用原始标题命名（URL 自动提取；`? * : [ ] | \` 等不安全字符会被清理，保留逗号/空格/中文）。
-
-## content/ 目录规范
-
-每期播客数据存放在 `content/{播客名}/` 下：
-
-**标准文件（每期必有，4 个）：**
-```
-content/{播客名}/
-├── {播客名}.mp3                ← TTS 生成的中文音频
-├── {播客名} - 原始转录.txt     ← 英文转录原文
-├── {播客名} - 讲书稿.md        ← Claude 写的中文讲稿
-└── {播客名} - content.html      ← 阅读页面（含音频播放器 + 折叠目录）
+```bash
+.venv/bin/python scripts/process.py --name "旧期" --html-only \
+  --skip-ai-review --allow-legacy-quality
 ```
 
-**如果该期是从 MP3 经 ASR 转录而来（而非网页抓取字幕），额外增加：**
-```
-├── {播客名} - 原始音频.mp3     ← 原始的英文 MP3（ASR 输入源）
-```
+`--allow-legacy-quality` 只用于已经存在于站点清单的历史内容，新内容不能借此进入站点。
 
-### 规则
-1. 每期固定 4 个核心文件，MP3 源文件按需添加
-2. **禁止保留中间产物**：`转录_纠错.txt`、`audio/` 分章节目录。`来源.md` 需保留（台账/站点自动化的元数据来源）
-3. `{播客名}` 与文件夹名完全一致
-4. 文本文件命名格式：`{播客名} - {类型}.{ext}`（` - ` 前后各一个空格）
-5. TTS 音频直接用 `{播客名}.mp3`，不加 ` - 讲书稿` 后缀
-6. 原始音频用 `{播客名} - 原始音频.mp3`
+### 6. 台账、站点和 Cloudflare
 
-## 目录结构
+推荐一键收尾：
 
-```
-podcast-pipeline/
-├── .env                   ← API key（FISH_KEY）
-├── CLAUDE.md              ← 本文件
-├── requirements.txt
-├── scripts/               ← 流水线代码
-│   ├── process.py         ← 入口（抓取 + TTS 编排）
-│   ├── fetcher.py         ← 网页抓取 + ASR 转录
-│   ├── tts.py             ← Fish Audio TTS
-│   ├── html_gen.py        ← 讲书稿.md → content.html（含音频播放器）
-│   ├── validator.py       ← 讲稿质量校验 + 结构体检
-│   ├── catalog.py         ← 台账 + site.json + 首页维护
-│   ├── config.py          ← 配置加载
-│   ├── diarize.py         ← 说话人分离
-│   ├── 讲稿提示词.md      ← Claude 写讲稿规则
-│   ├── 纠错提示词.md      ← Claude 转录纠错规则
-│   └── 流水线文档.md      ← 技术文档
-├── content/               ← 播客数据
-│   ├── 播客目录.md        ← 台账
-│   └── {播客名}/
-│       ├── {播客名}.mp3
-│       ├── {播客名} - 原始转录.txt
-│       ├── {播客名} - 讲书稿.md
-│       ├── {播客名} - content.html
-│       └── 来源.md        ← 元数据（转录来源/质量，保留）
-└── site/                  ← 部署站点（仅 HTML，音频在 R2）
-    ├── index.html         ← 首页
-    ├── {播客名}/content.html
-    ├── site.json
-    └── wrangler.toml
+```bash
+.venv/bin/python scripts/catalog.py finish "播客名" --dry-run
+.venv/bin/python scripts/catalog.py finish "播客名"
 ```
 
-## 配置（.env）
+`finish` 会依次：
+
+1. 验证 MP3、HTML、严格质量报告和 TTS manifest。
+2. 同步 slug 页面和旧路径兼容页，并全量重建 `site/site.json`。
+3. 从当前单集统计全量重建 `content/播客目录.md`。
+4. 校验台账、`site.json`、真实音频时长和讲稿字数完全一致，再重建首页。
+5. 上传音频到 R2。
+6. 部署 Cloudflare Pages。
+7. 验证首页、单集最终 URL、标题、播放器、R2 `Content-Type`、文件大小、`Accept-Ranges` 和 `206` Range 响应。
+8. 写入 `publish_report.json`；任何远端检查失败都会令命令失败。
+
+分步命令：
+
+```bash
+.venv/bin/python scripts/catalog.py add "播客名"
+.venv/bin/python scripts/catalog.py sync-site
+.venv/bin/python scripts/catalog.py rebuild
+.venv/bin/python scripts/catalog.py check
+.venv/bin/python scripts/catalog.py gen-index
+```
+
+## 单集目录
+
+```text
+content/<storage_name>/
+├── episode.json
+├── 来源.md
+├── 原始转录.txt
+├── transcript.raw.json
+├── 转录_纠错.txt             # 需要时
+├── content_map.json
+├── 中文完整笔记.md
+├── 讲书稿.md
+├── summary_map.json
+├── tts_lexicon.json          # 可选
+├── ai_review.json
+├── quality_report.json
+├── tts_manifest.json
+├── run_report.json
+├── <storage_name>.mp3
+├── <storage_name> - content.html
+└── publish_report.json
+```
+
+`storage_name` 只用于本地兼容；页面使用稳定 slug，展示标题独立存放在 `episode.json`。已有音频保留旧 R2 object key，避免迁移时破坏线上 URL；新单集默认使用 `<slug>/audio.mp3`。
+
+不要删除审计文件。`run_report.json` 追加记录每次抓取、质量门、AI 审查、
+TTS、HTML 和发布事务的耗时、失败、重试、调用量与模型成本字段。
+`audio/` 分章节音频可在发布后清理，但保留它可以提高同配置重跑速度。
+
+## 配置
+
+`.env`：
 
 ```env
-FISH_KEY=xxx                 # Fish Audio API key
-FISH_VOICE=xxx               # Fish Audio 音色 ID
-HF_TOKEN=hf_xxx              # HuggingFace token（可选，说话人分离）
-R2_PUBLIC_URL=https://pub-xxx.r2.dev   # R2 桶公开访问地址（播放器流式音频）
+FISH_KEY=xxx
+FISH_VOICE=xxx
+FISH_MODEL=s2.1-pro-free
+R2_PUBLIC_URL=https://pub-xxx.r2.dev
+R2_BUCKET=podcast-audio
+PAGES_PROJECT=podcast-scripts
+PAGES_BASE_URL=https://podcast-scripts.pages.dev
+HF_TOKEN=hf_xxx
 ```
 
-**说明**：
-- Cloudflare（R2 + Pages）认证走 `wrangler login` 的 OAuth 凭证，不再需要 `CLOUDFLARE_API_TOKEN`。
-- `R2_PUBLIC_URL` 为空时，播放器回退到相对路径 `{播客名}.mp3`（音频需随站点部署）；配置后使用绝对 URL 走 R2 流式播放。
+Cloudflare 认证可使用 `wrangler login` 的 OAuth 凭据或环境中的 API Token；发布前以
+`npx wrangler whoami` 确认当前账号和权限。
 
-**安全提醒**：`.env` 已加入 `.gitignore`，不会提交到 Git。
+## 验证
+
+```bash
+.venv/bin/python -m unittest discover -s tests -p 'test_pipeline.py' -v
+.venv/bin/python -m unittest discover -s tests -p 'test_browser_layout.py' -v
+```
+
+浏览器测试需要：
+
+```bash
+.venv/bin/pip install -r requirements-browser.txt
+.venv/bin/python -m playwright install --with-deps chromium
+```
+
+它在 320、375、430 像素宽度验证目录开关和播放器同处首行、互不重叠、
+正文不横向溢出。浏览器或系统依赖缺失会令测试失败；GitHub Actions
+使用 `.github/workflows/ci.yml` 安装 Chromium 系统依赖并强制执行该测试。
 
 ## 关键约束
 
-- 讲稿由 Claude Code 终端按 `scripts/讲稿提示词.md` 直接生成，含**必写引言段**（2–3 句）、**章节粒度 400–900 字/章**、**漏点清单**（写完对照）、**说话人三级**（能用名字用名字，无依据才角色化）、**结尾自然收束**
-- 写稿前先过**纠错关口**（按 `来源.md` 判断来源类型决定是否纠错）；重要期写完后做**转录对照核验**（第 3.5 步）
-- TTS 按 `## ` 标题切分章节，章节间插 ~0.8s 静音；默认朗读章节标题
-- `process.py --tts-only` 会自动跑**结构体检**（引言段/章节粒度/中文夹空格等，只报告不修改）
-- 正文禁用 Markdown 符号、破折号 `——`、分隔线 `---`
-- 速度 speed=1.0，切片按句子边界；TTS 默认断点续传，`--force-tts` 全量重生
-- 目标篇幅 ≈ 原文 15-20%，以讲透为准（长播客 1-2 万字）
-- 阅读页 content.html 内置**音频播放器**（播放/进度/倍速/音量/下载），音频经 R2 公开 URL 流式播放（`R2_PUBLIC_URL`）
+- 原始证据不可覆盖；纠错稿是下游规范化副本。
+- 新单集默认严格门禁，兼容模式必须显式开启。
+- TTS 只读 `讲书稿.md`，lexicon 只改变读音，不改变 HTML。
+- 移动端目录按钮和播放器必须在同一行，正文区域不得被固定控件浪费。
+- 发布成功的定义是远端 Pages 与 R2 验收通过，不是 Wrangler 命令返回零。
