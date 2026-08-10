@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "default_manifest": "ami/ES2004a/manifest.json",
+  "production_presets": {
+    "fast": "medium",
+    "balanced": "large-v3-turbo",
+    "max": "large-v3"
+  },
+  "reference_contract": {
+    "sample_id": "AMI_ES2004a_360_660",
+    "start_seconds": 360.0,
+    "duration_seconds": 300.0,
+    "speaker_count": 4,
+    "segment_count": 90,
+    "word_count": 751,
+    "manifest_sha256": "36a15a9d9fdfaf5c8dafd048454c6349374f88a63e6951beccb88804f90be80a",
+    "audio": {
+      "path": "audio/ES2004a.360-660.wav",
+      "bytes": 9600078,
+      "sha256": "67200d61521ed0a4b09659a5c7d6a25a175aa7bec9354c2ae6960bb8967680a4"
+    },
+    "files": {
+      "reference/ES2004a.360-660.segments.json": "c2a770520a08367b710bdbedb6146a54c5b56e904584a3edf08fc820e1b27221",
+      "reference/ES2004a.360-660.rttm": "6ddbcc667bbbc838193f037a26327b0b206b77a73aeb7dcf8ed5d81d30039b7e",
+      "reference/ES2004a.360-660.uem": "d6e6a008558ea2fc2d162235418e53b96c4ca5748b10d34599cd90609483639a"
+    }
+  },
+  "required_policy_models": [
+    "large-v3",
+    "large-v3-turbo"
+  ],
+  "expected_recommendation": {
+    "first_pass_model": "large-v3-turbo",
+    "review_model": "large-v3-turbo"
+  },
+  "acceptance": {
+    "shared_diarization": {
+      "speaker_count": 4,
+      "exclusive_used": true
+    },
+    "strict_diarization": {
+      "max_der": 0.3,
+      "max_jer": 0.39
+    },
+    "models": {
+      "large-v3-turbo": {
+        "max_cpwer": 0.3809,
+        "max_speaker_attributed_wer": 0.3809,
+        "min_number_recall": 0.7,
+        "min_entity_recall": 0.58,
+        "min_alignment_coverage": 0.99,
+        "max_start_mae_seconds": 0.25,
+        "max_end_mae_seconds": 0.3
+      }
+    },
+    "comparisons": [
+      {
+        "faster_model": "large-v3-turbo",
+        "reference_model": "large-v3",
+        "min_speedup": 1.5,
+        "max_cpwer_regression": 0.02,
+        "max_speaker_attributed_wer_regression": 0.02
+      }
+    ]
+  }
+}

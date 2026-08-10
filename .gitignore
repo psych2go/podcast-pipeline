@@ -9,6 +9,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 .venv/
+.venv-alignment/
 venv/
 
 # ===== OS =====
@@ -38,3 +39,8 @@ site/**/*.mp3
 skills-lock.json
 .mcp.json
 test.txt
+
+# ===== 基准数据（脚本与报告可公开，原始媒体和生成结果不进 git）=====
+benchmarks/**/audio/*.wav
+benchmarks/**/source/*.zip
+benchmarks/**/results/

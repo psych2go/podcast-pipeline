@@ -1,2 +1,4 @@
 # Optional accelerated benchmark distance
 rapidfuzz>=3.0
+pyannote.metrics>=4.1
+scipy>=1.15

@@ -13,6 +13,11 @@ HTML 生成模块 — 将讲书稿.md 转为精美、自包含的 HTML 阅读页
 import sys
 from pathlib import Path
 
+try:
+    from atomic_io import atomic_write_text
+except ImportError:
+    from scripts.atomic_io import atomic_write_text
+
 _scripts = str(Path(__file__).resolve().parent)
 if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
@@ -570,6 +575,10 @@ body:not(.toc-hidden) main {
         z-index: 120;
         padding: 0.7rem 0.75rem;
     }
+    body:not(.toc-hidden) .player {
+        visibility: hidden;
+        pointer-events: none;
+    }
     .player-main { gap: 0.6rem; }
     .player-play { width: 2.75rem; height: 2.75rem; }
     .player-heading { display: none; }
@@ -1010,7 +1019,7 @@ def md_to_html(md_path, output_path=None, podcast_title=None):
     else:
         output_path = Path(output_path)
 
-    output_path.write_text(html, encoding="utf-8")
+    atomic_write_text(output_path, html)
     size_kb = len(html) // 1024
     print(f"[HTML] {word_count:,} 字 → {output_path} ({size_kb}KB)", flush=True)
     return str(output_path)
@@ -1028,6 +1037,11 @@ def cli_main():
                         help="输出 HTML 路径（默认同目录下 讲书稿.html）")
     parser.add_argument("--title", default=None,
                         help="播客标题（默认取文件夹名）")
+    parser.add_argument(
+        "--allow-unchecked",
+        action="store_true",
+        help="显式绕过统一质量门；绕过行为会写入 run_report.json",
+    )
 
     args = parser.parse_args()
 
@@ -1036,7 +1050,35 @@ def cli_main():
         print(f"❌ 找不到 {input_md}")
         sys.exit(1)
 
-    result = md_to_html(input_md, args.output, args.title)
+    from preflight import quality_gate
+    from run_report import RunReport
+    folder = Path(input_md).parent
+    report = RunReport(folder, "html.cli", {
+        "entry_point": "html.cli",
+        "allow_unchecked": args.allow_unchecked,
+    })
+    try:
+        if args.allow_unchecked:
+            with report.stage("quality_gate_bypass") as stage:
+                stage.metrics.update({
+                    "entry_point": "html.cli",
+                    "allow_unchecked": True,
+                    "reason": "explicit CLI flag",
+                })
+        else:
+            with report.stage("quality_gate") as stage:
+                passed = quality_gate(folder, run_report=report)
+                stage.metrics["passed"] = passed
+                if not passed:
+                    stage.fail("quality gate failed")
+                    report.finish(False, "quality gate failed")
+                    sys.exit(1)
+        result = md_to_html(input_md, args.output, args.title)
+        report.finish(bool(result), None if result else "HTML generation failed")
+    except BaseException as exc:
+        if not report._finished:
+            report.finish(False, exc)
+        raise
     if result:
         print(f"✅ HTML 已生成: {result}")
     else:

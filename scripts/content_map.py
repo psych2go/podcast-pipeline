@@ -1,15 +1,21 @@
 """
 内容单元台账和总结覆盖率工具。
 
-本模块不调用 LLM。Claude/人工可以根据提示词生成 content_map.json 和
+本模块不调用 LLM。subagent/人工可以根据提示词生成 content_map.json 和
 summary_map.json，本模块负责 schema 校验、覆盖率统计和失败阻断。
 """
 import argparse
 import hashlib
 import json
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from atomic_io import atomic_write_json
+except ImportError:
+    from scripts.atomic_io import atomic_write_json
 
 
 STATUS_VALUES = {"pending", "included", "condensed", "excluded", "needs_review", "unsupported"}
@@ -17,6 +23,7 @@ IMPORTANCE_VALUES = {"high", "medium", "low"}
 CONTENT_MAP_SCHEMA_VERSION = 3
 SUMMARY_MAP_SCHEMA_VERSION = 2
 CLAIM_CONFIDENCE_VALUES = {"high", "medium", "low"}
+EVIDENCE_MODES = {"timestamp", "text_anchor"}
 
 
 def load_json(path):
@@ -24,14 +31,41 @@ def load_json(path):
 
 
 def save_json(path, payload):
-    Path(path).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(path, payload)
 
 
 def ensure_segment_ids(raw):
     for index, segment in enumerate(raw.get("segments", []), start=1):
         segment.setdefault("id", f"S{index:04d}")
     return raw
+
+
+def transcript_evidence_mode(transcript):
+    """Return the explicit source evidence mode, with timestamp compatibility."""
+    meta = transcript.get("meta", {}) or {}
+    mode = meta.get("evidence_mode")
+    if mode in EVIDENCE_MODES:
+        return mode
+    if meta.get("timestamped") is False:
+        return "text_anchor"
+    if meta.get("timestamped") is True:
+        return "timestamp"
+    segments = transcript.get("segments", [])
+    if segments and any(
+            segment.get("start") is not None
+            and segment.get("end") is not None
+            for segment in segments):
+        return "timestamp"
+    return "text_anchor"
+
+
+def content_map_evidence_mode(payload, transcript=None):
+    mode = payload.get("evidence_mode")
+    if mode in EVIDENCE_MODES:
+        return mode
+    if transcript is not None:
+        return transcript_evidence_mode(transcript)
+    return "timestamp"
 
 
 def segment_evidence_sha256(segments, segment_ids):
@@ -69,12 +103,23 @@ def enrich_content_map_evidence(content_map, transcript):
     """Refresh unit evidence without inventing multi-claim evidence."""
     transcript = ensure_segment_ids(transcript)
     segments = transcript.get("segments", [])
+    mode = content_map_evidence_mode(content_map, transcript)
+    content_map["evidence_mode"] = mode
     for unit in content_map.get("units", []):
-        selected = _segments_for_timestamps(
-            segments, unit.get("timestamps", []))
+        if mode == "text_anchor":
+            existing_ids = set(
+                unit.get("evidence", {}).get("segment_ids", []))
+            selected = [
+                segment for segment in segments
+                if segment.get("id") in existing_ids
+            ]
+        else:
+            selected = _segments_for_timestamps(
+                segments, unit.get("timestamps", []))
         segment_ids = [
             segment["id"] for segment in selected if segment.get("id")]
         unit["evidence"] = {
+            "mode": mode,
             "segment_ids": segment_ids,
             "source_sha256": segment_evidence_sha256(
                 segments, segment_ids),
@@ -116,10 +161,12 @@ def enrich_content_map_evidence(content_map, transcript):
     return content_map, transcript
 
 
-def apply_claim_evidence_mapping(content_map, transcript, mappings):
+def apply_claim_evidence_mapping(
+        content_map, transcript, mappings, unit_ids=None):
     """Apply reviewed claim-level segment mappings and bind their hashes."""
     transcript = ensure_segment_ids(transcript)
     segments = transcript.get("segments", [])
+    selected_unit_ids = set(unit_ids or [])
     mapping_by_id = {
         item.get("claim_id"): item
         for item in mappings
@@ -127,6 +174,8 @@ def apply_claim_evidence_mapping(content_map, transcript, mappings):
     }
     for unit in content_map.get("units", []):
         unit_id = unit.get("id")
+        if selected_unit_ids and unit_id not in selected_unit_ids:
+            continue
         unit_segments = set(
             unit.get("evidence", {}).get("segment_ids", []))
         evidence = {}
@@ -179,11 +228,20 @@ def enrich_summary_map_evidence(
 def init_content_map(transcript_json, output, title=""):
     """从结构化转录创建空的、可人工补充的内容台账模板。"""
     raw = ensure_segment_ids(load_json(transcript_json))
+    mode = transcript_evidence_mode(raw)
     units = []
     for index, segment in enumerate(raw.get("segments", []), start=1):
         text = (segment.get("text") or "").strip()
         if not text:
             continue
+        start = segment.get("start")
+        end = segment.get("end")
+        if mode == "timestamp" and start is not None and end is None:
+            end = start
+        timestamps = (
+            [[start, end]]
+            if mode == "timestamp" else []
+        )
         units.append({
             "id": f"U{index:04d}",
             "topic": "",
@@ -193,9 +251,10 @@ def init_content_map(transcript_json, output, title=""):
             "examples": [],
             "numbers": [],
             "terms": [],
-            "timestamps": [[segment.get("start"), segment.get("end")]],
+            "timestamps": timestamps,
             "source_excerpt": text,
             "evidence": {
+                "mode": mode,
                 "segment_ids": [segment["id"]],
                 "source_sha256": segment_evidence_sha256(
                     raw.get("segments", []), [segment["id"]]),
@@ -207,6 +266,7 @@ def init_content_map(transcript_json, output, title=""):
         })
     payload = {
         "schema_version": CONTENT_MAP_SCHEMA_VERSION,
+        "evidence_mode": mode,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "title": title,
         "source_transcript": str(transcript_json),
@@ -230,13 +290,66 @@ def validate_content_map(payload, transcript=None):
     ids = set()
     transcript_segments = []
     transcript_ids = set()
+    synthetic_transcript_ids = set()
     transcript_max_end = None
+    synthetic_warning_added = False
+    declared_mode = payload.get("evidence_mode")
+    if declared_mode is not None and declared_mode not in EVIDENCE_MODES:
+        errors.append(f"evidence_mode 无效: {declared_mode!r}")
+    evidence_mode = content_map_evidence_mode(payload, transcript)
     if transcript is not None:
         transcript = ensure_segment_ids(transcript)
+        transcript_declared_mode = (
+            transcript.get("meta", {}) or {}).get("evidence_mode")
+        if (
+                transcript_declared_mode is not None
+                and transcript_declared_mode not in EVIDENCE_MODES):
+            errors.append(
+                "transcript.raw.json.meta.evidence_mode 无效: "
+                f"{transcript_declared_mode!r}"
+            )
+        transcript_mode = transcript_evidence_mode(transcript)
+        if (
+                payload.get("evidence_mode")
+                and payload.get("evidence_mode") != transcript_mode
+        ):
+            errors.append(
+                "content_map.evidence_mode 与 transcript.raw.json.meta.evidence_mode 不一致"
+            )
         transcript_segments = transcript.get("segments", [])
+        transcript_id_counts = Counter(
+            segment.get("id")
+            for segment in transcript_segments
+            if segment.get("id")
+        )
+        duplicate_transcript_ids = sorted(
+            segment_id
+            for segment_id, count in transcript_id_counts.items()
+            if count > 1
+        )
+        if duplicate_transcript_ids:
+            errors.append(
+                f"transcript.raw.json 存在重复 segment id: "
+                f"{duplicate_transcript_ids}")
+        stale_segment_hashes = [
+            segment.get("id")
+            for segment in transcript_segments
+            if segment.get("content_sha256")
+            and segment.get("content_sha256") != hashlib.sha256(
+                (segment.get("text") or "").strip().encode("utf-8")
+            ).hexdigest()
+        ]
+        if stale_segment_hashes:
+            errors.append(
+                "transcript.raw.json 的 segment content_sha256 已过期: "
+                f"{stale_segment_hashes}")
         transcript_ids = {
             segment.get("id") for segment in transcript_segments
             if segment.get("id")
+        }
+        synthetic_transcript_ids = {
+            segment.get("id") for segment in transcript_segments
+            if segment.get("id") and segment.get("synthetic_boundary")
         }
         ends = [
             segment.get("end")
@@ -268,18 +381,24 @@ def validate_content_map(payload, transcript=None):
             errors.append(f"{display_id}: 缺少 topic")
         if importance in {"high", "medium"} and not unit.get("claims"):
             errors.append(f"{display_id}: {importance} 单元没有 claims")
-        if not unit.get("timestamps"):
-            errors.append(f"{display_id}: 缺少 timestamps，无法回溯原音频")
-        for timestamp in unit.get("timestamps", []):
-            if not isinstance(timestamp, list) or len(timestamp) != 2:
-                errors.append(f"{display_id}: timestamp 格式无效: {timestamp!r}")
-                continue
-            start, end = timestamp
-            if start is None or end is None or start < 0 or end < start:
-                errors.append(f"{display_id}: timestamp 范围无效: {timestamp!r}")
-            elif transcript_max_end is not None and end > transcript_max_end + 1:
-                errors.append(
-                    f"{display_id}: timestamp 超出转录范围: {timestamp!r}")
+        if evidence_mode == "timestamp":
+            if not unit.get("timestamps"):
+                errors.append(f"{display_id}: 缺少 timestamps，无法回溯原音频")
+            for timestamp in unit.get("timestamps", []):
+                if not isinstance(timestamp, list) or len(timestamp) != 2:
+                    errors.append(
+                        f"{display_id}: timestamp 格式无效: {timestamp!r}")
+                    continue
+                start, end = timestamp
+                if start is None or end is None or start < 0 or end < start:
+                    errors.append(
+                        f"{display_id}: timestamp 范围无效: {timestamp!r}")
+                elif transcript_max_end is not None and end > transcript_max_end + 1:
+                    errors.append(
+                        f"{display_id}: timestamp 超出转录范围: {timestamp!r}")
+        elif unit.get("timestamps"):
+            errors.append(
+                f"{display_id}: text_anchor 模式不允许携带 timestamps")
         if status == "excluded" and not unit.get("notes"):
             errors.append(f"{display_id}: excluded 单元必须填写删除原因")
         if status == "unsupported":
@@ -293,13 +412,26 @@ def validate_content_map(payload, transcript=None):
             if not isinstance(segment_ids, list) or not segment_ids:
                 errors.append(f"{display_id}: evidence.segment_ids 不能为空")
                 continue
+            evidence_mode_for_unit = evidence.get("mode", evidence_mode)
+            if evidence_mode_for_unit != evidence_mode:
+                errors.append(
+                    f"{display_id}: evidence.mode 与 content_map.evidence_mode 不一致"
+                )
             if len(segment_ids) > 60:
                 warnings.append(
                     f"{display_id}: 单元证据包含 {len(segment_ids)} 个片段，"
                     "建议拆分 unit 以降低审查延迟并提高 claim 精度")
+            if (
+                    set(segment_ids) & synthetic_transcript_ids
+                    and not synthetic_warning_added):
+                warnings.append(
+                    f"{display_id}: 证据引用无时间戳文本的合成分段，"
+                    "segment 边界仅用于字符级定位")
+                synthetic_warning_added = True
             unknown_segments = sorted(set(segment_ids) - transcript_ids)
             if transcript is None:
-                errors.append(f"{display_id}: v2 evidence 校验需要 transcript.raw.json")
+                errors.append(
+                    f"{display_id}: segment evidence 校验需要 transcript.raw.json")
             elif unknown_segments:
                 errors.append(
                     f"{display_id}: evidence 引用了未知片段: {unknown_segments}")
@@ -373,17 +505,22 @@ def validate_content_map(payload, transcript=None):
                                 errors.append(
                                     f"{display_id}-{claim_key}: "
                                     "缺少 claim evidence rationale")
+                            elif len(re.sub(r"\s+", "", rationale)) < 10:
+                                errors.append(
+                                    f"{display_id}-{claim_key}: "
+                                    "claim evidence rationale 过短，"
+                                    "需说明片段如何支持 claim")
                 if (
                         payload.get(
                             "schema_version", 1) >= CONTENT_MAP_SCHEMA_VERSION
                         and len(claim_sets) > 1
-                        and len(segment_ids) >= 4
-                        and all(
+                        and len(segment_ids) >= 2
+                        and sum(
                             set(claim_set) == set(segment_ids)
-                            for claim_set in claim_sets)
+                            for claim_set in claim_sets) >= 2
                 ):
                     errors.append(
-                        f"{display_id}: 多条 claim 全量复用整个单元证据，"
+                        f"{display_id}: 至少两条 claim 全量复用整个单元证据，"
                         "必须收窄到 claim 级最小片段")
 
     return errors, warnings
@@ -606,7 +743,7 @@ def main():
 
     enrich = sub.add_parser(
         "enrich-evidence",
-        help="为单集补齐 v2 segment/claim/notes 证据绑定",
+        help="为单集补齐 v3 segment/claim/notes 证据绑定",
     )
     enrich.add_argument("folder")
 
@@ -644,13 +781,35 @@ def main():
             return 1
         content_map, transcript = enrich_content_map_evidence(
             load_json(content_map_path), load_json(transcript_path))
+        missing_segment_ids = [
+            index
+            for index, segment in enumerate(
+                load_json(transcript_path).get("segments", []), start=1)
+            if not segment.get("id")
+        ]
+        if missing_segment_ids:
+            print(
+                "[错误] transcript.raw.json 缺少持久化 segment ID，"
+                "拒绝由迁移命令改写原始证据"
+            )
+            return 1
         summary_map = enrich_summary_map_evidence(
             load_summary_map(summary_map_path),
             notes_path.read_text(encoding="utf-8"),
             content_map,
             (folder / "讲书稿.md").read_text(encoding="utf-8"),
         )
-        save_json(transcript_path, transcript)
+        basis_path = (
+            folder / "转录_纠错.txt"
+            if (folder / "转录_纠错.txt").exists()
+            else folder / "原始转录.txt"
+        )
+        if basis_path.exists():
+            summary_map["transcript_basis"] = {
+                "file": basis_path.name,
+                "sha256": body_sha256(
+                    basis_path.read_text(encoding="utf-8")),
+            }
         save_json(content_map_path, content_map)
         save_json(summary_map_path, summary_map)
         errors, warnings = validate_content_map(content_map, transcript)
@@ -667,7 +826,7 @@ def main():
         if errors or summary_errors:
             return 1
         print(
-            f"[content-map] v2 evidence 已补齐: "
+            f"[content-map] v3 evidence 已补齐: "
             f"{len(content_map.get('units', []))} units"
         )
         return 0

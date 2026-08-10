@@ -30,13 +30,24 @@ from threading import Lock
 import httpx
 from tqdm import tqdm
 
-from config import FISH_VOICE, FISH_MODEL, require_fish_key
+from atomic_io import atomic_output_path, atomic_write_json
+from config import (
+    API_RETRY_BACKOFF,
+    FISH_MODEL,
+    FISH_VOICE,
+    TTS_MAX_RETRIES,
+    TTS_TIMEOUT,
+    require_fish_key,
+    validate_for_stage,
+)
+from retry import exponential_delay, retry_after_seconds
 from validator import smart_chunk
 
 
 API_URL = "https://api.fish.audio/v1/tts"
 MAX_CHUNK_CHARS = 800
-MAX_RETRIES = 5
+MAX_RETRIES = TTS_MAX_RETRIES
+RETRY_BACKOFF = API_RETRY_BACKOFF
 DEFAULT_CONCURRENCY = 3
 SECTION_SILENCE_SECONDS = 0.8  # 章节之间的静音时长
 TTS_MANIFEST_SCHEMA_VERSION = 1
@@ -61,6 +72,7 @@ class TTSUsage:
     retry_count: int = 0
     synthesized_chunks: int = 0
     synthesized_characters: int = 0
+    last_error: str = ""
     _lock: Lock = field(default_factory=Lock, repr=False)
 
     def record_attempt(self, retry=False):
@@ -74,12 +86,17 @@ class TTSUsage:
             self.synthesized_chunks += len(chunks)
             self.synthesized_characters += sum(len(chunk) for chunk in chunks)
 
+    def record_error(self, error):
+        with self._lock:
+            self.last_error = str(error)
+
     def as_dict(self):
         return {
             "api_requests": self.api_requests,
             "retry_count": self.retry_count,
             "synthesized_chunks": self.synthesized_chunks,
             "synthesized_characters": self.synthesized_characters,
+            "last_error": self.last_error,
         }
 
 
@@ -96,11 +113,7 @@ def _sha256_file(path):
 
 
 def _write_manifest(path, payload):
-    tmp_path = str(path) + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-    os.replace(tmp_path, path)
+    atomic_write_json(path, payload)
 
 
 def _load_manifest(path):
@@ -346,7 +359,8 @@ def synth_chunk(client, text, speed=1.0, usage=None):
         try:
             r = client.post(
                 API_URL, headers=headers, json=body,
-                timeout=httpx.Timeout(120, connect=30),
+                timeout=httpx.Timeout(
+                    TTS_TIMEOUT, connect=min(30, TTS_TIMEOUT)),
             )
             if r.status_code == 200:
                 return r.content
@@ -361,20 +375,36 @@ def synth_chunk(client, text, speed=1.0, usage=None):
                 raise RuntimeError(
                     f"Fish Audio 请求被拒 ({r.status_code}): {r.text[:120]}"
                 )
-            # 可重试：429 限流 / 5xx 服务端
-            if r.status_code == 429:
-                wait = 10 * attempt
-                tqdm.write(f"  [TTS] 限流，等待 {wait}s")
-                time.sleep(wait)
-                continue
+            if r.status_code != 429 and r.status_code < 500:
+                raise RuntimeError(
+                    f"Fish Audio 返回不可重试状态 ({r.status_code})")
             last_err = f"HTTP {r.status_code}"
-            tqdm.write(f"  [TTS] {last_err}，重试 {attempt}/{MAX_RETRIES}")
-            time.sleep(3 * attempt)
+            if usage is not None:
+                usage.record_error(last_err)
+            if attempt == MAX_RETRIES:
+                break
+            retry_after = retry_after_seconds(
+                r.headers.get("retry-after"))
+            wait = max(
+                exponential_delay(attempt, RETRY_BACKOFF),
+                retry_after or 0.0,
+            )
+            tqdm.write(
+                f"  [TTS] {last_err}，{wait:g}s 后重试 "
+                f"{attempt}/{MAX_RETRIES}")
+            time.sleep(wait)
         except httpx.HTTPError as e:
             # 网络错误 / 超时 → 可重试
             last_err = type(e).__name__
-            tqdm.write(f"  [TTS] 网络异常 ({last_err})，重试 {attempt}/{MAX_RETRIES}")
-            time.sleep(3 * attempt)
+            if usage is not None:
+                usage.record_error(last_err)
+            if attempt == MAX_RETRIES:
+                break
+            wait = exponential_delay(attempt, RETRY_BACKOFF)
+            tqdm.write(
+                f"  [TTS] 网络异常 ({last_err})，{wait:g}s 后重试 "
+                f"{attempt}/{MAX_RETRIES}")
+            time.sleep(wait)
 
     raise RuntimeError(f"TTS 重试 {MAX_RETRIES} 次后仍然失败: {last_err}")
 
@@ -543,6 +573,7 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
     返回:
         TTSResult。任何章节失败时 ok=False，且不会覆盖最终 MP3。
     """
+    validate_for_stage("tts")
     audio_dir = os.path.join(folder, "audio")
     os.makedirs(audio_dir, exist_ok=True)
     manifest_path = os.path.join(folder, "tts_manifest.json")
@@ -550,10 +581,6 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
     # .tmp 永远是半成品，一律清掉
     for f in glob.glob(os.path.join(audio_dir, "*.tmp")):
         os.remove(f)
-    merged_tmp = os.path.join(folder, f"{merged_name}.tmp.mp3")
-    if os.path.exists(merged_tmp):
-        os.remove(merged_tmp)
-
     briefing_path = os.path.join(folder, briefing_file)
     if not os.path.exists(briefing_path):
         print(f"  [TTS] 找不到 {briefing_file}", flush=True)
@@ -640,17 +667,16 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
                 continue
 
             chunks = smart_chunk(item["text"], max_chars=MAX_CHUNK_CHARS)
-            tmp_path = output_path + ".tmp"
 
             try:
                 ordered = synth_chunks_concurrent(
                     client, chunks, speed, concurrency, usage)
-                with open(tmp_path, "wb") as f:
-                    for audio in ordered:
-                        f.write(audio)
-                if os.path.getsize(tmp_path) <= 1024:
-                    raise RuntimeError("生成的章节音频体积异常")
-                os.replace(tmp_path, output_path)
+                with atomic_output_path(output_path) as tmp_path:
+                    with tmp_path.open("wb") as handle:
+                        for audio in ordered:
+                            handle.write(audio)
+                    if tmp_path.stat().st_size <= 1024:
+                        raise RuntimeError("生成的章节音频体积异常")
                 size = os.path.getsize(output_path)
                 output_sha256 = _sha256_file(output_path)
                 total_kb += size // 1024
@@ -665,8 +691,6 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
                 tqdm.write(f"  [TTS] {fname} ({size // 1024}KB, {len(chunks)}片)")
             except Exception as e:
                 tqdm.write(f"  [TTS] 失败 {fname}: {e}")
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
                 manifest["sections"].append({
                     "filename": fname,
                     "fingerprint": item["fingerprint"],
@@ -711,14 +735,12 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
 
     merged_path = os.path.join(folder, f"{merged_name}.mp3")
     try:
-        if not merge_mp3s(all_mp3s, merged_tmp):
-            raise RuntimeError("音频合并失败")
-        if not os.path.exists(merged_tmp) or os.path.getsize(merged_tmp) <= 1024:
-            raise RuntimeError("合并后的音频体积异常")
-        os.replace(merged_tmp, merged_path)
+        with atomic_output_path(merged_path) as merged_tmp:
+            if not merge_mp3s(all_mp3s, str(merged_tmp)):
+                raise RuntimeError("音频合并失败")
+            if merged_tmp.stat().st_size <= 1024:
+                raise RuntimeError("合并后的音频体积异常")
     except Exception as exc:
-        if os.path.exists(merged_tmp):
-            os.remove(merged_tmp)
         manifest["merge_error"] = str(exc)
         manifest["usage"] = usage.as_dict()
         _write_manifest(manifest_path, manifest)
@@ -774,6 +796,11 @@ def cli_main():
         action="store_true",
         help="不调用 TTS，仅为现有章节音频和最终 MP3 回填 manifest",
     )
+    parser.add_argument(
+        "--allow-unchecked",
+        action="store_true",
+        help="显式绕过统一质量门；绕过行为会写入 run_report.json",
+    )
 
     parsed = parser.parse_args()
     speed = parsed.speed
@@ -794,21 +821,58 @@ def cli_main():
     if not merged_name:
         merged_name = Path(input_md).stem
 
-    if parsed.backfill_manifest:
-        result = backfill_tts_manifest(
-            folder,
-            briefing_file,
-            merged_name,
-            speed=speed,
-            read_titles=not parsed.no_titles,
-        )
-    else:
-        result = run_tts(
-            str(folder), briefing_file, merged_name, speed,
-            fresh=parsed.fresh,
-            read_titles=not parsed.no_titles,
-            concurrency=parsed.concurrency,
-        )
+    from preflight import quality_gate
+    from run_report import RunReport
+    report = RunReport(folder, "tts.cli", {
+        "entry_point": "tts.cli",
+        "allow_unchecked": parsed.allow_unchecked,
+        "backfill_manifest": parsed.backfill_manifest,
+    })
+    try:
+        if parsed.allow_unchecked:
+            with report.stage("quality_gate_bypass") as stage:
+                stage.metrics.update({
+                    "entry_point": "tts.cli",
+                    "allow_unchecked": True,
+                    "reason": "explicit CLI flag",
+                })
+        else:
+            with report.stage("quality_gate") as stage:
+                passed = quality_gate(folder, run_report=report)
+                stage.metrics["passed"] = passed
+                if not passed:
+                    stage.fail("quality gate failed")
+                    report.finish(False, "quality gate failed")
+                    sys.exit(1)
+
+        if parsed.backfill_manifest:
+            result = backfill_tts_manifest(
+                folder,
+                briefing_file,
+                merged_name,
+                speed=speed,
+                read_titles=not parsed.no_titles,
+            )
+        else:
+            result = run_tts(
+                str(folder), briefing_file, merged_name, speed,
+                fresh=parsed.fresh,
+                read_titles=not parsed.no_titles,
+                concurrency=parsed.concurrency,
+            )
+        if result.ok:
+            from release import prepare_release
+            release = prepare_release(
+                folder,
+                folder / f"{merged_name}.mp3",
+                folder / briefing_file,
+            )
+            report.run["release_id"] = release.get("release_id")
+        report.finish(bool(result.ok), None if result.ok else result.summary)
+    except BaseException as exc:
+        if not report._finished:
+            report.finish(False, exc)
+        raise
     print(f"\n完成: {result}")
 
 

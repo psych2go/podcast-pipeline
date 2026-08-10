@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+import warnings
 from pathlib import Path
 
 _scripts = str(Path(__file__).resolve().parent)
@@ -31,13 +32,37 @@ def _load_pipeline():
     import torch
     torch.set_num_threads(min(6, os.cpu_count() or 6))
     model_name = os.environ.get(
-        "DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1")
-    from pyannote.audio import Pipeline
+        "DIARIZATION_MODEL",
+        "pyannote/speaker-diarization-community-1",
+    )
+    with warnings.catch_warnings():
+        # Audio is preloaded below, so pyannote's optional TorchCodec decoder
+        # is not used by this module.
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                r"[\s\S]*torchcodec is not installed correctly"
+                r"[\s\S]*"
+            ),
+            category=UserWarning,
+        )
+        from pyannote.audio import Pipeline
 
     print(f"[Diarize] 加载 {model_name}...", flush=True)
     started = time.time()
     pipe = Pipeline.from_pretrained(model_name, token=token)
-    pipe.to(torch.device("cpu"))
+    configured_device = os.environ.get("DIARIZATION_DEVICE", "auto")
+    if configured_device == "auto":
+        configured_device = "cuda" if torch.cuda.is_available() else "cpu"
+    if configured_device not in {"cpu", "cuda"}:
+        raise RuntimeError(
+            f"DIARIZATION_DEVICE 必须是 auto/cpu/cuda，当前值: "
+            f"{configured_device!r}")
+    if configured_device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("显式要求 CUDA diarization，但 PyTorch CUDA 不可用")
+    pipe.to(torch.device(configured_device))
+    pipe._podcast_device = configured_device
+    pipe._podcast_model_name = model_name
     print(f"[Diarize] 加载完成 {time.time() - started:.1f}s", flush=True)
     _PIPELINE = pipe
     return pipe
@@ -76,8 +101,65 @@ def _read_audio_mono(path):
     return audio.astype("float32"), sr
 
 
-def diarize(audio_path, min_speakers=None, max_speakers=None):
-    """跑 pyannote，返回 [(start, end, speaker_label), ...]。"""
+def _annotation_turns(annotation):
+    turns = []
+    if annotation is None:
+        return turns
+    if hasattr(annotation, "itertracks"):
+        for segment, _, label in annotation.itertracks(yield_label=True):
+            turns.append((float(segment.start), float(segment.end), label))
+        return turns
+    if hasattr(annotation, "serialize"):
+        serialized = annotation.serialize()
+        for item in serialized.get("diarization", []):
+            turns.append((
+                float(item["start"]),
+                float(item["end"]),
+                item["speaker"],
+            ))
+    return turns
+
+
+def _output_turns(output, prefer_exclusive=True):
+    """Normalize pyannote 3.x/4.x outputs and prefer exclusive turns."""
+    if prefer_exclusive:
+        annotation = getattr(
+            output, "exclusive_speaker_diarization", None)
+        turns = _annotation_turns(annotation)
+        if turns:
+            return turns, True
+
+    annotation = getattr(output, "speaker_diarization", None)
+    turns = _annotation_turns(annotation)
+    if turns:
+        return turns, False
+
+    turns = _annotation_turns(output)
+    if turns:
+        return turns, False
+
+    if hasattr(output, "serialize"):
+        serialized = output.serialize()
+        for key, exclusive in (
+                ("exclusive_speaker_diarization", True),
+                ("speaker_diarization", False),
+                ("diarization", False)):
+            items = serialized.get(key, [])
+            if items:
+                return [
+                    (
+                        float(item["start"]),
+                        float(item["end"]),
+                        item["speaker"],
+                    )
+                    for item in items
+                ], exclusive
+    return [], False
+
+
+def diarize(audio_path, min_speakers=None, max_speakers=None,
+            return_metadata=False):
+    """跑 pyannote，默认返回 turns；可选返回结构化运行元数据。"""
     pipe = _load_pipeline()
     audio, sr = _read_audio_mono(audio_path)
     import torch
@@ -93,21 +175,40 @@ def diarize(audio_path, min_speakers=None, max_speakers=None):
     waveform = torch.from_numpy(audio).unsqueeze(0)
     output = pipe({"waveform": waveform, "sample_rate": sr}, **kwargs)
 
-    # pyannote 3.x/4.x 的兼容读取。
-    turns = []
-    if hasattr(output, "serialize"):
-        serialized = output.serialize()
-        for item in serialized.get("diarization", []):
-            turns.append((float(item["start"]), float(item["end"]), item["speaker"]))
-    elif hasattr(output, "itertracks"):
-        for segment, _, label in output.itertracks(yield_label=True):
-            turns.append((float(segment.start), float(segment.end), label))
+    prefer_exclusive = os.environ.get(
+        "DIARIZATION_EXCLUSIVE", "true").strip().lower() not in {
+            "0", "false", "no", "off",
+        }
+    turns, exclusive_used = _output_turns(
+        output, prefer_exclusive=prefer_exclusive)
     turns.sort(key=lambda item: (item[0], item[1]))
+    elapsed = time.time() - started
+    model_name = getattr(
+        pipe,
+        "_podcast_model_name",
+        os.environ.get(
+            "DIARIZATION_MODEL",
+            "pyannote/speaker-diarization-community-1",
+        ),
+    )
+    device = getattr(pipe, "_podcast_device", "cpu")
+    metadata = {
+        "model": model_name,
+        "device": device,
+        "exclusive_requested": prefer_exclusive,
+        "exclusive_used": exclusive_used,
+        "speaker_count": len(set(t[2] for t in turns)),
+        "turn_count": len(turns),
+        "elapsed_seconds": round(elapsed, 3),
+    }
     print(
-        f"[Diarize] 完成 {time.time() - started:.0f}s，"
-        f"{len(set(t[2] for t in turns))} 个说话人，{len(turns)} 段",
+        f"[Diarize] 完成 {elapsed:.0f}s，"
+        f"{metadata['speaker_count']} 个说话人，{len(turns)} 段，"
+        f"exclusive={str(exclusive_used).lower()}",
         flush=True,
     )
+    if return_metadata:
+        return {"turns": turns, "meta": metadata}
     return turns
 
 
@@ -267,10 +368,21 @@ def render_with_speakers(merged_segments, include_timestamps=False):
 
 
 def diarize_and_merge(audio_path, segments, min_speakers=None, max_speakers=None,
-                      return_segments=False):
+                      return_segments=False, return_metadata=False):
     """跑分离、对齐 ASR 片段；默认兼容旧接口返回文本。"""
-    turns = diarize(audio_path, min_speakers=min_speakers, max_speakers=max_speakers)
+    diarization = diarize(
+        audio_path,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+        return_metadata=True,
+    )
+    turns = diarization["turns"]
     merged = merge_segments_with_speakers(segments, turns)
+    if return_metadata:
+        return {
+            "segments": merged,
+            "meta": diarization["meta"],
+        }
     if return_segments:
         return merged
     return render_with_speakers(merged)

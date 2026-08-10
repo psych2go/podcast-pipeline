@@ -1,0 +1,4605 @@
+{
+  "schema_version": 1,
+  "sample_id": "AMI_ES2004a_360_660",
+  "source": "AMI manual annotations v1.6.2",
+  "license": "CC BY 4.0",
+  "clip": {
+    "source_meeting": "ES2004a",
+    "start_seconds": 360.0,
+    "duration_seconds": 300.0
+  },
+  "speakers": {
+    "B": {
+      "global_name": "FEE013",
+      "role": "PM",
+      "channel": "1"
+    },
+    "C": {
+      "global_name": "MEE014",
+      "role": "ID",
+      "channel": "2"
+    },
+    "A": {
+      "global_name": "MEO015",
+      "role": "UI",
+      "channel": "0"
+    },
+    "D": {
+      "global_name": "FEE016",
+      "role": "ME",
+      "channel": "3"
+    }
+  },
+  "stats": {
+    "word_count": 751,
+    "assigned_words": 751,
+    "assignment_coverage": 1.0
+  },
+  "segments": [
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 0.0,
+      "end": 2.14,
+      "text": "top with standing on a chair",
+      "words": [
+        {
+          "word": "top",
+          "start": 0.0,
+          "end": 0.48
+        },
+        {
+          "word": "with",
+          "start": 0.48,
+          "end": 0.87
+        },
+        {
+          "word": "standing",
+          "start": 0.87,
+          "end": 1.23
+        },
+        {
+          "word": "on",
+          "start": 1.23,
+          "end": 1.33
+        },
+        {
+          "word": "a",
+          "start": 1.33,
+          "end": 1.39
+        },
+        {
+          "word": "chair",
+          "start": 1.39,
+          "end": 2.14
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 0.0,
+      "end": 7.65,
+      "text": "okay Well since you guys have chosen the ones I wanted to do I'll have to have to go for something a bit random",
+      "words": [
+        {
+          "word": "okay",
+          "start": 0.0,
+          "end": 1.74
+        },
+        {
+          "word": "Well",
+          "start": 1.74,
+          "end": 1.98
+        },
+        {
+          "word": "since",
+          "start": 1.98,
+          "end": 2.29
+        },
+        {
+          "word": "you",
+          "start": 2.29,
+          "end": 2.41
+        },
+        {
+          "word": "guys",
+          "start": 2.41,
+          "end": 2.63
+        },
+        {
+          "word": "have",
+          "start": 2.63,
+          "end": 2.76
+        },
+        {
+          "word": "chosen",
+          "start": 2.76,
+          "end": 3.18
+        },
+        {
+          "word": "the",
+          "start": 3.18,
+          "end": 3.41
+        },
+        {
+          "word": "ones",
+          "start": 3.41,
+          "end": 3.7
+        },
+        {
+          "word": "I",
+          "start": 3.7,
+          "end": 3.78
+        },
+        {
+          "word": "wanted",
+          "start": 3.78,
+          "end": 4.16
+        },
+        {
+          "word": "to",
+          "start": 4.16,
+          "end": 4.39
+        },
+        {
+          "word": "do",
+          "start": 4.39,
+          "end": 4.48
+        },
+        {
+          "word": "I'll",
+          "start": 4.48,
+          "end": 4.66
+        },
+        {
+          "word": "have",
+          "start": 4.66,
+          "end": 4.89
+        },
+        {
+          "word": "to",
+          "start": 4.89,
+          "end": 5.72
+        },
+        {
+          "word": "have",
+          "start": 5.72,
+          "end": 5.89
+        },
+        {
+          "word": "to",
+          "start": 5.89,
+          "end": 5.98
+        },
+        {
+          "word": "go",
+          "start": 5.98,
+          "end": 6.17
+        },
+        {
+          "word": "for",
+          "start": 6.17,
+          "end": 6.29
+        },
+        {
+          "word": "something",
+          "start": 6.29,
+          "end": 6.64
+        },
+        {
+          "word": "a",
+          "start": 6.64,
+          "end": 6.69
+        },
+        {
+          "word": "bit",
+          "start": 6.69,
+          "end": 6.9
+        },
+        {
+          "word": "random",
+          "start": 6.9,
+          "end": 7.65
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 4.81,
+      "end": 6.01,
+      "text": "Okay",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 4.81,
+          "end": 6.01
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEO015",
+      "start": 5.93,
+      "end": 7.84,
+      "text": "Does it look like a dog actually",
+      "words": [
+        {
+          "word": "Does",
+          "start": 5.93,
+          "end": 6.13
+        },
+        {
+          "word": "it",
+          "start": 6.13,
+          "end": 6.23
+        },
+        {
+          "word": "look",
+          "start": 6.23,
+          "end": 6.34
+        },
+        {
+          "word": "like",
+          "start": 6.34,
+          "end": 6.51
+        },
+        {
+          "word": "a",
+          "start": 6.51,
+          "end": 6.61
+        },
+        {
+          "word": "dog",
+          "start": 6.61,
+          "end": 6.84
+        },
+        {
+          "word": "actually",
+          "start": 6.84,
+          "end": 7.84
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 11.43,
+      "end": 15.29,
+      "text": "And also my drawing skill isn't that great so yeah",
+      "words": [
+        {
+          "word": "And",
+          "start": 11.43,
+          "end": 11.76
+        },
+        {
+          "word": "also",
+          "start": 11.76,
+          "end": 12.17
+        },
+        {
+          "word": "my",
+          "start": 12.17,
+          "end": 12.32
+        },
+        {
+          "word": "drawing",
+          "start": 12.32,
+          "end": 12.73
+        },
+        {
+          "word": "skill",
+          "start": 12.73,
+          "end": 13.1
+        },
+        {
+          "word": "isn't",
+          "start": 13.1,
+          "end": 13.33
+        },
+        {
+          "word": "that",
+          "start": 13.33,
+          "end": 13.5
+        },
+        {
+          "word": "great",
+          "start": 13.5,
+          "end": 13.87
+        },
+        {
+          "word": "so",
+          "start": 13.87,
+          "end": 15.0
+        },
+        {
+          "word": "yeah",
+          "start": 15.0,
+          "end": 15.29
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 13.84,
+      "end": 16.83,
+      "text": "Well as you can see the quality of the work today is um",
+      "words": [
+        {
+          "word": "Well",
+          "start": 13.84,
+          "end": 14.09
+        },
+        {
+          "word": "as",
+          "start": 14.09,
+          "end": 14.27
+        },
+        {
+          "word": "you",
+          "start": 14.27,
+          "end": 14.39
+        },
+        {
+          "word": "can",
+          "start": 14.39,
+          "end": 14.59
+        },
+        {
+          "word": "see",
+          "start": 14.59,
+          "end": 14.83
+        },
+        {
+          "word": "the",
+          "start": 14.83,
+          "end": 14.94
+        },
+        {
+          "word": "quality",
+          "start": 14.94,
+          "end": 15.44
+        },
+        {
+          "word": "of",
+          "start": 15.44,
+          "end": 15.54
+        },
+        {
+          "word": "the",
+          "start": 15.54,
+          "end": 15.67
+        },
+        {
+          "word": "work",
+          "start": 15.67,
+          "end": 15.93
+        },
+        {
+          "word": "today",
+          "start": 15.93,
+          "end": 16.31
+        },
+        {
+          "word": "is",
+          "start": 16.31,
+          "end": 16.48
+        },
+        {
+          "word": "um",
+          "start": 16.48,
+          "end": 16.83
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEO015",
+      "start": 15.08,
+      "end": 15.43,
+      "text": "Mm",
+      "words": [
+        {
+          "word": "Mm",
+          "start": 15.08,
+          "end": 15.43
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 16.8,
+      "end": 18.94,
+      "text": "I think it's outstandingly good",
+      "words": [
+        {
+          "word": "I",
+          "start": 16.8,
+          "end": 16.88
+        },
+        {
+          "word": "think",
+          "start": 16.88,
+          "end": 17.06
+        },
+        {
+          "word": "it's",
+          "start": 17.06,
+          "end": 17.22
+        },
+        {
+          "word": "outstandingly",
+          "start": 17.22,
+          "end": 17.9
+        },
+        {
+          "word": "good",
+          "start": 17.9,
+          "end": 18.94
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 19.6,
+      "end": 24.48,
+      "text": "Okay now I'm gonna have to change what is was originally gonna be because that looks like a beak now so",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 19.6,
+          "end": 19.86
+        },
+        {
+          "word": "now",
+          "start": 19.86,
+          "end": 20.08
+        },
+        {
+          "word": "I'm",
+          "start": 20.08,
+          "end": 20.14
+        },
+        {
+          "word": "gonna",
+          "start": 20.14,
+          "end": 20.29
+        },
+        {
+          "word": "have",
+          "start": 20.29,
+          "end": 20.41
+        },
+        {
+          "word": "to",
+          "start": 20.41,
+          "end": 20.52
+        },
+        {
+          "word": "change",
+          "start": 20.52,
+          "end": 20.97
+        },
+        {
+          "word": "what",
+          "start": 20.97,
+          "end": 21.15
+        },
+        {
+          "word": "is",
+          "start": 21.15,
+          "end": 21.33
+        },
+        {
+          "word": "was",
+          "start": 21.33,
+          "end": 21.6
+        },
+        {
+          "word": "originally",
+          "start": 21.6,
+          "end": 22.08
+        },
+        {
+          "word": "gonna",
+          "start": 22.08,
+          "end": 22.32
+        },
+        {
+          "word": "be",
+          "start": 22.32,
+          "end": 22.51
+        },
+        {
+          "word": "because",
+          "start": 22.51,
+          "end": 22.75
+        },
+        {
+          "word": "that",
+          "start": 22.75,
+          "end": 22.96
+        },
+        {
+          "word": "looks",
+          "start": 22.96,
+          "end": 23.15
+        },
+        {
+          "word": "like",
+          "start": 23.15,
+          "end": 23.32
+        },
+        {
+          "word": "a",
+          "start": 23.32,
+          "end": 23.44
+        },
+        {
+          "word": "beak",
+          "start": 23.44,
+          "end": 23.78
+        },
+        {
+          "word": "now",
+          "start": 23.78,
+          "end": 24.05
+        },
+        {
+          "word": "so",
+          "start": 24.05,
+          "end": 24.48
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 31.13,
+      "end": 31.74,
+      "text": "Crocodile",
+      "words": [
+        {
+          "word": "Crocodile",
+          "start": 31.13,
+          "end": 31.74
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 33.99,
+      "end": 34.92,
+      "text": "Gonna be a bird",
+      "words": [
+        {
+          "word": "Gonna",
+          "start": 33.99,
+          "end": 34.15
+        },
+        {
+          "word": "be",
+          "start": 34.15,
+          "end": 34.45
+        },
+        {
+          "word": "a",
+          "start": 34.45,
+          "end": 34.68
+        },
+        {
+          "word": "bird",
+          "start": 34.68,
+          "end": 34.92
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 34.38,
+      "end": 46.27,
+      "text": "Yeah it can be a crocodile it can be a crocodile Well it was it was an at first firstly it was an attempt at a T_ Rex and then it sort of changed into a pelican but it can be a crocodile now actually",
+      "words": [
+        {
+          "word": "Yeah",
+          "start": 34.38,
+          "end": 34.65
+        },
+        {
+          "word": "it",
+          "start": 34.65,
+          "end": 34.74
+        },
+        {
+          "word": "can",
+          "start": 34.74,
+          "end": 34.84
+        },
+        {
+          "word": "be",
+          "start": 34.84,
+          "end": 34.93
+        },
+        {
+          "word": "a",
+          "start": 34.93,
+          "end": 35.0
+        },
+        {
+          "word": "crocodile",
+          "start": 35.0,
+          "end": 35.89
+        },
+        {
+          "word": "it",
+          "start": 35.89,
+          "end": 36.05
+        },
+        {
+          "word": "can",
+          "start": 36.05,
+          "end": 36.27
+        },
+        {
+          "word": "be",
+          "start": 36.27,
+          "end": 36.36
+        },
+        {
+          "word": "a",
+          "start": 36.36,
+          "end": 36.44
+        },
+        {
+          "word": "crocodile",
+          "start": 36.44,
+          "end": 37.95
+        },
+        {
+          "word": "Well",
+          "start": 37.95,
+          "end": 38.18
+        },
+        {
+          "word": "it",
+          "start": 38.18,
+          "end": 38.33
+        },
+        {
+          "word": "was",
+          "start": 38.33,
+          "end": 38.59
+        },
+        {
+          "word": "it",
+          "start": 38.59,
+          "end": 38.72
+        },
+        {
+          "word": "was",
+          "start": 38.72,
+          "end": 38.9
+        },
+        {
+          "word": "an",
+          "start": 38.9,
+          "end": 39.04
+        },
+        {
+          "word": "at",
+          "start": 39.04,
+          "end": 39.23
+        },
+        {
+          "word": "first",
+          "start": 39.23,
+          "end": 39.76
+        },
+        {
+          "word": "firstly",
+          "start": 39.76,
+          "end": 40.21
+        },
+        {
+          "word": "it",
+          "start": 40.21,
+          "end": 40.28
+        },
+        {
+          "word": "was",
+          "start": 40.28,
+          "end": 40.42
+        },
+        {
+          "word": "an",
+          "start": 40.42,
+          "end": 40.54
+        },
+        {
+          "word": "attempt",
+          "start": 40.54,
+          "end": 40.95
+        },
+        {
+          "word": "at",
+          "start": 40.95,
+          "end": 41.25
+        },
+        {
+          "word": "a",
+          "start": 41.25,
+          "end": 41.28
+        },
+        {
+          "word": "T_",
+          "start": 41.28,
+          "end": 41.37
+        },
+        {
+          "word": "Rex",
+          "start": 41.37,
+          "end": 42.05
+        },
+        {
+          "word": "and",
+          "start": 42.05,
+          "end": 42.22
+        },
+        {
+          "word": "then",
+          "start": 42.22,
+          "end": 42.66
+        },
+        {
+          "word": "it",
+          "start": 42.66,
+          "end": 43.03
+        },
+        {
+          "word": "sort",
+          "start": 43.03,
+          "end": 43.28
+        },
+        {
+          "word": "of",
+          "start": 43.28,
+          "end": 43.4
+        },
+        {
+          "word": "changed",
+          "start": 43.4,
+          "end": 43.73
+        },
+        {
+          "word": "into",
+          "start": 43.73,
+          "end": 43.92
+        },
+        {
+          "word": "a",
+          "start": 43.92,
+          "end": 43.99
+        },
+        {
+          "word": "pelican",
+          "start": 43.99,
+          "end": 44.53
+        },
+        {
+          "word": "but",
+          "start": 44.53,
+          "end": 44.68
+        },
+        {
+          "word": "it",
+          "start": 44.68,
+          "end": 44.78
+        },
+        {
+          "word": "can",
+          "start": 44.78,
+          "end": 44.92
+        },
+        {
+          "word": "be",
+          "start": 44.92,
+          "end": 44.99
+        },
+        {
+          "word": "a",
+          "start": 44.99,
+          "end": 45.06
+        },
+        {
+          "word": "crocodile",
+          "start": 45.06,
+          "end": 45.63
+        },
+        {
+          "word": "now",
+          "start": 45.63,
+          "end": 45.88
+        },
+        {
+          "word": "actually",
+          "start": 45.88,
+          "end": 46.27
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 36.31,
+      "end": 39.8,
+      "text": "Is it gonna be it's gonna be a bird",
+      "words": [
+        {
+          "word": "Is",
+          "start": 36.31,
+          "end": 36.4
+        },
+        {
+          "word": "it",
+          "start": 36.4,
+          "end": 36.52
+        },
+        {
+          "word": "gonna",
+          "start": 36.52,
+          "end": 37.11
+        },
+        {
+          "word": "be",
+          "start": 37.11,
+          "end": 38.76
+        },
+        {
+          "word": "it's",
+          "start": 38.76,
+          "end": 38.99
+        },
+        {
+          "word": "gonna",
+          "start": 38.99,
+          "end": 39.22
+        },
+        {
+          "word": "be",
+          "start": 39.22,
+          "end": 39.3
+        },
+        {
+          "word": "a",
+          "start": 39.3,
+          "end": 39.41
+        },
+        {
+          "word": "bird",
+          "start": 39.41,
+          "end": 39.8
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 43.24,
+      "end": 43.35,
+      "text": "O",
+      "words": [
+        {
+          "word": "O",
+          "start": 43.24,
+          "end": 43.35
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 60.11,
+      "end": 60.95,
+      "text": "That's lovely",
+      "words": [
+        {
+          "word": "That's",
+          "start": 60.11,
+          "end": 60.43
+        },
+        {
+          "word": "lovely",
+          "start": 60.43,
+          "end": 60.95
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 61.2,
+      "end": 66.55,
+      "text": "Yeah and uh I'll have to think on the spot of uh things that it is Um",
+      "words": [
+        {
+          "word": "Yeah",
+          "start": 61.2,
+          "end": 61.54
+        },
+        {
+          "word": "and",
+          "start": 61.54,
+          "end": 61.92
+        },
+        {
+          "word": "uh",
+          "start": 61.92,
+          "end": 62.59
+        },
+        {
+          "word": "I'll",
+          "start": 62.59,
+          "end": 62.86
+        },
+        {
+          "word": "have",
+          "start": 62.86,
+          "end": 62.99
+        },
+        {
+          "word": "to",
+          "start": 62.99,
+          "end": 63.1
+        },
+        {
+          "word": "think",
+          "start": 63.1,
+          "end": 63.35
+        },
+        {
+          "word": "on",
+          "start": 63.35,
+          "end": 63.47
+        },
+        {
+          "word": "the",
+          "start": 63.47,
+          "end": 63.54
+        },
+        {
+          "word": "spot",
+          "start": 63.54,
+          "end": 63.82
+        },
+        {
+          "word": "of",
+          "start": 63.82,
+          "end": 64.15
+        },
+        {
+          "word": "uh",
+          "start": 64.15,
+          "end": 64.38
+        },
+        {
+          "word": "things",
+          "start": 64.38,
+          "end": 64.76
+        },
+        {
+          "word": "that",
+          "start": 64.76,
+          "end": 64.87
+        },
+        {
+          "word": "it",
+          "start": 64.87,
+          "end": 65.05
+        },
+        {
+          "word": "is",
+          "start": 65.05,
+          "end": 65.97
+        },
+        {
+          "word": "Um",
+          "start": 65.97,
+          "end": 66.55
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 61.44,
+      "end": 62.26,
+      "text": "Beauti that's",
+      "words": [
+        {
+          "word": "Beauti",
+          "start": 61.44,
+          "end": 61.77
+        },
+        {
+          "word": "that's",
+          "start": 61.77,
+          "end": 62.26
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 68.12,
+      "end": 70.22,
+      "text": "uh scary",
+      "words": [
+        {
+          "word": "uh",
+          "start": 68.12,
+          "end": 69.02
+        },
+        {
+          "word": "scary",
+          "start": 69.02,
+          "end": 70.22
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 72.48,
+      "end": 74.37,
+      "text": "uh strong",
+      "words": [
+        {
+          "word": "uh",
+          "start": 72.48,
+          "end": 72.75
+        },
+        {
+          "word": "strong",
+          "start": 72.75,
+          "end": 74.37
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 78.74,
+      "end": 81.99,
+      "text": "yeah that's about it I think",
+      "words": [
+        {
+          "word": "yeah",
+          "start": 78.74,
+          "end": 78.96
+        },
+        {
+          "word": "that's",
+          "start": 78.96,
+          "end": 79.18
+        },
+        {
+          "word": "about",
+          "start": 79.18,
+          "end": 79.42
+        },
+        {
+          "word": "it",
+          "start": 79.42,
+          "end": 79.6
+        },
+        {
+          "word": "I",
+          "start": 79.6,
+          "end": 79.69
+        },
+        {
+          "word": "think",
+          "start": 79.69,
+          "end": 81.99
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 79.85,
+      "end": 81.77,
+      "text": "Okay it's fine",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 79.85,
+          "end": 81.17
+        },
+        {
+          "word": "it's",
+          "start": 81.17,
+          "end": 81.52
+        },
+        {
+          "word": "fine",
+          "start": 81.52,
+          "end": 81.77
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 81.59,
+      "end": 82.12,
+      "text": "Okay",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 81.59,
+          "end": 82.12
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 83.16,
+      "end": 90.85,
+      "text": "Um I'm very impressed with your artistic skills mine's are dreadful Oops this is now coming apart let me just put the top in",
+      "words": [
+        {
+          "word": "Um",
+          "start": 83.16,
+          "end": 83.34
+        },
+        {
+          "word": "I'm",
+          "start": 83.34,
+          "end": 83.51
+        },
+        {
+          "word": "very",
+          "start": 83.51,
+          "end": 83.73
+        },
+        {
+          "word": "impressed",
+          "start": 83.73,
+          "end": 84.19
+        },
+        {
+          "word": "with",
+          "start": 84.19,
+          "end": 84.28
+        },
+        {
+          "word": "your",
+          "start": 84.28,
+          "end": 84.48
+        },
+        {
+          "word": "artistic",
+          "start": 84.48,
+          "end": 85.04
+        },
+        {
+          "word": "skills",
+          "start": 85.04,
+          "end": 85.32
+        },
+        {
+          "word": "mine's",
+          "start": 85.32,
+          "end": 85.64
+        },
+        {
+          "word": "are",
+          "start": 85.64,
+          "end": 85.88
+        },
+        {
+          "word": "dreadful",
+          "start": 85.88,
+          "end": 87.95
+        },
+        {
+          "word": "Oops",
+          "start": 87.95,
+          "end": 88.2
+        },
+        {
+          "word": "this",
+          "start": 88.2,
+          "end": 88.34
+        },
+        {
+          "word": "is",
+          "start": 88.34,
+          "end": 88.45
+        },
+        {
+          "word": "now",
+          "start": 88.45,
+          "end": 88.57
+        },
+        {
+          "word": "coming",
+          "start": 88.57,
+          "end": 88.88
+        },
+        {
+          "word": "apart",
+          "start": 88.88,
+          "end": 89.61
+        },
+        {
+          "word": "let",
+          "start": 89.61,
+          "end": 89.7
+        },
+        {
+          "word": "me",
+          "start": 89.7,
+          "end": 89.76
+        },
+        {
+          "word": "just",
+          "start": 89.76,
+          "end": 89.97
+        },
+        {
+          "word": "put",
+          "start": 89.97,
+          "end": 90.1
+        },
+        {
+          "word": "the",
+          "start": 90.1,
+          "end": 90.17
+        },
+        {
+          "word": "top",
+          "start": 90.17,
+          "end": 90.44
+        },
+        {
+          "word": "in",
+          "start": 90.44,
+          "end": 90.85
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 85.23,
+      "end": 86.45,
+      "text": "Uh uh",
+      "words": [
+        {
+          "word": "Uh",
+          "start": 85.23,
+          "end": 86.17
+        },
+        {
+          "word": "uh",
+          "start": 86.17,
+          "end": 86.45
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 90.45,
+      "end": 91.69,
+      "text": "Wo",
+      "words": [
+        {
+          "word": "Wo",
+          "start": 90.45,
+          "end": 91.69
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 94.0,
+      "end": 96.94,
+      "text": "I hope that clicks in I'll just I'll hold it on okay",
+      "words": [
+        {
+          "word": "I",
+          "start": 94.0,
+          "end": 94.08
+        },
+        {
+          "word": "hope",
+          "start": 94.08,
+          "end": 94.28
+        },
+        {
+          "word": "that",
+          "start": 94.28,
+          "end": 94.47
+        },
+        {
+          "word": "clicks",
+          "start": 94.47,
+          "end": 94.81
+        },
+        {
+          "word": "in",
+          "start": 94.81,
+          "end": 95.25
+        },
+        {
+          "word": "I'll",
+          "start": 95.25,
+          "end": 95.31
+        },
+        {
+          "word": "just",
+          "start": 95.31,
+          "end": 95.47
+        },
+        {
+          "word": "I'll",
+          "start": 95.47,
+          "end": 95.56
+        },
+        {
+          "word": "hold",
+          "start": 95.56,
+          "end": 95.82
+        },
+        {
+          "word": "it",
+          "start": 95.82,
+          "end": 95.93
+        },
+        {
+          "word": "on",
+          "start": 95.93,
+          "end": 96.46
+        },
+        {
+          "word": "okay",
+          "start": 96.46,
+          "end": 96.94
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 97.97,
+      "end": 100.57,
+      "text": "Oops oh dear what happened there",
+      "words": [
+        {
+          "word": "Oops",
+          "start": 97.97,
+          "end": 98.48
+        },
+        {
+          "word": "oh",
+          "start": 98.48,
+          "end": 98.67
+        },
+        {
+          "word": "dear",
+          "start": 98.67,
+          "end": 99.83
+        },
+        {
+          "word": "what",
+          "start": 99.83,
+          "end": 99.97
+        },
+        {
+          "word": "happened",
+          "start": 99.97,
+          "end": 100.34
+        },
+        {
+          "word": "there",
+          "start": 100.34,
+          "end": 100.57
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 101.09,
+      "end": 102.16,
+      "text": "Technical help",
+      "words": [
+        {
+          "word": "Technical",
+          "start": 101.09,
+          "end": 101.58
+        },
+        {
+          "word": "help",
+          "start": 101.58,
+          "end": 102.16
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 105.38,
+      "end": 110.42,
+      "text": "Hopefully that'll stay on two-handed version Okay uh",
+      "words": [
+        {
+          "word": "Hopefully",
+          "start": 105.38,
+          "end": 105.79
+        },
+        {
+          "word": "that'll",
+          "start": 105.79,
+          "end": 106.14
+        },
+        {
+          "word": "stay",
+          "start": 106.14,
+          "end": 106.4
+        },
+        {
+          "word": "on",
+          "start": 106.4,
+          "end": 106.73
+        },
+        {
+          "word": "two-handed",
+          "start": 106.73,
+          "end": 107.31
+        },
+        {
+          "word": "version",
+          "start": 107.31,
+          "end": 108.51
+        },
+        {
+          "word": "Okay",
+          "start": 108.51,
+          "end": 109.58
+        },
+        {
+          "word": "uh",
+          "start": 109.58,
+          "end": 110.42
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 105.48,
+      "end": 105.99,
+      "text": "Hmm",
+      "words": [
+        {
+          "word": "Hmm",
+          "start": 105.48,
+          "end": 105.99
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 107.94,
+      "end": 108.7,
+      "text": "Okay",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 107.94,
+          "end": 108.7
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 114.41,
+      "end": 119.35,
+      "text": "Again this is off the top of my head I was gonna do a big cat too um",
+      "words": [
+        {
+          "word": "Again",
+          "start": 114.41,
+          "end": 114.72
+        },
+        {
+          "word": "this",
+          "start": 114.72,
+          "end": 114.85
+        },
+        {
+          "word": "is",
+          "start": 114.85,
+          "end": 114.99
+        },
+        {
+          "word": "off",
+          "start": 114.99,
+          "end": 115.13
+        },
+        {
+          "word": "the",
+          "start": 115.13,
+          "end": 115.2
+        },
+        {
+          "word": "top",
+          "start": 115.2,
+          "end": 115.44
+        },
+        {
+          "word": "of",
+          "start": 115.44,
+          "end": 115.58
+        },
+        {
+          "word": "my",
+          "start": 115.58,
+          "end": 115.72
+        },
+        {
+          "word": "head",
+          "start": 115.72,
+          "end": 115.91
+        },
+        {
+          "word": "I",
+          "start": 115.91,
+          "end": 115.95
+        },
+        {
+          "word": "was",
+          "start": 115.95,
+          "end": 116.07
+        },
+        {
+          "word": "gonna",
+          "start": 116.07,
+          "end": 116.28
+        },
+        {
+          "word": "do",
+          "start": 116.28,
+          "end": 116.38
+        },
+        {
+          "word": "a",
+          "start": 116.38,
+          "end": 116.48
+        },
+        {
+          "word": "big",
+          "start": 116.48,
+          "end": 116.71
+        },
+        {
+          "word": "cat",
+          "start": 116.71,
+          "end": 117.06
+        },
+        {
+          "word": "too",
+          "start": 117.06,
+          "end": 118.11
+        },
+        {
+          "word": "um",
+          "start": 118.11,
+          "end": 119.35
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 116.71,
+      "end": 117.64,
+      "text": "Uh",
+      "words": [
+        {
+          "word": "Uh",
+          "start": 116.71,
+          "end": 117.64
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 121.26,
+      "end": 124.68,
+      "text": "Oh dear it doesn't look what like what I want it to be",
+      "words": [
+        {
+          "word": "Oh",
+          "start": 121.26,
+          "end": 121.38
+        },
+        {
+          "word": "dear",
+          "start": 121.38,
+          "end": 121.55
+        },
+        {
+          "word": "it",
+          "start": 121.55,
+          "end": 121.62
+        },
+        {
+          "word": "doesn't",
+          "start": 121.62,
+          "end": 121.87
+        },
+        {
+          "word": "look",
+          "start": 121.87,
+          "end": 122.08
+        },
+        {
+          "word": "what",
+          "start": 122.08,
+          "end": 122.19
+        },
+        {
+          "word": "like",
+          "start": 122.19,
+          "end": 122.37
+        },
+        {
+          "word": "what",
+          "start": 122.37,
+          "end": 122.48
+        },
+        {
+          "word": "I",
+          "start": 122.48,
+          "end": 122.52
+        },
+        {
+          "word": "want",
+          "start": 122.52,
+          "end": 122.81
+        },
+        {
+          "word": "it",
+          "start": 122.81,
+          "end": 122.89
+        },
+        {
+          "word": "to",
+          "start": 122.89,
+          "end": 123.02
+        },
+        {
+          "word": "be",
+          "start": 123.02,
+          "end": 124.68
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 121.27,
+      "end": 121.66,
+      "text": "Hmm",
+      "words": [
+        {
+          "word": "Hmm",
+          "start": 121.27,
+          "end": 121.66
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 124.48,
+      "end": 124.72,
+      "text": "S",
+      "words": [
+        {
+          "word": "S",
+          "start": 124.48,
+          "end": 124.72
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 127.1,
+      "end": 127.71,
+      "text": "Uh",
+      "words": [
+        {
+          "word": "Uh",
+          "start": 127.1,
+          "end": 127.71
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 127.43,
+      "end": 127.82,
+      "text": "Uh",
+      "words": [
+        {
+          "word": "Uh",
+          "start": 127.43,
+          "end": 127.82
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 128.77,
+      "end": 131.41,
+      "text": "It's not a vampire bat honestly",
+      "words": [
+        {
+          "word": "It's",
+          "start": 128.77,
+          "end": 128.87
+        },
+        {
+          "word": "not",
+          "start": 128.87,
+          "end": 129.03
+        },
+        {
+          "word": "a",
+          "start": 129.03,
+          "end": 129.06
+        },
+        {
+          "word": "vampire",
+          "start": 129.06,
+          "end": 129.52
+        },
+        {
+          "word": "bat",
+          "start": 129.52,
+          "end": 129.7
+        },
+        {
+          "word": "honestly",
+          "start": 129.7,
+          "end": 131.41
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 129.88,
+      "end": 131.34,
+      "text": "Okay yeah",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 129.88,
+          "end": 130.47
+        },
+        {
+          "word": "yeah",
+          "start": 130.47,
+          "end": 131.34
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 132.9,
+      "end": 158.66,
+      "text": "Uh and somewhere there's a body behind That's my dreadful that's the worst yet that's it's meant to be an eagle you can tell it's a flying animal could have been a seagull I never thought of a seagull An eagle um again I'm thinking on my feet goodness I suppose they're all so independent I'd put that one down again Da dum um",
+      "words": [
+        {
+          "word": "Uh",
+          "start": 132.9,
+          "end": 133.23
+        },
+        {
+          "word": "and",
+          "start": 133.23,
+          "end": 133.35
+        },
+        {
+          "word": "somewhere",
+          "start": 133.35,
+          "end": 133.72
+        },
+        {
+          "word": "there's",
+          "start": 133.72,
+          "end": 133.87
+        },
+        {
+          "word": "a",
+          "start": 133.87,
+          "end": 133.95
+        },
+        {
+          "word": "body",
+          "start": 133.95,
+          "end": 134.25
+        },
+        {
+          "word": "behind",
+          "start": 134.25,
+          "end": 137.78
+        },
+        {
+          "word": "That's",
+          "start": 137.78,
+          "end": 137.96
+        },
+        {
+          "word": "my",
+          "start": 137.96,
+          "end": 138.09
+        },
+        {
+          "word": "dreadful",
+          "start": 138.09,
+          "end": 138.69
+        },
+        {
+          "word": "that's",
+          "start": 138.69,
+          "end": 138.94
+        },
+        {
+          "word": "the",
+          "start": 138.94,
+          "end": 139.07
+        },
+        {
+          "word": "worst",
+          "start": 139.07,
+          "end": 139.62
+        },
+        {
+          "word": "yet",
+          "start": 139.62,
+          "end": 139.96
+        },
+        {
+          "word": "that's",
+          "start": 139.96,
+          "end": 140.47
+        },
+        {
+          "word": "it's",
+          "start": 140.47,
+          "end": 140.57
+        },
+        {
+          "word": "meant",
+          "start": 140.57,
+          "end": 140.79
+        },
+        {
+          "word": "to",
+          "start": 140.79,
+          "end": 140.91
+        },
+        {
+          "word": "be",
+          "start": 140.91,
+          "end": 141.0
+        },
+        {
+          "word": "an",
+          "start": 141.0,
+          "end": 141.16
+        },
+        {
+          "word": "eagle",
+          "start": 141.16,
+          "end": 142.82
+        },
+        {
+          "word": "you",
+          "start": 142.82,
+          "end": 142.91
+        },
+        {
+          "word": "can",
+          "start": 142.91,
+          "end": 143.11
+        },
+        {
+          "word": "tell",
+          "start": 143.11,
+          "end": 143.33
+        },
+        {
+          "word": "it's",
+          "start": 143.33,
+          "end": 143.5
+        },
+        {
+          "word": "a",
+          "start": 143.5,
+          "end": 143.69
+        },
+        {
+          "word": "flying",
+          "start": 143.69,
+          "end": 144.1
+        },
+        {
+          "word": "animal",
+          "start": 144.1,
+          "end": 144.65
+        },
+        {
+          "word": "could",
+          "start": 144.65,
+          "end": 145.0
+        },
+        {
+          "word": "have",
+          "start": 145.0,
+          "end": 145.92
+        },
+        {
+          "word": "been",
+          "start": 145.92,
+          "end": 146.06
+        },
+        {
+          "word": "a",
+          "start": 146.06,
+          "end": 146.23
+        },
+        {
+          "word": "seagull",
+          "start": 146.23,
+          "end": 146.56
+        },
+        {
+          "word": "I",
+          "start": 146.56,
+          "end": 146.59
+        },
+        {
+          "word": "never",
+          "start": 146.59,
+          "end": 146.81
+        },
+        {
+          "word": "thought",
+          "start": 146.81,
+          "end": 146.99
+        },
+        {
+          "word": "of",
+          "start": 146.99,
+          "end": 147.12
+        },
+        {
+          "word": "a",
+          "start": 147.12,
+          "end": 147.15
+        },
+        {
+          "word": "seagull",
+          "start": 147.15,
+          "end": 148.09
+        },
+        {
+          "word": "An",
+          "start": 148.09,
+          "end": 148.25
+        },
+        {
+          "word": "eagle",
+          "start": 148.25,
+          "end": 148.7
+        },
+        {
+          "word": "um",
+          "start": 148.7,
+          "end": 149.13
+        },
+        {
+          "word": "again",
+          "start": 149.13,
+          "end": 149.41
+        },
+        {
+          "word": "I'm",
+          "start": 149.41,
+          "end": 149.51
+        },
+        {
+          "word": "thinking",
+          "start": 149.51,
+          "end": 149.85
+        },
+        {
+          "word": "on",
+          "start": 149.85,
+          "end": 149.94
+        },
+        {
+          "word": "my",
+          "start": 149.94,
+          "end": 150.18
+        },
+        {
+          "word": "feet",
+          "start": 150.18,
+          "end": 150.42
+        },
+        {
+          "word": "goodness",
+          "start": 150.42,
+          "end": 151.49
+        },
+        {
+          "word": "I",
+          "start": 151.49,
+          "end": 151.55
+        },
+        {
+          "word": "suppose",
+          "start": 151.55,
+          "end": 151.75
+        },
+        {
+          "word": "they're",
+          "start": 151.75,
+          "end": 151.88
+        },
+        {
+          "word": "all",
+          "start": 151.88,
+          "end": 152.0
+        },
+        {
+          "word": "so",
+          "start": 152.0,
+          "end": 152.17
+        },
+        {
+          "word": "independent",
+          "start": 152.17,
+          "end": 152.85
+        },
+        {
+          "word": "I'd",
+          "start": 152.85,
+          "end": 152.96
+        },
+        {
+          "word": "put",
+          "start": 152.96,
+          "end": 153.16
+        },
+        {
+          "word": "that",
+          "start": 153.16,
+          "end": 153.34
+        },
+        {
+          "word": "one",
+          "start": 153.34,
+          "end": 153.47
+        },
+        {
+          "word": "down",
+          "start": 153.47,
+          "end": 153.74
+        },
+        {
+          "word": "again",
+          "start": 153.74,
+          "end": 156.12
+        },
+        {
+          "word": "Da",
+          "start": 156.12,
+          "end": 156.25
+        },
+        {
+          "word": "dum",
+          "start": 156.25,
+          "end": 157.9
+        },
+        {
+          "word": "um",
+          "start": 157.9,
+          "end": 158.66
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 137.4,
+      "end": 139.98,
+      "text": "Okay some sort of bird",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 137.4,
+          "end": 137.87
+        },
+        {
+          "word": "some",
+          "start": 137.87,
+          "end": 138.27
+        },
+        {
+          "word": "sort",
+          "start": 138.27,
+          "end": 138.67
+        },
+        {
+          "word": "of",
+          "start": 138.67,
+          "end": 139.87
+        },
+        {
+          "word": "bird",
+          "start": 139.87,
+          "end": 139.98
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 141.19,
+      "end": 144.66,
+      "text": "A seagu right not a seagull",
+      "words": [
+        {
+          "word": "A",
+          "start": 141.19,
+          "end": 141.23
+        },
+        {
+          "word": "seagu",
+          "start": 141.23,
+          "end": 141.85
+        },
+        {
+          "word": "right",
+          "start": 141.85,
+          "end": 142.71
+        },
+        {
+          "word": "not",
+          "start": 142.71,
+          "end": 142.93
+        },
+        {
+          "word": "a",
+          "start": 142.93,
+          "end": 142.98
+        },
+        {
+          "word": "seagull",
+          "start": 142.98,
+          "end": 144.66
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 141.76,
+      "end": 143.22,
+      "text": "Ah eagle right okay",
+      "words": [
+        {
+          "word": "Ah",
+          "start": 141.76,
+          "end": 141.96
+        },
+        {
+          "word": "eagle",
+          "start": 141.96,
+          "end": 142.49
+        },
+        {
+          "word": "right",
+          "start": 142.49,
+          "end": 142.83
+        },
+        {
+          "word": "okay",
+          "start": 142.83,
+          "end": 143.22
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEO015",
+      "start": 141.78,
+      "end": 142.67,
+      "text": "Eagle okay",
+      "words": [
+        {
+          "word": "Eagle",
+          "start": 141.78,
+          "end": 142.0
+        },
+        {
+          "word": "okay",
+          "start": 142.0,
+          "end": 142.67
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 159.87,
+      "end": 160.95,
+      "text": "They're good at golf",
+      "words": [
+        {
+          "word": "They're",
+          "start": 159.87,
+          "end": 159.96
+        },
+        {
+          "word": "good",
+          "start": 159.96,
+          "end": 160.12
+        },
+        {
+          "word": "at",
+          "start": 160.12,
+          "end": 160.21
+        },
+        {
+          "word": "golf",
+          "start": 160.21,
+          "end": 160.95
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 160.28,
+      "end": 176.6,
+      "text": "Indepen independent right did you say they're good at golf Are they Oh Oh right okay I'm not good at golf I'd say they're quite free-spirited flying around everywhere doing their own thing",
+      "words": [
+        {
+          "word": "Indepen",
+          "start": 160.28,
+          "end": 161.37
+        },
+        {
+          "word": "independent",
+          "start": 161.37,
+          "end": 162.56
+        },
+        {
+          "word": "right",
+          "start": 162.56,
+          "end": 163.19
+        },
+        {
+          "word": "did",
+          "start": 163.19,
+          "end": 163.28
+        },
+        {
+          "word": "you",
+          "start": 163.28,
+          "end": 163.38
+        },
+        {
+          "word": "say",
+          "start": 163.38,
+          "end": 163.51
+        },
+        {
+          "word": "they're",
+          "start": 163.51,
+          "end": 163.6
+        },
+        {
+          "word": "good",
+          "start": 163.6,
+          "end": 163.75
+        },
+        {
+          "word": "at",
+          "start": 163.75,
+          "end": 163.84
+        },
+        {
+          "word": "golf",
+          "start": 163.84,
+          "end": 164.93
+        },
+        {
+          "word": "Are",
+          "start": 164.93,
+          "end": 165.04
+        },
+        {
+          "word": "they",
+          "start": 165.04,
+          "end": 166.24
+        },
+        {
+          "word": "Oh",
+          "start": 166.24,
+          "end": 166.91
+        },
+        {
+          "word": "Oh",
+          "start": 166.91,
+          "end": 167.14
+        },
+        {
+          "word": "right",
+          "start": 167.14,
+          "end": 167.6
+        },
+        {
+          "word": "okay",
+          "start": 167.6,
+          "end": 167.94
+        },
+        {
+          "word": "I'm",
+          "start": 167.94,
+          "end": 168.04
+        },
+        {
+          "word": "not",
+          "start": 168.04,
+          "end": 168.2
+        },
+        {
+          "word": "good",
+          "start": 168.2,
+          "end": 168.4
+        },
+        {
+          "word": "at",
+          "start": 168.4,
+          "end": 168.49
+        },
+        {
+          "word": "golf",
+          "start": 168.49,
+          "end": 169.2
+        },
+        {
+          "word": "I'd",
+          "start": 169.2,
+          "end": 169.36
+        },
+        {
+          "word": "say",
+          "start": 169.36,
+          "end": 169.44
+        },
+        {
+          "word": "they're",
+          "start": 169.44,
+          "end": 169.55
+        },
+        {
+          "word": "quite",
+          "start": 169.55,
+          "end": 169.82
+        },
+        {
+          "word": "free-spirited",
+          "start": 169.82,
+          "end": 171.84
+        },
+        {
+          "word": "flying",
+          "start": 171.84,
+          "end": 172.41
+        },
+        {
+          "word": "around",
+          "start": 172.41,
+          "end": 172.75
+        },
+        {
+          "word": "everywhere",
+          "start": 172.75,
+          "end": 175.57
+        },
+        {
+          "word": "doing",
+          "start": 175.57,
+          "end": 175.85
+        },
+        {
+          "word": "their",
+          "start": 175.85,
+          "end": 176.06
+        },
+        {
+          "word": "own",
+          "start": 176.06,
+          "end": 176.23
+        },
+        {
+          "word": "thing",
+          "start": 176.23,
+          "end": 176.6
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 164.31,
+      "end": 168.63,
+      "text": "Yeah no yeah an eagle",
+      "words": [
+        {
+          "word": "Yeah",
+          "start": 164.31,
+          "end": 165.16
+        },
+        {
+          "word": "no",
+          "start": 165.16,
+          "end": 165.4
+        },
+        {
+          "word": "yeah",
+          "start": 165.4,
+          "end": 166.26
+        },
+        {
+          "word": "an",
+          "start": 166.26,
+          "end": 166.44
+        },
+        {
+          "word": "eagle",
+          "start": 166.44,
+          "end": 168.63
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 165.5,
+      "end": 165.96,
+      "text": "Eagle",
+      "words": [
+        {
+          "word": "Eagle",
+          "start": 165.5,
+          "end": 165.96
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 181.43,
+      "end": 189.53,
+      "text": "And uh birds of prey aren't they oh dear intrepid I'll put that intrepid",
+      "words": [
+        {
+          "word": "And",
+          "start": 181.43,
+          "end": 181.94
+        },
+        {
+          "word": "uh",
+          "start": 181.94,
+          "end": 183.75
+        },
+        {
+          "word": "birds",
+          "start": 183.75,
+          "end": 183.99
+        },
+        {
+          "word": "of",
+          "start": 183.99,
+          "end": 184.1
+        },
+        {
+          "word": "prey",
+          "start": 184.1,
+          "end": 184.38
+        },
+        {
+          "word": "aren't",
+          "start": 184.38,
+          "end": 184.62
+        },
+        {
+          "word": "they",
+          "start": 184.62,
+          "end": 184.95
+        },
+        {
+          "word": "oh",
+          "start": 184.95,
+          "end": 185.06
+        },
+        {
+          "word": "dear",
+          "start": 185.06,
+          "end": 186.05
+        },
+        {
+          "word": "intrepid",
+          "start": 186.05,
+          "end": 187.15
+        },
+        {
+          "word": "I'll",
+          "start": 187.15,
+          "end": 187.27
+        },
+        {
+          "word": "put",
+          "start": 187.27,
+          "end": 187.4
+        },
+        {
+          "word": "that",
+          "start": 187.4,
+          "end": 187.88
+        },
+        {
+          "word": "intrepid",
+          "start": 187.88,
+          "end": 189.53
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 185.31,
+      "end": 185.64,
+      "text": "Mm-hmm",
+      "words": [
+        {
+          "word": "Mm-hmm",
+          "start": 185.31,
+          "end": 185.64
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 193.66,
+      "end": 196.77,
+      "text": "There we go hope that pen's gonna be okay",
+      "words": [
+        {
+          "word": "There",
+          "start": 193.66,
+          "end": 193.83
+        },
+        {
+          "word": "we",
+          "start": 193.83,
+          "end": 193.96
+        },
+        {
+          "word": "go",
+          "start": 193.96,
+          "end": 194.68
+        },
+        {
+          "word": "hope",
+          "start": 194.68,
+          "end": 195.02
+        },
+        {
+          "word": "that",
+          "start": 195.02,
+          "end": 195.23
+        },
+        {
+          "word": "pen's",
+          "start": 195.23,
+          "end": 195.58
+        },
+        {
+          "word": "gonna",
+          "start": 195.58,
+          "end": 195.78
+        },
+        {
+          "word": "be",
+          "start": 195.78,
+          "end": 195.91
+        },
+        {
+          "word": "okay",
+          "start": 195.91,
+          "end": 196.77
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 194.48,
+      "end": 195.15,
+      "text": "That's lovely",
+      "words": [
+        {
+          "word": "That's",
+          "start": 194.48,
+          "end": 194.74
+        },
+        {
+          "word": "lovely",
+          "start": 194.74,
+          "end": 195.15
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 198.67,
+      "end": 199.33,
+      "text": "Whoops",
+      "words": [
+        {
+          "word": "Whoops",
+          "start": 198.67,
+          "end": 199.33
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 201.11,
+      "end": 201.6,
+      "text": "Okay",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 201.11,
+          "end": 201.6
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 203.12,
+      "end": 215.32,
+      "text": "That was fun right Um finance-wise we've got a selling price at twenty five Euros which I don't actually know what that is in Pounds at all Any ideas",
+      "words": [
+        {
+          "word": "That",
+          "start": 203.12,
+          "end": 203.27
+        },
+        {
+          "word": "was",
+          "start": 203.27,
+          "end": 203.45
+        },
+        {
+          "word": "fun",
+          "start": 203.45,
+          "end": 204.31
+        },
+        {
+          "word": "right",
+          "start": 204.31,
+          "end": 205.46
+        },
+        {
+          "word": "Um",
+          "start": 205.46,
+          "end": 206.07
+        },
+        {
+          "word": "finance-wise",
+          "start": 206.07,
+          "end": 207.09
+        },
+        {
+          "word": "we've",
+          "start": 207.09,
+          "end": 207.32
+        },
+        {
+          "word": "got",
+          "start": 207.32,
+          "end": 207.96
+        },
+        {
+          "word": "a",
+          "start": 207.96,
+          "end": 208.15
+        },
+        {
+          "word": "selling",
+          "start": 208.15,
+          "end": 208.45
+        },
+        {
+          "word": "price",
+          "start": 208.45,
+          "end": 208.73
+        },
+        {
+          "word": "at",
+          "start": 208.73,
+          "end": 208.83
+        },
+        {
+          "word": "twenty",
+          "start": 208.83,
+          "end": 209.13
+        },
+        {
+          "word": "five",
+          "start": 209.13,
+          "end": 209.41
+        },
+        {
+          "word": "Euros",
+          "start": 209.41,
+          "end": 210.39
+        },
+        {
+          "word": "which",
+          "start": 210.39,
+          "end": 210.58
+        },
+        {
+          "word": "I",
+          "start": 210.58,
+          "end": 210.63
+        },
+        {
+          "word": "don't",
+          "start": 210.63,
+          "end": 210.96
+        },
+        {
+          "word": "actually",
+          "start": 210.96,
+          "end": 211.33
+        },
+        {
+          "word": "know",
+          "start": 211.33,
+          "end": 211.54
+        },
+        {
+          "word": "what",
+          "start": 211.54,
+          "end": 212.2
+        },
+        {
+          "word": "that",
+          "start": 212.2,
+          "end": 212.41
+        },
+        {
+          "word": "is",
+          "start": 212.41,
+          "end": 212.56
+        },
+        {
+          "word": "in",
+          "start": 212.56,
+          "end": 212.65
+        },
+        {
+          "word": "Pounds",
+          "start": 212.65,
+          "end": 213.18
+        },
+        {
+          "word": "at",
+          "start": 213.18,
+          "end": 213.32
+        },
+        {
+          "word": "all",
+          "start": 213.32,
+          "end": 214.64
+        },
+        {
+          "word": "Any",
+          "start": 214.64,
+          "end": 214.84
+        },
+        {
+          "word": "ideas",
+          "start": 214.84,
+          "end": 215.32
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 215.11,
+      "end": 217.66,
+      "text": "It's about mm mm yeah",
+      "words": [
+        {
+          "word": "It's",
+          "start": 215.11,
+          "end": 215.31
+        },
+        {
+          "word": "about",
+          "start": 215.31,
+          "end": 216.63
+        },
+        {
+          "word": "mm",
+          "start": 216.63,
+          "end": 217.22
+        },
+        {
+          "word": "mm",
+          "start": 217.22,
+          "end": 217.32
+        },
+        {
+          "word": "yeah",
+          "start": 217.32,
+          "end": 217.66
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 216.51,
+      "end": 217.21,
+      "text": "Seventeen",
+      "words": [
+        {
+          "word": "Seventeen",
+          "start": 216.51,
+          "end": 217.21
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEO015",
+      "start": 216.76,
+      "end": 221.5,
+      "text": "One point four or something like that One point four Euro would make a Pound or something like that",
+      "words": [
+        {
+          "word": "One",
+          "start": 216.76,
+          "end": 216.96
+        },
+        {
+          "word": "point",
+          "start": 216.96,
+          "end": 217.22
+        },
+        {
+          "word": "four",
+          "start": 217.22,
+          "end": 217.66
+        },
+        {
+          "word": "or",
+          "start": 217.66,
+          "end": 217.69
+        },
+        {
+          "word": "something",
+          "start": 217.69,
+          "end": 217.96
+        },
+        {
+          "word": "like",
+          "start": 217.96,
+          "end": 218.08
+        },
+        {
+          "word": "that",
+          "start": 218.08,
+          "end": 218.71
+        },
+        {
+          "word": "One",
+          "start": 218.71,
+          "end": 218.84
+        },
+        {
+          "word": "point",
+          "start": 218.84,
+          "end": 219.07
+        },
+        {
+          "word": "four",
+          "start": 219.07,
+          "end": 219.37
+        },
+        {
+          "word": "Euro",
+          "start": 219.37,
+          "end": 219.65
+        },
+        {
+          "word": "would",
+          "start": 219.65,
+          "end": 219.89
+        },
+        {
+          "word": "make",
+          "start": 219.89,
+          "end": 220.08
+        },
+        {
+          "word": "a",
+          "start": 220.08,
+          "end": 220.29
+        },
+        {
+          "word": "Pound",
+          "start": 220.29,
+          "end": 220.6
+        },
+        {
+          "word": "or",
+          "start": 220.6,
+          "end": 220.65
+        },
+        {
+          "word": "something",
+          "start": 220.65,
+          "end": 220.92
+        },
+        {
+          "word": "like",
+          "start": 220.92,
+          "end": 221.05
+        },
+        {
+          "word": "that",
+          "start": 221.05,
+          "end": 221.5
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 220.85,
+      "end": 227.57,
+      "text": "Yeah yeah something like that so that yeah about seventeen seventeen Pounds something like that",
+      "words": [
+        {
+          "word": "Yeah",
+          "start": 220.85,
+          "end": 221.31
+        },
+        {
+          "word": "yeah",
+          "start": 221.31,
+          "end": 221.55
+        },
+        {
+          "word": "something",
+          "start": 221.55,
+          "end": 222.01
+        },
+        {
+          "word": "like",
+          "start": 222.01,
+          "end": 222.15
+        },
+        {
+          "word": "that",
+          "start": 222.15,
+          "end": 222.43
+        },
+        {
+          "word": "so",
+          "start": 222.43,
+          "end": 222.73
+        },
+        {
+          "word": "that",
+          "start": 222.73,
+          "end": 223.98
+        },
+        {
+          "word": "yeah",
+          "start": 223.98,
+          "end": 224.14
+        },
+        {
+          "word": "about",
+          "start": 224.14,
+          "end": 224.34
+        },
+        {
+          "word": "seventeen",
+          "start": 224.34,
+          "end": 225.24
+        },
+        {
+          "word": "seventeen",
+          "start": 225.24,
+          "end": 225.74
+        },
+        {
+          "word": "Pounds",
+          "start": 225.74,
+          "end": 226.47
+        },
+        {
+          "word": "something",
+          "start": 226.47,
+          "end": 226.9
+        },
+        {
+          "word": "like",
+          "start": 226.9,
+          "end": 227.01
+        },
+        {
+          "word": "that",
+          "start": 227.01,
+          "end": 227.57
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEO015",
+      "start": 222.6,
+      "end": 222.92,
+      "text": "Yeah",
+      "words": [
+        {
+          "word": "Yeah",
+          "start": 222.6,
+          "end": 222.92
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 223.85,
+      "end": 227.98,
+      "text": "D fifteen Seventeen Okay that's expensive",
+      "words": [
+        {
+          "word": "D",
+          "start": 223.85,
+          "end": 224.38
+        },
+        {
+          "word": "fifteen",
+          "start": 224.38,
+          "end": 225.12
+        },
+        {
+          "word": "Seventeen",
+          "start": 225.12,
+          "end": 226.38
+        },
+        {
+          "word": "Okay",
+          "start": 226.38,
+          "end": 227.21
+        },
+        {
+          "word": "that's",
+          "start": 227.21,
+          "end": 227.38
+        },
+        {
+          "word": "expensive",
+          "start": 227.38,
+          "end": 227.98
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 224.88,
+      "end": 225.97,
+      "text": "Seventeen Pounds",
+      "words": [
+        {
+          "word": "Seventeen",
+          "start": 224.88,
+          "end": 225.35
+        },
+        {
+          "word": "Pounds",
+          "start": 225.35,
+          "end": 225.97
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 228.37,
+      "end": 232.28,
+      "text": "Should we be making notes of this We can just refer to this later can't we Yeah okay",
+      "words": [
+        {
+          "word": "Should",
+          "start": 228.37,
+          "end": 228.57
+        },
+        {
+          "word": "we",
+          "start": 228.57,
+          "end": 228.68
+        },
+        {
+          "word": "be",
+          "start": 228.68,
+          "end": 228.76
+        },
+        {
+          "word": "making",
+          "start": 228.76,
+          "end": 229.08
+        },
+        {
+          "word": "notes",
+          "start": 229.08,
+          "end": 229.32
+        },
+        {
+          "word": "of",
+          "start": 229.32,
+          "end": 229.38
+        },
+        {
+          "word": "this",
+          "start": 229.38,
+          "end": 229.55
+        },
+        {
+          "word": "We",
+          "start": 229.55,
+          "end": 229.64
+        },
+        {
+          "word": "can",
+          "start": 229.64,
+          "end": 229.75
+        },
+        {
+          "word": "just",
+          "start": 229.75,
+          "end": 229.89
+        },
+        {
+          "word": "refer",
+          "start": 229.89,
+          "end": 230.15
+        },
+        {
+          "word": "to",
+          "start": 230.15,
+          "end": 230.28
+        },
+        {
+          "word": "this",
+          "start": 230.28,
+          "end": 230.44
+        },
+        {
+          "word": "later",
+          "start": 230.44,
+          "end": 230.76
+        },
+        {
+          "word": "can't",
+          "start": 230.76,
+          "end": 231.0
+        },
+        {
+          "word": "we",
+          "start": 231.0,
+          "end": 231.74
+        },
+        {
+          "word": "Yeah",
+          "start": 231.74,
+          "end": 231.93
+        },
+        {
+          "word": "okay",
+          "start": 231.93,
+          "end": 232.28
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 230.86,
+      "end": 231.19,
+      "text": "But",
+      "words": [
+        {
+          "word": "But",
+          "start": 230.86,
+          "end": 231.19
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 230.98,
+      "end": 235.93,
+      "text": "I think so I think so I'll be able to um pull it up or I could put it in the shared folder or something",
+      "words": [
+        {
+          "word": "I",
+          "start": 230.98,
+          "end": 231.08
+        },
+        {
+          "word": "think",
+          "start": 231.08,
+          "end": 231.35
+        },
+        {
+          "word": "so",
+          "start": 231.35,
+          "end": 231.85
+        },
+        {
+          "word": "I",
+          "start": 231.85,
+          "end": 231.92
+        },
+        {
+          "word": "think",
+          "start": 231.92,
+          "end": 232.12
+        },
+        {
+          "word": "so",
+          "start": 232.12,
+          "end": 232.23
+        },
+        {
+          "word": "I'll",
+          "start": 232.23,
+          "end": 232.39
+        },
+        {
+          "word": "be",
+          "start": 232.39,
+          "end": 232.47
+        },
+        {
+          "word": "able",
+          "start": 232.47,
+          "end": 232.58
+        },
+        {
+          "word": "to",
+          "start": 232.58,
+          "end": 232.87
+        },
+        {
+          "word": "um",
+          "start": 232.87,
+          "end": 233.23
+        },
+        {
+          "word": "pull",
+          "start": 233.23,
+          "end": 233.41
+        },
+        {
+          "word": "it",
+          "start": 233.41,
+          "end": 233.49
+        },
+        {
+          "word": "up",
+          "start": 233.49,
+          "end": 233.78
+        },
+        {
+          "word": "or",
+          "start": 233.78,
+          "end": 233.9
+        },
+        {
+          "word": "I",
+          "start": 233.9,
+          "end": 233.93
+        },
+        {
+          "word": "could",
+          "start": 233.93,
+          "end": 234.09
+        },
+        {
+          "word": "put",
+          "start": 234.09,
+          "end": 234.18
+        },
+        {
+          "word": "it",
+          "start": 234.18,
+          "end": 234.24
+        },
+        {
+          "word": "in",
+          "start": 234.24,
+          "end": 234.36
+        },
+        {
+          "word": "the",
+          "start": 234.36,
+          "end": 234.43
+        },
+        {
+          "word": "shared",
+          "start": 234.43,
+          "end": 234.77
+        },
+        {
+          "word": "folder",
+          "start": 234.77,
+          "end": 235.11
+        },
+        {
+          "word": "or",
+          "start": 235.11,
+          "end": 235.2
+        },
+        {
+          "word": "something",
+          "start": 235.2,
+          "end": 235.93
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 233.81,
+      "end": 234.27,
+      "text": "Okay",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 233.81,
+          "end": 234.27
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 234.19,
+      "end": 248.09,
+      "text": "Havi having said that though if you wanna get one of those the the ones on the market at the moment they're s they're about twenty pounds anyway So it'd still be yeah we had to buy one",
+      "words": [
+        {
+          "word": "Havi",
+          "start": 234.19,
+          "end": 235.19
+        },
+        {
+          "word": "having",
+          "start": 235.19,
+          "end": 235.54
+        },
+        {
+          "word": "said",
+          "start": 235.54,
+          "end": 235.78
+        },
+        {
+          "word": "that",
+          "start": 235.78,
+          "end": 235.94
+        },
+        {
+          "word": "though",
+          "start": 235.94,
+          "end": 236.32
+        },
+        {
+          "word": "if",
+          "start": 236.32,
+          "end": 236.54
+        },
+        {
+          "word": "you",
+          "start": 236.54,
+          "end": 236.67
+        },
+        {
+          "word": "wanna",
+          "start": 236.67,
+          "end": 236.87
+        },
+        {
+          "word": "get",
+          "start": 236.87,
+          "end": 237.05
+        },
+        {
+          "word": "one",
+          "start": 237.05,
+          "end": 237.18
+        },
+        {
+          "word": "of",
+          "start": 237.18,
+          "end": 237.24
+        },
+        {
+          "word": "those",
+          "start": 237.24,
+          "end": 238.06
+        },
+        {
+          "word": "the",
+          "start": 238.06,
+          "end": 238.36
+        },
+        {
+          "word": "the",
+          "start": 238.36,
+          "end": 238.49
+        },
+        {
+          "word": "ones",
+          "start": 238.49,
+          "end": 238.77
+        },
+        {
+          "word": "on",
+          "start": 238.77,
+          "end": 238.85
+        },
+        {
+          "word": "the",
+          "start": 238.85,
+          "end": 238.91
+        },
+        {
+          "word": "market",
+          "start": 238.91,
+          "end": 239.25
+        },
+        {
+          "word": "at",
+          "start": 239.25,
+          "end": 239.32
+        },
+        {
+          "word": "the",
+          "start": 239.32,
+          "end": 239.38
+        },
+        {
+          "word": "moment",
+          "start": 239.38,
+          "end": 239.78
+        },
+        {
+          "word": "they're",
+          "start": 239.78,
+          "end": 239.89
+        },
+        {
+          "word": "s",
+          "start": 239.89,
+          "end": 240.26
+        },
+        {
+          "word": "they're",
+          "start": 240.26,
+          "end": 240.39
+        },
+        {
+          "word": "about",
+          "start": 240.39,
+          "end": 240.99
+        },
+        {
+          "word": "twenty",
+          "start": 240.99,
+          "end": 241.27
+        },
+        {
+          "word": "pounds",
+          "start": 241.27,
+          "end": 241.61
+        },
+        {
+          "word": "anyway",
+          "start": 241.61,
+          "end": 243.21
+        },
+        {
+          "word": "So",
+          "start": 243.21,
+          "end": 243.89
+        },
+        {
+          "word": "it'd",
+          "start": 243.89,
+          "end": 244.07
+        },
+        {
+          "word": "still",
+          "start": 244.07,
+          "end": 244.35
+        },
+        {
+          "word": "be",
+          "start": 244.35,
+          "end": 244.55
+        },
+        {
+          "word": "yeah",
+          "start": 244.55,
+          "end": 245.56
+        },
+        {
+          "word": "we",
+          "start": 245.56,
+          "end": 245.72
+        },
+        {
+          "word": "had",
+          "start": 245.72,
+          "end": 245.82
+        },
+        {
+          "word": "to",
+          "start": 245.82,
+          "end": 245.92
+        },
+        {
+          "word": "buy",
+          "start": 245.92,
+          "end": 246.09
+        },
+        {
+          "word": "one",
+          "start": 246.09,
+          "end": 248.09
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 243.51,
+      "end": 244.22,
+      "text": "Right",
+      "words": [
+        {
+          "word": "Right",
+          "start": 243.51,
+          "end": 244.22
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 243.88,
+      "end": 244.22,
+      "text": "Really",
+      "words": [
+        {
+          "word": "Really",
+          "start": 243.88,
+          "end": 244.22
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 245.84,
+      "end": 246.02,
+      "text": "So",
+      "words": [
+        {
+          "word": "So",
+          "start": 245.84,
+          "end": 246.02
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 246.66,
+      "end": 247.02,
+      "text": "Mm",
+      "words": [
+        {
+          "word": "Mm",
+          "start": 246.66,
+          "end": 247.02
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 248.09,
+      "end": 253.93,
+      "text": "so I suppose later it depends if we want to undercut the price we d or or is it going to make our product look a cheapie-cheapie option",
+      "words": [
+        {
+          "word": "so",
+          "start": 248.09,
+          "end": 248.2
+        },
+        {
+          "word": "I",
+          "start": 248.2,
+          "end": 248.23
+        },
+        {
+          "word": "suppose",
+          "start": 248.23,
+          "end": 248.5
+        },
+        {
+          "word": "later",
+          "start": 248.5,
+          "end": 248.85
+        },
+        {
+          "word": "it",
+          "start": 248.85,
+          "end": 248.92
+        },
+        {
+          "word": "depends",
+          "start": 248.92,
+          "end": 249.26
+        },
+        {
+          "word": "if",
+          "start": 249.26,
+          "end": 249.36
+        },
+        {
+          "word": "we",
+          "start": 249.36,
+          "end": 249.46
+        },
+        {
+          "word": "want",
+          "start": 249.46,
+          "end": 249.62
+        },
+        {
+          "word": "to",
+          "start": 249.62,
+          "end": 249.72
+        },
+        {
+          "word": "undercut",
+          "start": 249.72,
+          "end": 250.12
+        },
+        {
+          "word": "the",
+          "start": 250.12,
+          "end": 250.22
+        },
+        {
+          "word": "price",
+          "start": 250.22,
+          "end": 250.65
+        },
+        {
+          "word": "we",
+          "start": 250.65,
+          "end": 250.72
+        },
+        {
+          "word": "d",
+          "start": 250.72,
+          "end": 250.85
+        },
+        {
+          "word": "or",
+          "start": 250.85,
+          "end": 251.15
+        },
+        {
+          "word": "or",
+          "start": 251.15,
+          "end": 251.35
+        },
+        {
+          "word": "is",
+          "start": 251.35,
+          "end": 251.46
+        },
+        {
+          "word": "it",
+          "start": 251.46,
+          "end": 251.54
+        },
+        {
+          "word": "going",
+          "start": 251.54,
+          "end": 251.69
+        },
+        {
+          "word": "to",
+          "start": 251.69,
+          "end": 251.81
+        },
+        {
+          "word": "make",
+          "start": 251.81,
+          "end": 252.02
+        },
+        {
+          "word": "our",
+          "start": 252.02,
+          "end": 252.13
+        },
+        {
+          "word": "product",
+          "start": 252.13,
+          "end": 252.49
+        },
+        {
+          "word": "look",
+          "start": 252.49,
+          "end": 252.68
+        },
+        {
+          "word": "a",
+          "start": 252.68,
+          "end": 252.76
+        },
+        {
+          "word": "cheapie-cheapie",
+          "start": 252.76,
+          "end": 253.39
+        },
+        {
+          "word": "option",
+          "start": 253.39,
+          "end": 253.93
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 248.13,
+      "end": 248.98,
+      "text": "I think",
+      "words": [
+        {
+          "word": "I",
+          "start": 248.13,
+          "end": 248.49
+        },
+        {
+          "word": "think",
+          "start": 248.49,
+          "end": 248.98
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 253.51,
+      "end": 257.82,
+      "text": "Yeah um production cost's at twelve fifty so",
+      "words": [
+        {
+          "word": "Yeah",
+          "start": 253.51,
+          "end": 254.39
+        },
+        {
+          "word": "um",
+          "start": 254.39,
+          "end": 254.87
+        },
+        {
+          "word": "production",
+          "start": 254.87,
+          "end": 255.36
+        },
+        {
+          "word": "cost's",
+          "start": 255.36,
+          "end": 255.7
+        },
+        {
+          "word": "at",
+          "start": 255.7,
+          "end": 255.8
+        },
+        {
+          "word": "twelve",
+          "start": 255.8,
+          "end": 256.14
+        },
+        {
+          "word": "fifty",
+          "start": 256.14,
+          "end": 257.18
+        },
+        {
+          "word": "so",
+          "start": 257.18,
+          "end": 257.82
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 254.07,
+      "end": 254.89,
+      "text": "Hmm",
+      "words": [
+        {
+          "word": "Hmm",
+          "start": 254.07,
+          "end": 254.89
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEO015",
+      "start": 257.54,
+      "end": 259.59,
+      "text": "Okay pretty huge margin",
+      "words": [
+        {
+          "word": "Okay",
+          "start": 257.54,
+          "end": 258.36
+        },
+        {
+          "word": "pretty",
+          "start": 258.36,
+          "end": 258.55
+        },
+        {
+          "word": "huge",
+          "start": 258.55,
+          "end": 258.77
+        },
+        {
+          "word": "margin",
+          "start": 258.77,
+          "end": 259.59
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 259.13,
+      "end": 269.37,
+      "text": "half of the selling price is taken up by building it Um and profit aim is fifty million Euros which is uh",
+      "words": [
+        {
+          "word": "half",
+          "start": 259.13,
+          "end": 260.12
+        },
+        {
+          "word": "of",
+          "start": 260.12,
+          "end": 260.55
+        },
+        {
+          "word": "the",
+          "start": 260.55,
+          "end": 260.7
+        },
+        {
+          "word": "selling",
+          "start": 260.7,
+          "end": 261.01
+        },
+        {
+          "word": "price",
+          "start": 261.01,
+          "end": 261.37
+        },
+        {
+          "word": "is",
+          "start": 261.37,
+          "end": 261.84
+        },
+        {
+          "word": "taken",
+          "start": 261.84,
+          "end": 262.16
+        },
+        {
+          "word": "up",
+          "start": 262.16,
+          "end": 262.29
+        },
+        {
+          "word": "by",
+          "start": 262.29,
+          "end": 262.98
+        },
+        {
+          "word": "building",
+          "start": 262.98,
+          "end": 263.59
+        },
+        {
+          "word": "it",
+          "start": 263.59,
+          "end": 264.26
+        },
+        {
+          "word": "Um",
+          "start": 264.26,
+          "end": 265.44
+        },
+        {
+          "word": "and",
+          "start": 265.44,
+          "end": 265.97
+        },
+        {
+          "word": "profit",
+          "start": 265.97,
+          "end": 266.31
+        },
+        {
+          "word": "aim",
+          "start": 266.31,
+          "end": 266.53
+        },
+        {
+          "word": "is",
+          "start": 266.53,
+          "end": 266.66
+        },
+        {
+          "word": "fifty",
+          "start": 266.66,
+          "end": 267.29
+        },
+        {
+          "word": "million",
+          "start": 267.29,
+          "end": 267.67
+        },
+        {
+          "word": "Euros",
+          "start": 267.67,
+          "end": 268.76
+        },
+        {
+          "word": "which",
+          "start": 268.76,
+          "end": 268.99
+        },
+        {
+          "word": "is",
+          "start": 268.99,
+          "end": 269.18
+        },
+        {
+          "word": "uh",
+          "start": 269.18,
+          "end": 269.37
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEE014",
+      "start": 261.46,
+      "end": 262.16,
+      "text": "Yeah",
+      "words": [
+        {
+          "word": "Yeah",
+          "start": 261.46,
+          "end": 262.16
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 262.02,
+      "end": 262.23,
+      "text": "Mm",
+      "words": [
+        {
+          "word": "Mm",
+          "start": 262.02,
+          "end": 262.23
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 263.85,
+      "end": 264.23,
+      "text": "Mm-hmm",
+      "words": [
+        {
+          "word": "Mm-hmm",
+          "start": 263.85,
+          "end": 264.23
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 270.37,
+      "end": 271.2,
+      "text": "In our first year",
+      "words": [
+        {
+          "word": "In",
+          "start": 270.37,
+          "end": 270.53
+        },
+        {
+          "word": "our",
+          "start": 270.53,
+          "end": 270.6
+        },
+        {
+          "word": "first",
+          "start": 270.6,
+          "end": 270.92
+        },
+        {
+          "word": "year",
+          "start": 270.92,
+          "end": 271.2
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 271.29,
+      "end": 277.07,
+      "text": "Yi yes um yeah I presume so Um",
+      "words": [
+        {
+          "word": "Yi",
+          "start": 271.29,
+          "end": 271.71
+        },
+        {
+          "word": "yes",
+          "start": 271.71,
+          "end": 272.61
+        },
+        {
+          "word": "um",
+          "start": 272.61,
+          "end": 273.22
+        },
+        {
+          "word": "yeah",
+          "start": 273.22,
+          "end": 274.57
+        },
+        {
+          "word": "I",
+          "start": 274.57,
+          "end": 274.62
+        },
+        {
+          "word": "presume",
+          "start": 274.62,
+          "end": 275.04
+        },
+        {
+          "word": "so",
+          "start": 275.04,
+          "end": 276.43
+        },
+        {
+          "word": "Um",
+          "start": 276.43,
+          "end": 277.07
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 275.54,
+      "end": 275.88,
+      "text": "Mm-hmm",
+      "words": [
+        {
+          "word": "Mm-hmm",
+          "start": 275.54,
+          "end": 275.88
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "MEO015",
+      "start": 276.39,
+      "end": 277.0,
+      "text": "So then",
+      "words": [
+        {
+          "word": "So",
+          "start": 276.39,
+          "end": 276.75
+        },
+        {
+          "word": "then",
+          "start": 276.75,
+          "end": 277.0
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 278.1,
+      "end": 291.49,
+      "text": "You've got market range international and you did say earlier it's got to be a um accessible and usable by sort of all age groups just t we're not focusing on business market any particular thing it's everyone user-friendly to everyone Okay",
+      "words": [
+        {
+          "word": "You've",
+          "start": 278.1,
+          "end": 278.21
+        },
+        {
+          "word": "got",
+          "start": 278.21,
+          "end": 278.32
+        },
+        {
+          "word": "market",
+          "start": 278.32,
+          "end": 278.7
+        },
+        {
+          "word": "range",
+          "start": 278.7,
+          "end": 278.94
+        },
+        {
+          "word": "international",
+          "start": 278.94,
+          "end": 279.7
+        },
+        {
+          "word": "and",
+          "start": 279.7,
+          "end": 279.83
+        },
+        {
+          "word": "you",
+          "start": 279.83,
+          "end": 279.9
+        },
+        {
+          "word": "did",
+          "start": 279.9,
+          "end": 280.04
+        },
+        {
+          "word": "say",
+          "start": 280.04,
+          "end": 280.39
+        },
+        {
+          "word": "earlier",
+          "start": 280.39,
+          "end": 280.77
+        },
+        {
+          "word": "it's",
+          "start": 280.77,
+          "end": 280.96
+        },
+        {
+          "word": "got",
+          "start": 280.96,
+          "end": 281.13
+        },
+        {
+          "word": "to",
+          "start": 281.13,
+          "end": 281.29
+        },
+        {
+          "word": "be",
+          "start": 281.29,
+          "end": 281.59
+        },
+        {
+          "word": "a",
+          "start": 281.59,
+          "end": 281.76
+        },
+        {
+          "word": "um",
+          "start": 281.76,
+          "end": 282.07
+        },
+        {
+          "word": "accessible",
+          "start": 282.07,
+          "end": 282.63
+        },
+        {
+          "word": "and",
+          "start": 282.63,
+          "end": 282.75
+        },
+        {
+          "word": "usable",
+          "start": 282.75,
+          "end": 283.68
+        },
+        {
+          "word": "by",
+          "start": 283.68,
+          "end": 283.91
+        },
+        {
+          "word": "sort",
+          "start": 283.91,
+          "end": 284.06
+        },
+        {
+          "word": "of",
+          "start": 284.06,
+          "end": 284.14
+        },
+        {
+          "word": "all",
+          "start": 284.14,
+          "end": 284.39
+        },
+        {
+          "word": "age",
+          "start": 284.39,
+          "end": 284.61
+        },
+        {
+          "word": "groups",
+          "start": 284.61,
+          "end": 285.22
+        },
+        {
+          "word": "just",
+          "start": 285.22,
+          "end": 285.46
+        },
+        {
+          "word": "t",
+          "start": 285.46,
+          "end": 286.17
+        },
+        {
+          "word": "we're",
+          "start": 286.17,
+          "end": 286.28
+        },
+        {
+          "word": "not",
+          "start": 286.28,
+          "end": 286.48
+        },
+        {
+          "word": "focusing",
+          "start": 286.48,
+          "end": 287.04
+        },
+        {
+          "word": "on",
+          "start": 287.04,
+          "end": 287.53
+        },
+        {
+          "word": "business",
+          "start": 287.53,
+          "end": 287.84
+        },
+        {
+          "word": "market",
+          "start": 287.84,
+          "end": 288.23
+        },
+        {
+          "word": "any",
+          "start": 288.23,
+          "end": 288.39
+        },
+        {
+          "word": "particular",
+          "start": 288.39,
+          "end": 288.85
+        },
+        {
+          "word": "thing",
+          "start": 288.85,
+          "end": 289.02
+        },
+        {
+          "word": "it's",
+          "start": 289.02,
+          "end": 289.18
+        },
+        {
+          "word": "everyone",
+          "start": 289.18,
+          "end": 289.69
+        },
+        {
+          "word": "user-friendly",
+          "start": 289.69,
+          "end": 290.2
+        },
+        {
+          "word": "to",
+          "start": 290.2,
+          "end": 290.34
+        },
+        {
+          "word": "everyone",
+          "start": 290.34,
+          "end": 291.11
+        },
+        {
+          "word": "Okay",
+          "start": 291.11,
+          "end": 291.49
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 285.18,
+      "end": 285.59,
+      "text": "Mm-hmm",
+      "words": [
+        {
+          "word": "Mm-hmm",
+          "start": 285.18,
+          "end": 285.59
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 289.13,
+      "end": 290.29,
+      "text": "No yeah",
+      "words": [
+        {
+          "word": "No",
+          "start": 289.13,
+          "end": 289.87
+        },
+        {
+          "word": "yeah",
+          "start": 289.87,
+          "end": 290.29
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE016",
+      "start": 293.41,
+      "end": 295.4,
+      "text": "Big target group",
+      "words": [
+        {
+          "word": "Big",
+          "start": 293.41,
+          "end": 293.59
+        },
+        {
+          "word": "target",
+          "start": 293.59,
+          "end": 293.98
+        },
+        {
+          "word": "group",
+          "start": 293.98,
+          "end": 295.4
+        }
+      ]
+    },
+    {
+      "uri": "AMI_ES2004a_360_660",
+      "speaker": "FEE013",
+      "start": 293.57,
+      "end": 300.0,
+      "text": "So yes yes I don't think we have to I don't think it's a case of worrying about different",
+      "words": [
+        {
+          "word": "So",
+          "start": 293.57,
+          "end": 294.39
+        },
+        {
+          "word": "yes",
+          "start": 294.39,
+          "end": 295.13
+        },
+        {
+          "word": "yes",
+          "start": 295.13,
+          "end": 295.64
+        },
+        {
+          "word": "I",
+          "start": 295.64,
+          "end": 295.81
+        },
+        {
+          "word": "don't",
+          "start": 295.81,
+          "end": 296.0
+        },
+        {
+          "word": "think",
+          "start": 296.0,
+          "end": 296.2
+        },
+        {
+          "word": "we",
+          "start": 296.2,
+          "end": 296.29
+        },
+        {
+          "word": "have",
+          "start": 296.29,
+          "end": 296.52
+        },
+        {
+          "word": "to",
+          "start": 296.52,
+          "end": 296.8
+        },
+        {
+          "word": "I",
+          "start": 296.8,
+          "end": 296.88
+        },
+        {
+          "word": "don't",
+          "start": 296.88,
+          "end": 297.12
+        },
+        {
+          "word": "think",
+          "start": 297.12,
+          "end": 297.34
+        },
+        {
+          "word": "it's",
+          "start": 297.34,
+          "end": 297.49
+        },
+        {
+          "word": "a",
+          "start": 297.49,
+          "end": 297.54
+        },
+        {
+          "word": "case",
+          "start": 297.54,
+          "end": 297.87
+        },
+        {
+          "word": "of",
+          "start": 297.87,
+          "end": 298.42
+        },
+        {
+          "word": "worrying",
+          "start": 298.42,
+          "end": 298.76
+        },
+        {
+          "word": "about",
+          "start": 298.76,
+          "end": 299.61
+        },
+        {
+          "word": "different",
+          "start": 299.61,
+          "end": 299.94
+        }
+      ]
+    }
+  ]
+}

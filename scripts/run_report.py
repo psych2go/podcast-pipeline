@@ -7,6 +7,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from atomic_io import atomic_write_json, exclusive_file_lock
+except ImportError:
+    from scripts.atomic_io import atomic_write_json, exclusive_file_lock
+
 
 RUN_REPORT_SCHEMA_VERSION = 1
 MAX_RUN_HISTORY = 100
@@ -14,6 +19,18 @@ MAX_RUN_HISTORY = 100
 
 def _utc_now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _process_is_running(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _load_report(path, episode):
@@ -27,7 +44,9 @@ def _load_report(path, episode):
     payload.setdefault("episode", episode)
     payload.setdefault("runs", [])
     for run in payload["runs"]:
-        if run.get("status") == "running":
+        if (
+                run.get("status") == "running"
+                and not _process_is_running(run.get("pid"))):
             run["status"] = "failed"
             run["completed_at"] = _utc_now()
             run["error"] = "previous process ended before recording completion"
@@ -41,13 +60,7 @@ def _load_report(path, episode):
 
 def _write_report(path, payload):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + ".tmp")
-    tmp_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(tmp_path, path)
+    atomic_write_json(path, payload)
 
 
 def _error_text(error):
@@ -98,6 +111,7 @@ class RunReport:
         self.payload = _load_report(self.path, self.folder.name)
         self.run = {
             "id": uuid.uuid4().hex,
+            "pid": os.getpid(),
             "command": command,
             "started_at": _utc_now(),
             "status": "running",
@@ -109,16 +123,17 @@ class RunReport:
         self._persist()
 
     def _persist(self):
-        payload = dict(self.payload)
-        existing = [
-            item for item in payload.get("runs", [])
-            if item.get("id") != self.run["id"]
-        ]
-        payload["runs"] = (existing + [self.run])[-MAX_RUN_HISTORY:]
-        payload["episode"] = self.folder.name
-        payload["updated_at"] = _utc_now()
-        _write_report(self.path, payload)
-        self.payload = payload
+        with exclusive_file_lock(f"run-report:{self.path.resolve()}"):
+            payload = _load_report(self.path, self.folder.name)
+            existing = [
+                item for item in payload.get("runs", [])
+                if item.get("id") != self.run["id"]
+            ]
+            payload["runs"] = (existing + [self.run])[-MAX_RUN_HISTORY:]
+            payload["episode"] = self.folder.name
+            payload["updated_at"] = _utc_now()
+            _write_report(self.path, payload)
+            self.payload = payload
 
     def _append_stage(self, stage):
         self.run["stages"].append(stage)

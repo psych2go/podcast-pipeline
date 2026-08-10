@@ -19,6 +19,11 @@ try:
 except ImportError:  # package import
     from scripts.content_map import coverage_report, load_json
 
+try:
+    from asr_benchmark import benchmark_sample
+except ImportError:
+    from scripts.asr_benchmark import benchmark_sample
+
 
 def _words(text):
     return re.findall(r"[a-z0-9]+(?:['-][a-z0-9]+)*", text.lower())
@@ -85,6 +90,10 @@ def main():
     summary = sub.add_parser("summary", help="检查内容单元覆盖率")
     summary.add_argument("content_map")
     summary.add_argument("summary_map")
+    suite = sub.add_parser(
+        "suite", help="运行多说话人 ASR benchmark manifest")
+    suite.add_argument("manifest")
+    suite.add_argument("hypothesis")
     args = parser.parse_args()
 
     if args.command == "asr":
@@ -92,8 +101,20 @@ def main():
             Path(args.reference).read_text(encoding="utf-8"),
             Path(args.hypothesis).read_text(encoding="utf-8"),
         )
-    else:
+    elif args.command == "summary":
         result = summary_metrics(load_json(args.content_map), load_json(args.summary_map))
+    else:
+        manifest_path = Path(args.manifest)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for section in ("reference",):
+            for key in ("segments_json", "stm", "rttm"):
+                value = manifest.get(section, {}).get(key)
+                if value and not Path(value).is_absolute():
+                    manifest[section][key] = str(
+                        (manifest_path.parent / value).resolve())
+        hypothesis = json.loads(
+            Path(args.hypothesis).read_text(encoding="utf-8"))
+        result = benchmark_sample(manifest, hypothesis)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("passed", True) else 1
 

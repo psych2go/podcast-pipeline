@@ -4,17 +4,40 @@ Transcript fetching: URL (multi-layer fallback) + local mp3 ASR.
 import json
 import os
 import re
+import ssl
 from html import unescape
 from html.parser import HTMLParser
 import subprocess
+import tempfile
 import time
 
 import httpx
 
+from asr_refinement import AsrContext, build_asr_context, refine_segments
+from config import FETCH_MAX_RETRIES, FETCH_TIMEOUT, API_RETRY_BACKOFF
 from playwright_runtime import playwright_launch_env
+from retry import exponential_delay, retry_after_seconds
 
 
 # ── URL 抓取（四层降级）───────────────────────────────────────────
+
+_HTML_CACHE = {}
+_HTML_CACHE_TTL_SECONDS = 120
+
+
+def _timestamp_seconds(text):
+    match = re.search(
+        r"(?:(?:Starting point is|Starts at|Begins at)\s+)?"
+        r"([0-9]{1,2}(?::[0-9]{2}){1,2})",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return sum(
+        int(value) * 60 ** index
+        for index, value in enumerate(reversed(match.group(1).split(":")))
+    )
 
 
 class _PodscriptsParser(HTMLParser):
@@ -53,12 +76,7 @@ class _PodscriptsParser(HTMLParser):
         if self.capture is not None and tag == "span":
             text = " ".join("".join(self.capture).split())
             if self.capture_kind == "timestamp":
-                match = re.search(r"Starting point is\s+([0-9:]+)", text)
-                if match:
-                    self.group["timestamp"] = sum(
-                        int(value) * 60 ** index
-                        for index, value in enumerate(reversed(match.group(1).split(":")))
-                    )
+                self.group["timestamp"] = _timestamp_seconds(text)
             elif self.capture_kind == "text" and text:
                 self.group["texts"].append(text)
             self.capture = None
@@ -91,6 +109,26 @@ def _render_source_segments(segments):
     return "\n\n".join(segment["text"] for segment in segments).strip()
 
 
+def _plain_transcript_result(text, extractor, fetch_meta=None):
+    return {
+        "text": text,
+        "segments": [
+            {
+                "start": None,
+                "end": None,
+                "text": chunk,
+                "synthetic_boundary": True,
+            }
+            for chunk in chunk_plain_transcript(text)
+        ],
+        "meta": {
+            "timestamped": False,
+            "extractor": extractor,
+            **(fetch_meta or {}),
+        },
+    }
+
+
 def fetch_transcript_from_url(url, return_metadata=False):
     """从网页 URL 抓取转录文本，四层降级策略"""
     print(f"[抓取] 目标: {url[:80]}...", flush=True)
@@ -98,40 +136,63 @@ def fetch_transcript_from_url(url, return_metadata=False):
     rss_result = _try_rss_transcript(url)
     if rss_result:
         print(f"[抓取] RSS 官方字幕成功，{len(rss_result)} 字符", flush=True)
+        if return_metadata:
+            return _plain_transcript_result(
+                rss_result, "rss_transcript")
         return rss_result
 
-    html = _try_curl_cffi(url)
-    if not html:
-        html = _try_curl(url)
-    if not html:
-        html = _try_httpx(url)
+    html, fetch_meta = _fetch_html(url)
 
     if html:
         if "podscripts.co" in url.lower():
             segments = _extract_podscripts_segments(html)
             if segments and len(_render_source_segments(segments)) > 500:
                 text = _render_source_segments(segments)
+                timestamp_count = sum(
+                    segment.get("start") is not None for segment in segments)
+                timestamp_coverage = timestamp_count / len(segments)
+                timestamped = timestamp_count == len(segments)
+                if not timestamp_count:
+                    extractor = "podscripts_transcript_text_no_timestamps"
+                elif not timestamped:
+                    extractor = "podscripts_transcript_text_partial_timestamps"
+                else:
+                    extractor = "podscripts_transcript_text"
                 print(f"[抓取] Podscripts 正文提取成功，{len(segments)} 段，{len(text)} 字符", flush=True)
                 if return_metadata:
                     return {
                         "text": text,
                         "segments": segments,
-                        "meta": {"timestamped": True, "extractor": "podscripts_transcript_text"},
+                        "meta": {
+                            "timestamped": timestamped,
+                            "timestamp_coverage": round(
+                                timestamp_coverage, 4),
+                            "extractor": extractor,
+                            **fetch_meta,
+                        },
                     }
                 return text
         text = _extract_with_trafilatura(html)
         if text and len(text) > 500:
             print(f"[抓取] trafilatura 提取成功，{len(text)} 字符", flush=True)
+            if return_metadata:
+                return _plain_transcript_result(
+                    text, "trafilatura", fetch_meta)
             return text
 
         text = _extract_with_regex(html)
         if text and len(text) > 500:
             print(f"[抓取] 正则提取成功，{len(text)} 字符", flush=True)
+            if return_metadata:
+                return _plain_transcript_result(
+                    text, "regex", fetch_meta)
             return text
 
     text = _try_playwright(url)
     if text:
         print(f"[抓取] playwright 成功，{len(text)} 字符", flush=True)
+        if return_metadata:
+            return _plain_transcript_result(text, "playwright")
         return text
 
     print("[抓取] 全部方法失败，请手动提供转录或 mp3 路径", flush=True)
@@ -141,7 +202,7 @@ def fetch_transcript_from_url(url, return_metadata=False):
 def extract_title_from_url(url):
     """从网页 URL 提取 <title>，用于自动命名文件夹/音频。返回清理后的标题或 None。"""
     print(f"[标题] 尝试从 {url[:60]} 提取页面标题...", flush=True)
-    html = _try_curl_cffi(url) or _try_curl(url) or _try_httpx(url)
+    html, _fetch_meta = _fetch_html(url)
     if not html:
         print("[标题] 抓取页面失败，无法自动命名", flush=True)
         return None
@@ -228,35 +289,107 @@ def _try_rss_transcript(url):
     return None
 
 
-def _try_curl_cffi(url):
+def _is_certificate_verification_error(error):
+    if isinstance(error, ssl.SSLCertVerificationError):
+        return True
+    try:
+        from curl_cffi.requests.exceptions import CertificateVerifyError
+    except ImportError:
+        return False
+    return isinstance(error, CertificateVerifyError)
+
+
+def _try_curl_cffi_with_metadata(url):
+    metadata = {"transport": "curl_cffi"}
     try:
         from curl_cffi import requests as cffi_requests
-        r = cffi_requests.get(url, impersonate="chrome", timeout=30)
+        r = cffi_requests.get(
+            url, impersonate="chrome", timeout=FETCH_TIMEOUT)
         if r.status_code == 200 and len(r.text) > 1000:
             print(f"[抓取] curl_cffi 成功（HTTP {r.status_code}）", flush=True)
-            return r.text
+            return r.text, {"transport": "curl_cffi", "tls_downgrade": False}
         print(f"[抓取] curl_cffi 返回 {r.status_code}", flush=True)
+        metadata["status_code"] = r.status_code
+        if r.status_code == 429:
+            metadata["retry_after"] = retry_after_seconds(
+                r.headers.get("retry-after"))
     except Exception as e:
         print(f"[抓取] curl_cffi 失败: {type(e).__name__}", flush=True)
-        # Podscripts has occasionally served an expired edge certificate.
-        # Keep normal verification first; only use the explicit, source-scoped
-        # fallback when the secure request itself cannot be established.
-        if "podscripts.co" in url.lower():
+        metadata["last_error"] = type(e).__name__
+        if (
+                "podscripts.co" in url.lower()
+                and _is_certificate_verification_error(e)):
             try:
                 print("[抓取][警告] Podscripts 证书校验失败，使用降级抓取", flush=True)
                 r = cffi_requests.get(
-                    url, impersonate="chrome", timeout=30, verify=False)
+                    url, impersonate="chrome", timeout=FETCH_TIMEOUT,
+                    verify=False)
                 if r.status_code == 200 and len(r.text) > 1000:
                     print(
                         f"[抓取] curl_cffi 降级成功（HTTP {r.status_code}）",
                         flush=True)
-                    return r.text
+                    return r.text, {
+                        "transport": "curl_cffi",
+                        "tls_downgrade": True,
+                        "tls_downgrade_reason": (
+                            f"{type(e).__name__}: {str(e)[:300]}"
+                        ),
+                    }
             except Exception as fallback_error:
                 print(
                     f"[抓取] curl_cffi 降级失败: "
                     f"{type(fallback_error).__name__}",
                     flush=True)
-    return None
+                metadata["last_error"] = type(fallback_error).__name__
+    return None, metadata
+
+
+def _try_curl_cffi(url):
+    html, _metadata = _try_curl_cffi_with_metadata(url)
+    return html
+
+
+def _fetch_html(url):
+    cached = _HTML_CACHE.get(url)
+    if cached and time.monotonic() - cached["stored_at"] < _HTML_CACHE_TTL_SECONDS:
+        return cached["html"], dict(cached["meta"])
+
+    last_metadata = {}
+    for attempt in range(1, FETCH_MAX_RETRIES + 1):
+        html, cffi_metadata = _try_curl_cffi_with_metadata(url)
+        metadata = cffi_metadata
+        if not html:
+            html = _try_curl(url)
+            if html:
+                metadata = {"transport": "curl"}
+        if not html:
+            html, httpx_metadata = _try_httpx_with_metadata(url)
+            if html or httpx_metadata:
+                metadata = httpx_metadata
+        if html:
+            metadata = dict(metadata)
+            metadata["fetch_retry_count"] = attempt - 1
+            _HTML_CACHE[url] = {
+                "html": html,
+                "meta": metadata,
+                "stored_at": time.monotonic(),
+            }
+            return html, metadata
+        last_metadata = dict(metadata or last_metadata)
+        if attempt == FETCH_MAX_RETRIES:
+            break
+        wait = max(
+            exponential_delay(attempt, API_RETRY_BACKOFF),
+            last_metadata.get("retry_after") or 0.0,
+        )
+        print(
+            f"[抓取] 所有 HTTP transport 均失败，{wait:g}s 后重试 "
+            f"{attempt}/{FETCH_MAX_RETRIES}",
+            flush=True,
+        )
+        time.sleep(wait)
+    last_metadata["fetch_retry_count"] = max(0, FETCH_MAX_RETRIES - 1)
+    return None, last_metadata
 
 
 def _try_curl(url):
@@ -266,9 +399,10 @@ def _try_curl(url):
             tmp_path = tmp.name
         try:
             subprocess.run(
-                ["curl", "-sL", "--connect-timeout", "15", "--max-time", "30",
+                ["curl", "-sL", "--connect-timeout",
+                 str(min(15, FETCH_TIMEOUT)), "--max-time", str(FETCH_TIMEOUT),
                  "-H", "User-Agent: Mozilla/5.0", url, "-o", tmp_path],
-                capture_output=True, timeout=45, check=False)
+                capture_output=True, timeout=FETCH_TIMEOUT + 15, check=False)
             if os.path.exists(tmp_path):
                 html = open(tmp_path, "r", encoding="utf-8", errors="ignore").read()
                 if len(html) > 1000:
@@ -284,17 +418,28 @@ def _try_curl(url):
     return None
 
 
-def _try_httpx(url):
+def _try_httpx_with_metadata(url):
+    metadata = {"transport": "httpx"}
     try:
         r = httpx.get(url, headers={"User-Agent": "Mozilla/5.0"},
-                      timeout=30, follow_redirects=True)
+                      timeout=FETCH_TIMEOUT, follow_redirects=True)
         if r.status_code == 200 and len(r.text) > 1000:
             print(f"[抓取] httpx 成功", flush=True)
-            return r.text
+            return r.text, metadata
         print(f"[抓取] httpx 返回 {r.status_code}", flush=True)
+        metadata["status_code"] = r.status_code
+        if r.status_code == 429:
+            metadata["retry_after"] = retry_after_seconds(
+                r.headers.get("retry-after"))
     except Exception as e:
         print(f"[抓取] httpx 失败: {type(e).__name__}", flush=True)
-    return None
+        metadata["last_error"] = type(e).__name__
+    return None, metadata
+
+
+def _try_httpx(url):
+    html, _metadata = _try_httpx_with_metadata(url)
+    return html
 
 
 def _extract_with_trafilatura(html):
@@ -486,10 +631,10 @@ ASR_PRESETS = {
         "desc": "中等模型，快速出稿",
     },
     "balanced": {
-        "model_size": "large-v3",
+        "model_size": "large-v3-turbo",
         "beam_size": 8,
         "temperature": 0.0,
-        "desc": "large-v3，质量优先",
+        "desc": "large-v3-turbo，参考集验证的默认策略",
     },
     "max": {
         "model_size": "large-v3",
@@ -498,6 +643,14 @@ ASR_PRESETS = {
         "desc": "large-v3 + 更严格的抗幻觉设置",
     },
 }
+
+
+def preset_model_policy():
+    """Return the production default model for each quality preset."""
+    return {
+        name: config["model_size"]
+        for name, config in ASR_PRESETS.items()
+    }
 
 
 def resolve_asr_config(quality="balanced", model_size=None):
@@ -517,19 +670,7 @@ def resolve_asr_config(quality="balanced", model_size=None):
 
 def make_initial_prompt(title=""):
     """从播客标题组装 initial_prompt，避免把平台元信息喂给 Whisper。"""
-    if not title or len(title) < 10:
-        return None
-    title = re.sub(r'[\\/:*?"<>|\[\]$`]', " ", title)
-    title = re.sub(
-        r"\b(podcast|episode|full\s*episode|show|transcript|讲稿)\b",
-        "", title, flags=re.IGNORECASE,
-    )
-    title = re.sub(r"\s*[-–—|]\s*(youtube|happyscribe|singjupost)\s*$", "", title,
-                   flags=re.IGNORECASE)
-    title = re.sub(r"\s+", " ", title).strip()
-    if len(title) < 10:
-        return None
-    return f"Podcast about {title}."
+    return build_asr_context(title=title).initial_prompt
 
 
 # 只包含“很可能是解码幻觉”的模式。真实广告/片尾是否删除由内容策略决定，
@@ -612,9 +753,10 @@ def _model_path(model_size):
     return model_size
 
 
-def _transcribe_kwargs(config, initial_prompt=None, hotwords=None, word_timestamps=True):
+def _transcribe_kwargs(
+        config, initial_prompt=None, hotwords=None, word_timestamps=True,
+        language="en"):
     kwargs = {
-        "language": "en",
         "beam_size": config["beam_size"],
         "temperature": config["temperature"],
         # 避免前一段幻觉污染下一段；专有名词通过 prompt/hotwords 提供。
@@ -628,6 +770,8 @@ def _transcribe_kwargs(config, initial_prompt=None, hotwords=None, word_timestam
         },
         "word_timestamps": word_timestamps,
     }
+    if language:
+        kwargs["language"] = language
     if config["quality"] in ("balanced", "max"):
         kwargs.update({
             "compression_ratio_threshold": 2.0 if config["quality"] == "balanced" else 1.8,
@@ -671,20 +815,94 @@ def _segment_to_dict(segment):
     return result
 
 
-def _load_whisper_model(model_size):
-    import faster_whisper
+def _load_whisper_model(model_size, runtime=None):
     from config import ASR_COMPUTE_TYPE, ASR_DEVICE
+
+    if runtime is None:
+        from asr_runtime import resolve_runtime
+        runtime = resolve_runtime(ASR_DEVICE, ASR_COMPUTE_TYPE)
+    import faster_whisper
 
     resolved = _model_path(model_size)
     return faster_whisper.WhisperModel(
-        resolved, device=ASR_DEVICE, compute_type=ASR_COMPUTE_TYPE)
+        resolved,
+        device=runtime.device,
+        compute_type=runtime.compute_type,
+    )
+
+
+def _offset_segment_timestamps(segment, offset):
+    segment["start"] = float(segment.get("start", 0.0) or 0.0) + offset
+    segment["end"] = float(segment.get("end", 0.0) or 0.0) + offset
+    for word in segment.get("words", []):
+        if word.get("start") is not None:
+            word["start"] = float(word["start"]) + offset
+        if word.get("end") is not None:
+            word["end"] = float(word["end"]) + offset
+    return segment
+
+
+def _transcribe_audio_range(
+        model, audio_path, start, end, model_size, context, language):
+    """Decode one exact audio range with max parameters and global timestamps."""
+    duration = max(0.01, float(end) - float(start))
+    max_config = resolve_asr_config("max", model_size)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            temp_path = tmp.name
+        subprocess.run(
+            [
+                "ffmpeg", "-nostdin", "-v", "error", "-y",
+                "-ss", f"{float(start):.3f}",
+                "-i", audio_path,
+                "-t", f"{duration:.3f}",
+                "-ac", "1", "-ar", "16000",
+                "-c:a", "pcm_s16le",
+                temp_path,
+            ],
+            capture_output=True,
+            check=True,
+            timeout=max(60, min(600, round(duration * 8 + 30))),
+        )
+        decoded, _info = model.transcribe(
+            temp_path,
+            **_transcribe_kwargs(
+                max_config,
+                context.initial_prompt,
+                context.hotwords,
+                word_timestamps=True,
+                language=language,
+            ),
+        )
+        result = []
+        for segment in decoded:
+            item = _segment_to_dict(segment)
+            item["text"] = clean_whisper_hallucinations(item["text"])
+            if item["text"]:
+                result.append(_offset_segment_timestamps(item, float(start)))
+        return result
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 
 def transcribe_mp3_timestamped(mp3_path, model_size=None, initial_prompt=None,
                                 hotwords=None, beam_size=None, quality="balanced",
-                                clean_hallucinations=True):
+                                clean_hallucinations=True, language="en",
+                                asr_context=None, adaptive_refinement=True):
     """返回可审计的 ASR 片段和元数据。"""
     config = resolve_asr_config(quality, model_size)
+    context = asr_context or build_asr_context(
+        initial_prompt=initial_prompt,
+        hotwords=hotwords,
+    )
+    if not isinstance(context, AsrContext):
+        raise TypeError("asr_context 必须是 AsrContext")
+    requested_language = language
     if beam_size is not None:
         config["beam_size"] = beam_size
     print(
@@ -693,11 +911,20 @@ def transcribe_mp3_timestamped(mp3_path, model_size=None, initial_prompt=None,
         f"file={os.path.basename(mp3_path)}",
         flush=True,
     )
-    model = _load_whisper_model(config["model_size"])
+    from config import ASR_COMPUTE_TYPE, ASR_DEVICE
+    from asr_runtime import resolve_runtime
+
+    runtime = resolve_runtime(ASR_DEVICE, ASR_COMPUTE_TYPE)
+    model = _load_whisper_model(config["model_size"], runtime=runtime)
     started = time.time()
     segments, info = model.transcribe(
         mp3_path,
-        **_transcribe_kwargs(config, initial_prompt, hotwords, word_timestamps=True),
+        **_transcribe_kwargs(
+            config,
+            context.initial_prompt,
+            context.hotwords,
+            word_timestamps=True,
+            language=language),
     )
 
     result = []
@@ -712,19 +939,67 @@ def transcribe_mp3_timestamped(mp3_path, model_size=None, initial_prompt=None,
         if item["text"]:
             result.append(item)
 
-    language = getattr(info, "language", None)
+    refinement_meta = {
+        "enabled": False,
+        "reason": (
+            "disabled"
+            if not adaptive_refinement
+            else "fast_quality"
+            if quality == "fast"
+            else "not_run"
+        ),
+    }
+    if adaptive_refinement and quality in {"balanced", "max"}:
+        from config import ASR_REFINE_MAX_RANGES
+
+        print("[ASR] 评估困难片段并执行定向重解码...", flush=True)
+        refined = refine_segments(
+            result,
+            lambda start, end, active_context: _transcribe_audio_range(
+                model,
+                mp3_path,
+                start,
+                end,
+                config["model_size"],
+                active_context,
+                language,
+            ),
+            context,
+            max_ranges=ASR_REFINE_MAX_RANGES,
+        )
+        result = refined["segments"]
+        refinement_meta = refined["meta"]
+        print(
+            f"[ASR] 定向重解码 {refinement_meta['candidate_ranges']} 段，"
+            f"接受 {refinement_meta['accepted_ranges']} 段，"
+            f"剩余待复核 {refinement_meta['remaining_segments']} 段",
+            flush=True,
+        )
+
+    detected_language = getattr(info, "language", None)
     language_probability = getattr(info, "language_probability", None)
     meta = {
+        "engine": "faster-whisper",
         "model": config["model_size"],
         "quality": quality,
         "beam_size": config["beam_size"],
-        "language": language,
+        "device": runtime.device,
+        "compute_type": runtime.compute_type,
+        "language": detected_language,
         "language_probability": language_probability,
+        "requested_language": requested_language or "auto",
         "elapsed_seconds": round(time.time() - started, 2),
         "raw_chars": raw_chars,
         "removed_hallucination_chars": removed_chars,
         "segment_count": len(result),
+        "timestamped": True,
+        "asr_context": context.to_metadata(),
+        "adaptive_refinement": refinement_meta,
     }
+    if context.initial_prompt:
+        meta["initial_prompt"] = context.initial_prompt
+    if context.hotwords:
+        meta["hotwords"] = context.hotwords
     print(
         f"[ASR] 完成，{len(result)} 片段，{sum(len(x['text']) for x in result)} 字符，"
         f"清洗 {removed_chars} 字符，耗时 {meta['elapsed_seconds']:.0f}s",
@@ -749,18 +1024,22 @@ def render_segments(segments, include_timestamps=False):
 
 
 def transcribe_mp3(mp3_path, model_size=None, initial_prompt=None, hotwords=None,
-                   beam_size=None, quality="balanced"):
+                   beam_size=None, quality="balanced", language="en",
+                   asr_context=None, adaptive_refinement=True):
     """兼容旧调用方：返回纯文本，但内部使用统一的结构化 ASR。"""
     result = transcribe_mp3_timestamped(
         mp3_path, model_size=model_size, initial_prompt=initial_prompt,
-        hotwords=hotwords, beam_size=beam_size, quality=quality)
+        hotwords=hotwords, beam_size=beam_size, quality=quality,
+        language=language, asr_context=asr_context,
+        adaptive_refinement=adaptive_refinement)
     return render_segments(result["segments"])
 
 
 def transcribe(mp3_path, engine="whisper", quality="balanced", asr_model=None,
                initial_prompt=None, hotwords=None, lm_path=None,
                diarize_audio=False, min_speakers=None, max_speakers=None,
-               return_metadata=False):
+               return_metadata=False, language="en", asr_context=None,
+               adaptive_refinement=True, align_audio=False):
     """统一 ASR 入口。engine 保留兼容性，实际质量由 quality/model 控制。"""
     if engine not in ("whisper", "whisper-fast"):
         raise ValueError(f"不支持的 ASR 引擎: {engine}")
@@ -771,23 +1050,80 @@ def transcribe(mp3_path, engine="whisper", quality="balanced", asr_model=None,
         initial_prompt=initial_prompt,
         hotwords=hotwords,
         quality=effective_quality,
+        language=language,
+        asr_context=asr_context,
+        adaptive_refinement=adaptive_refinement,
     )
 
-    if diarize_audio:
-        from diarize import diarize_and_merge
-        result["segments"] = diarize_and_merge(
+    if align_audio and effective_quality in {"balanced", "max"}:
+        from asr_alignment import align_segments
+        from config import ALIGNMENT_DEVICE, ALIGNMENT_MODE, ALIGNMENT_MODEL
+
+        print("[Align] 执行词级强制对齐...", flush=True)
+        aligned = align_segments(
             mp3_path,
             result["segments"],
-            min_speakers=min_speakers,
-            max_speakers=max_speakers,
-            return_segments=True,
+            language=(
+                result["meta"].get("language")
+                or language
+                or "en"
+            ),
+            mode=ALIGNMENT_MODE,
+            device=ALIGNMENT_DEVICE,
+            model_name=ALIGNMENT_MODEL or None,
         )
-        result["meta"]["diarization"] = True
-        result["meta"]["segment_count"] = len(result["segments"])
-        result["meta"]["speaker_count"] = len({
-            segment.get("speaker") for segment in result["segments"]
-            if segment.get("speaker")
-        })
+        result["segments"] = aligned["segments"]
+        result["meta"]["alignment"] = aligned["meta"]
+        if aligned["meta"].get("warning"):
+            result["meta"]["alignment_warning"] = aligned["meta"]["warning"]
+        print(
+            f"[Align] status={aligned['meta'].get('status')} "
+            f"coverage={aligned['meta'].get('word_timestamp_coverage', 0):.1%}",
+            flush=True,
+        )
+    else:
+        result["meta"]["alignment"] = {
+            "enabled": False,
+            "adapter": "whisper_timestamps",
+            "status": (
+                "fast_quality"
+                if align_audio and effective_quality == "fast"
+                else "disabled"
+            ),
+        }
+
+    if diarize_audio:
+        from config import require_hf_token
+        try:
+            require_hf_token()
+        except RuntimeError as exc:
+            print(
+                f"[Diarize][警告] {exc}；本次自动跳过说话人分离",
+                flush=True,
+            )
+            result["meta"]["diarization"] = False
+            result["meta"]["diarization_warning"] = "missing_hf_token"
+        else:
+            from diarize import diarize_and_merge
+            diarized = diarize_and_merge(
+                mp3_path,
+                result["segments"],
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+                return_metadata=True,
+            )
+            result["segments"] = diarized["segments"]
+            result["meta"]["diarization"] = True
+            result["meta"]["diarization_meta"] = diarized["meta"]
+            result["meta"]["diarization_model"] = diarized["meta"].get(
+                "model")
+            result["meta"]["diarization_exclusive"] = diarized["meta"].get(
+                "exclusive_used", False)
+            result["meta"]["segment_count"] = len(result["segments"])
+            result["meta"]["speaker_count"] = len({
+                segment.get("speaker") for segment in result["segments"]
+                if segment.get("speaker")
+            })
     else:
         result["meta"]["diarization"] = False
 

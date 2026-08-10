@@ -1,0 +1,32 @@
+{
+  "created_at": "2026-08-07T09:23:47Z",
+  "source_audio": "content/example/example-source-audio.mp3",
+  "clip_start_seconds": 120.0,
+  "clip_duration_seconds": 30.0,
+  "model": "large-v3",
+  "runs": [
+    {
+      "model": "large-v3",
+      "device": "cpu",
+      "compute_type": "int8",
+      "beam_size": 5,
+      "requested_language": "en",
+      "detected_language": "en",
+      "language_probability": 1,
+      "audio_file": "content/example/example-source-audio.mp3",
+      "audio_duration_seconds": 30.0,
+      "model_load_seconds": 9.015,
+      "transcription_seconds": 45.531,
+      "total_seconds": 54.546,
+      "realtime_factor": 1.5177,
+      "segment_count": 5,
+      "transcript_chars": 409,
+      "transcript_sha256": "1087bf7a61e81f02606af6f416d5c69a8371d55d7bb1da1641b67cbbc65c5416",
+      "transcript_text": "[redacted benchmark transcript]",
+      "transcript_preview": "[redacted benchmark transcript]",
+      "process_peak_rss_mb": 3285.5,
+      "clip_start_seconds": 120.0,
+      "clip_duration_seconds": 30.0
+    }
+  ]
+}

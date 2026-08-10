@@ -1,10 +1,14 @@
 """Cloudflare Pages and R2 publish verification."""
 import html
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+
+try:
+    from atomic_io import atomic_write_json
+except ImportError:
+    from scripts.atomic_io import atomic_write_json
 
 
 PUBLISH_REPORT_SCHEMA_VERSION = 1
@@ -126,7 +130,4 @@ def verify_publish(
 
 
 def write_publish_report(path, report):
-    Path(path).write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_json(path, report)

@@ -1,0 +1,35 @@
+{
+  "created_at": "2026-08-07T09:23:18Z",
+  "source_audio": "content/example/example-source-audio.mp3",
+  "clip_start_seconds": 120.0,
+  "clip_duration_seconds": 30.0,
+  "model": "large-v3",
+  "runs": [
+    {
+      "model": "large-v3",
+      "device": "cuda",
+      "compute_type": "int8_float16",
+      "beam_size": 5,
+      "requested_language": "en",
+      "detected_language": "en",
+      "language_probability": 1,
+      "audio_file": "content/example/example-source-audio.mp3",
+      "audio_duration_seconds": 30.0,
+      "model_load_seconds": 10.934,
+      "transcription_seconds": 5.642,
+      "total_seconds": 16.576,
+      "realtime_factor": 0.1881,
+      "segment_count": 5,
+      "transcript_chars": 406,
+      "transcript_sha256": "5746251621ad34b69be6a72485ca862b576861c80b914969396c01c3c7c82f7d",
+      "transcript_text": "[redacted benchmark transcript]",
+      "transcript_preview": "[redacted benchmark transcript]",
+      "process_peak_rss_mb": 3541.8,
+      "gpu_memory_baseline_mb": 1139,
+      "gpu_memory_peak_mb": 3362,
+      "gpu_memory_peak_delta_mb": 2223,
+      "clip_start_seconds": 120.0,
+      "clip_duration_seconds": 30.0
+    }
+  ]
+}

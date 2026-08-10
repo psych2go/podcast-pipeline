@@ -1,18 +1,23 @@
-"""使用 Claude CLI 对单集转录、内容台账和中文讲稿执行全自动 AI 审查。"""
+"""使用 subagent 对单集转录、内容台账和中文讲稿执行全自动 AI 审查。"""
 import argparse
 import hashlib
 import json
 import os
-import shutil
-import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 try:
+    from atomic_io import atomic_write_json
+    from evidence import ASR_SOURCE_KINDS, effective_source_kind
     from run_report import RunReport
+    from subagent import run_json_task
 except ImportError:
+    from scripts.atomic_io import atomic_write_json
+    from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
     from scripts.run_report import RunReport
+    from scripts.subagent import run_json_task
 
 REVIEW_FILES = (
     "episode.json",
@@ -36,6 +41,20 @@ REVIEW_SCHEMA = {
             "properties": {
                 "passed": {"type": "boolean"},
                 "score": {"type": "number", "minimum": 0, "maximum": 100},
+                "raw_score": {
+                    "type": "number", "minimum": 0, "maximum": 100,
+                },
+                "corrected_score": {
+                    "type": "number", "minimum": 0, "maximum": 100,
+                },
+                "accuracy_basis": {
+                    "type": "string",
+                    "enum": [
+                        "reference_wer",
+                        "sample_audit",
+                        "semantic_review_only",
+                    ],
+                },
                 "issues": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["passed", "score", "issues"],
@@ -134,6 +153,14 @@ REVIEW_SCHEMA = {
                         "type": "string",
                         "enum": ["supported", "qualified", "unsupported"],
                     },
+                    "publication_status": {
+                        "type": "string",
+                        "enum": [
+                            "used_as_fact",
+                            "attributed_or_qualified",
+                            "excluded",
+                        ],
+                    },
                     "evidence_segment_ids": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -146,7 +173,8 @@ REVIEW_SCHEMA = {
                     "notes": {"type": "string"},
                 },
                 "required": [
-                    "claim", "verdict", "evidence_segment_ids",
+                    "claim", "verdict", "publication_status",
+                    "evidence_segment_ids",
                     "source_urls", "checked_at", "notes",
                 ],
             },
@@ -176,6 +204,73 @@ def reviewed_hashes(folder):
     }
 
 
+def _replace_provenance_wording(value):
+    if isinstance(value, str):
+        return value.replace("官方字幕", "历史 ASR 转录")
+    if isinstance(value, list):
+        return [_replace_provenance_wording(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _replace_provenance_wording(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def rebind_provenance_review(folder, output=None):
+    """Refresh a passed review after a proven metadata-only migration."""
+    folder = Path(folder)
+    output = Path(output) if output else folder / "ai_review.json"
+    if not output.exists():
+        raise RuntimeError("缺少 ai_review.json，不能执行 provenance rebind")
+    review = json.loads(output.read_text(encoding="utf-8"))
+    if not review.get("passed", False):
+        raise RuntimeError("只有已通过的 AI 审查可以执行 provenance rebind")
+
+    expected = review.get("reviewed_files", {})
+    current = reviewed_hashes(folder)
+    changed = sorted(
+        name for name in set(expected) | set(current)
+        if expected.get(name) != current.get(name)
+    )
+    if not changed:
+        return review
+    allowed = {"episode.json", "来源.md", "transcript.raw.json"}
+    unexpected = sorted(set(changed) - allowed)
+    if unexpected:
+        raise RuntimeError(
+            f"存在语义文件变化，必须重新 AI 审查: {unexpected}")
+
+    raw = json.loads(
+        (folder / "transcript.raw.json").read_text(encoding="utf-8"))
+    migration = raw.get("provenance", {}).get("migration", {})
+    if migration.get("kind") != "metadata_only":
+        raise RuntimeError("transcript.raw.json 缺少 metadata_only 迁移证明")
+    if migration.get("previous_raw_sha256") != expected.get(
+            "transcript.raw.json"):
+        raise RuntimeError("迁移前 transcript.raw.json 哈希与原审查不匹配")
+
+    source_kind = effective_source_kind(folder, raw)
+    if source_kind == "legacy_asr":
+        review = _replace_provenance_wording(review)
+    if source_kind in ASR_SOURCE_KINDS:
+        transcript_quality = review.setdefault("transcript_quality", {})
+        transcript_quality.setdefault(
+            "corrected_score", transcript_quality.get("score"))
+        transcript_quality.setdefault(
+            "accuracy_basis", "semantic_review_only")
+    review["provenance_rebind"] = {
+        "method": "metadata_only",
+        "changed_files": changed,
+        "rebound_at": datetime.now(timezone.utc).isoformat(),
+        "semantic_review_reused": True,
+    }
+    update_source_status(folder, True)
+    review["reviewed_files"] = reviewed_hashes(folder)
+    atomic_write_json(output, review)
+    return review
+
+
 def _prompt(folder):
     folder = Path(folder).resolve()
     return f"""你是播客流水线的最终发布审查员。请以 max effort 审查目录：
@@ -186,10 +281,16 @@ def _prompt(folder):
 审查目标：无需人工复核也能直接发布。请执行：
 1. 抽查所有章节和对应时间片，检查脑补、漏点、人物归属和逻辑链。
 2. 审查 content_map 中每个 claims/numbers/examples 是否被完整笔记或讲稿正确覆盖。
-   content_map v2 的 evidence.segment_ids、claim_evidence 和 source_sha256 是证据锚点；逐条 claim 必须引用对应的 Sxxxx 片段，不能只相信 summary_map 自报。
+   content_map v3 的 evidence.segment_ids、claim_evidence、claim_evidence_sha256 和 source_sha256 是证据锚点；逐条 claim 必须引用对应的 Sxxxx 片段，不能只相信 summary_map 自报。
 3. 对金额、百分比、倍数、年份、功率/能量单位、公司规模等高风险数字进行联网交叉验证。节目观点可以保留，但事实错误必须指出。
 4. 检查第三方转录中的 ASR 错词、专有名词和明显异常数字。
    如果存在 转录_纠错.txt，它是供下游使用的规范化转录：transcript_quality 应同时评价原始稿的可追溯性和纠错稿是否已消除会影响总结的错误，不要因为保留了不可改写的原始证据而重复扣分。
+   对 local_asr 或 legacy_asr，transcript_quality 另外填写 raw_score、
+   corrected_score 和 accuracy_basis。没有人工标准逐字稿时不得暗示计算过 WER，
+   accuracy_basis 应为 sample_audit 或 semantic_review_only；score 继续表示下游实际
+   使用的纠错后综合质量。
+   转录纠错只能修复听写、断句、专名和说话人识别错误。节目嘉宾本身说错的事实必须
+   保留原话，并在 fact_checks 或稿件归因中纠正，不能把原始发言改写成编辑部事实。
 5. 检查中文完整笔记是否确实比精编讲稿更完整；若更短或漏掉重要细节，不能通过。
 6. 检查讲稿是否适合中文 TTS：阿拉伯数字、英文缩写、专有名词、难读符号和可能误读的混合表达。
    如果存在 tts_lexicon.json，还要检查替换是否会改变原意、误替换子串或引入错误读音。
@@ -209,6 +310,7 @@ def _prompt(folder):
 - 每个 issue 都必须填写 evidence_type、evidence_segment_ids、source_urls 和 checked_at。
 - 联网事实核查必须把最终采用的网页 URL 写入 source_urls；只引用转录时 source_urls 可为空。
 - 对讲稿中实际采用的高风险数字和动态事实写入 fact_checks，即使结论为 supported 也要保留证据。
+- fact_checks.publication_status 必须区分：作为事实采用 used_as_fact、仅按节目观点归因或加限定 attributed_or_qualified、未进入发布稿 excluded。
 
 判定规则：
 - 任何 critical/high 问题存在时 passed=false。
@@ -225,57 +327,50 @@ def run_ai_review(folder, output=None, model=None, effort="max"):
     missing = [name for name in REVIEW_FILES if not (folder / name).exists()]
     if missing:
         raise RuntimeError(f"缺少 AI 审查输入文件: {missing}")
-    claude = shutil.which(os.environ.get("AI_REVIEW_COMMAND", "claude"))
-    if not claude:
-        raise RuntimeError("找不到 claude CLI，无法执行自动 AI 审查")
-    cmd = [
-        claude, "--safe-mode", "-p", _prompt(folder), "--effort", effort,
-        "--output-format", "json",
-        "--json-schema", json.dumps(REVIEW_SCHEMA, ensure_ascii=False),
-        "--permission-mode", "dontAsk",
-        "--no-session-persistence",
-        "--allowedTools", "Read,Grep,WebSearch,WebFetch",
-        "--add-dir", str(folder),
-    ]
-    if model:
-        cmd.extend(["--model", model])
     print(
-        f"[AI审查] model={model or 'default'} effort={effort} folder={folder.name}",
+        f"[AI审查] subagent model={model or 'default'} "
+        f"effort={effort} folder={folder.name}",
         file=sys.stderr,
         flush=True,
     )
+    schema_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", encoding="utf-8", delete=False)
+    schema_path = Path(schema_file.name)
     try:
-        result = subprocess.run(
-            cmd, cwd=folder.parent.parent, capture_output=True, text=True,
-            timeout=1800, check=False,
+        json.dump(REVIEW_SCHEMA, schema_file, ensure_ascii=False)
+        schema_file.close()
+        result = run_json_task(
+            folder,
+            _prompt(folder) + (
+                f"\n本次审查 effort 要求：{effort}。"
+                "只返回符合 schema 的 JSON，不修改任何文件。"
+            ),
+            schema_path,
+            task_name="ai_review",
+            enable_search=True,
+            model=model or None,
+            timeout=1800,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("Claude AI 审查超过 30 分钟，已中止") from exc
-    if result.returncode != 0:
-        raise RuntimeError(f"Claude AI 审查失败: {result.stderr[-1000:]}")
-    try:
-        wrapper = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"Claude AI 审查返回了无效 JSON: {result.stdout[-1000:]}"
-        ) from exc
-    review = wrapper.get("structured_output")
-    if not isinstance(review, dict):
-        raw = wrapper.get("result", "")
-        review = json.loads(raw)
+        review = result["payload"]
+    finally:
+        try:
+            schema_file.close()
+        finally:
+            schema_path.unlink(missing_ok=True)
     review["reviewed_at"] = datetime.now(timezone.utc).isoformat()
     review["reviewer"] = {
-        "command": "claude",
+        "command": result.get("command", "codex exec"),
         "effort": effort,
-        "model": model or "default",
-        "duration_ms": wrapper.get("duration_ms"),
-        "duration_api_ms": wrapper.get("duration_api_ms"),
-        "reported_cost_usd": wrapper.get("total_cost_usd"),
-        "usage": wrapper.get("usage"),
+        "model": model or "codex-default",
+        "duration_ms": result.get("duration_ms"),
+        "duration_api_ms": None,
+        "reported_cost_usd": None,
+        "usage": {},
+        "retry_count": result.get("retry_count", 0),
     }
     review["reviewed_files"] = reviewed_hashes(folder)
     output = Path(output) if output else folder / "ai_review.json"
-    output.write_text(json.dumps(review, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(output, review)
     return review
 
 
@@ -288,7 +383,7 @@ def update_source_status(folder, passed):
 
 
 def review_episode(
-        folder, output=None, model="opus", effort="max", run_report=None):
+        folder, output=None, model="", effort="max", run_report=None):
     """完成审查、更新来源状态，并以更新后的文件哈希写入最终审查记录。"""
     folder = Path(folder)
     output = Path(output) if output else folder / "ai_review.json"
@@ -302,10 +397,7 @@ def review_episode(
             review = run_ai_review(folder, output, model, effort)
             update_source_status(folder, review.get("passed", False))
             review["reviewed_files"] = reviewed_hashes(folder)
-            output.write_text(
-                json.dumps(review, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            atomic_write_json(output, review)
             reviewer = review.get("reviewer", {})
             stage.metrics.update({
                 "passed": bool(review.get("passed")),
@@ -313,6 +405,7 @@ def review_episode(
                 "fact_check_count": len(review.get("fact_checks", [])),
                 "reported_cost_usd": reviewer.get("reported_cost_usd"),
                 "duration_api_ms": reviewer.get("duration_api_ms"),
+                "retry_count": reviewer.get("retry_count", 0),
                 "usage": reviewer.get("usage"),
             })
             if not review.get("passed"):
@@ -330,14 +423,24 @@ def review_episode(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="使用 Claude CLI 自动审查播客最终产物")
+    parser = argparse.ArgumentParser(description="使用 subagent 自动审查播客最终产物")
     parser.add_argument("folder")
     parser.add_argument("--out", default=None)
-    parser.add_argument("--model", default=os.environ.get("AI_REVIEW_MODEL", "opus"))
-    parser.add_argument("--effort", default=os.environ.get("AI_REVIEW_EFFORT", "max"))
+    parser.add_argument(
+        "--model", default=os.environ.get("SUBAGENT_REVIEW_MODEL", ""))
+    parser.add_argument(
+        "--effort", default=os.environ.get("SUBAGENT_REVIEW_EFFORT", "max"))
+    parser.add_argument(
+        "--rebind-provenance",
+        action="store_true",
+        help="仅在 metadata_only provenance 迁移后刷新原审查哈希",
+    )
     args = parser.parse_args()
-    review = review_episode(
-        args.folder, args.out, model=args.model, effort=args.effort)
+    if args.rebind_provenance:
+        review = rebind_provenance_review(args.folder, args.out)
+    else:
+        review = review_episode(
+            args.folder, args.out, model=args.model, effort=args.effort)
     print(json.dumps(review, ensure_ascii=False, indent=2))
     return 0 if review.get("passed") else 1
 

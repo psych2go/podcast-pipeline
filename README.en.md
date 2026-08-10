@@ -4,7 +4,7 @@
 
 > Turn English podcasts into Chinese scripts, producing a **TTS Chinese audio track** and a **self-contained HTML reader page**, deployed to Cloudflare (Pages + R2).
 
-An end-to-end pipeline: **fetch → transcribe → correct → script → narrate → render → publish**. Scripts are written by Claude following built-in prompts, narration via Fish Audio TTS, and the reader page is a designed, warm "book-paper" layout with an embedded audio player, collapsible TOC, and chapter numbering.
+An end-to-end pipeline: **fetch → transcribe → correct → script → narrate → render → publish**. Review and scripting tasks run through isolated Codex subagents, with evidence binding, quality gates, recoverable release transactions, reproducible ASR benchmarks, and Fish Audio narration.
 
 > 📌 This repo contains **methodology only** (scripts, prompts, docs, deploy config). The actual episode content (transcripts, scripts, MP3s) is private and **not in the repo** — you generate it locally under `content/` by running the pipeline.
 
@@ -20,11 +20,13 @@ Input format reference: [`examples/sample-script.md`](./examples/sample-script.m
 
 - 🎙️ **Multi-source fetch**: web transcripts (incl. JS-rendered and anti-scrape sites), RSS, local MP3 (ASR)
 - 📝 **Tiered correction**: correction policy decided by source type — forced for local ASR, skipped for official subtitles
-- ✍️ **Scripts by Claude**: follows `讲稿提示词.md` (intro paragraph, 400–900 char chapters, 3-tier speaker attribution, missing-points checklist)
+- ✍️ **Isolated agent orchestration**: Codex subagents receive allowlisted inputs and may commit only declared outputs
+- 🔎 **Evidence and quality gates**: transcript revisions, claim-level evidence, SHA-256 binding, AI review, and release preflight
+- 🎛️ **ASR quality engineering**: adaptive re-decoding, forced alignment, diarization, and a pinned AMI policy benchmark
 - 🔊 **Fish Audio TTS**: sliced by `## ` headings, sentence-boundary segmentation, inter-chapter silence, resumable
 - 📖 **Self-contained reader page**: warm design, built-in player (play / speed / volume / download), collapsible TOC, auto chapter numbering
 - ☁️ **Cloudflare deploy**: Pages hosts the site, R2 streams audio (Range-supported seeking)
-- 🤖 **One-command finish**: `catalog.py finish` runs catalog + site + index + R2 upload + deploy
+- 🤖 **Transactional release**: `catalog.py finish` / `finish-batch` run preflight, upload, deploy, remote verification, and recoverable state tracking
 
 ## Pipeline
 
@@ -37,7 +39,7 @@ raw transcript
         ▼  correction gate (tiered by source)
 corrected transcript
         │
-        ▼  write script (Claude, follows 讲稿提示词.md)
+        ▼  evidence mapping / isolated review / script generation
 script.md  ──▶ validator.py (intro / chapter size / format checks)
         │
         ▼  tts.py (Fish Audio, sliced by ## headings)
@@ -56,7 +58,7 @@ Full walkthrough in [`CLAUDE.md`](./CLAUDE.md). In short:
 
 1. **Fetch** — `python scripts/process.py "https://transcript-url"`
 2. **Correct** — decide by source type (forced for ASR, skip for official subtitles)
-3. **Write script** — Claude follows `scripts/讲稿提示词.md`
+3. **Review and write** — isolated subagents follow evidence maps and `scripts/讲稿提示词.md`
 4. **TTS + HTML** — `python scripts/process.py --name "name" --tts-only`
 5. **Publish** — `python scripts/catalog.py finish "name"` (catalog + site + R2 + deploy)
 
@@ -78,8 +80,12 @@ Cloudflare deploy needs `wrangler` (`npx wrangler login`, OAuth — no API token
 
 ## Tech Stack
 
-httpx + curl_cffi · Parakeet/Whisper ASR · pyannote diarization · Fish Audio TTS · Claude for scripting · vanilla HTML/CSS/JS reader page · Cloudflare Pages + R2
+httpx + curl_cffi · Whisper ASR · pyannote diarization · isolated Codex subagents · Fish Audio TTS · vanilla HTML/CSS/JS · Cloudflare Pages + R2
 
 ## License
 
 MIT — see [`LICENSE`](./LICENSE).
+
+The pinned AMI reference material under `benchmarks/ami/ES2004a/reference/`
+is licensed under CC BY 4.0; attribution and provenance are documented in the
+benchmark README.

@@ -1,0 +1,3 @@
+# Installed only into .venv-alignment by scripts/setup_alignment_env.py.
+nltk==3.10.2
+defusedxml>=0.7.1,<1

@@ -1,28 +1,30 @@
-"""Use Claude CLI to refine each content-map claim to minimal source segments."""
+"""Use a subagent to refine each content-map claim to minimal source segments."""
 import argparse
 import json
 import os
-import shutil
-import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 try:
     from content_map import (
         apply_claim_evidence_mapping,
+        enrich_content_map_evidence,
         load_json,
         save_json,
         validate_content_map,
     )
     from run_report import RunReport
+    from subagent import run_json_task
 except ImportError:
     from scripts.content_map import (
         apply_claim_evidence_mapping,
+        enrich_content_map_evidence,
         load_json,
         save_json,
         validate_content_map,
     )
     from scripts.run_report import RunReport
+    from scripts.subagent import run_json_task
 
 
 CLAIM_EVIDENCE_SCHEMA = {
@@ -43,7 +45,7 @@ CLAIM_EVIDENCE_SCHEMA = {
                         "type": "string",
                         "enum": ["high", "medium", "low"],
                     },
-                    "rationale": {"type": "string"},
+                    "rationale": {"type": "string", "minLength": 10},
                 },
                 "required": [
                     "claim_id", "segment_ids", "confidence", "rationale",
@@ -57,6 +59,30 @@ CLAIM_EVIDENCE_SCHEMA = {
 
 DEFAULT_BATCH_CHARS = 35000
 DEFAULT_CONCURRENCY = 3
+
+
+def _has_complete_claim_evidence(unit):
+    claims = unit.get("claims", [])
+    if not claims:
+        return True
+    evidence = unit.get("claim_evidence")
+    notes = unit.get("claim_evidence_notes")
+    if not isinstance(evidence, dict) or not isinstance(notes, dict):
+        return False
+    for index, _claim in enumerate(claims, start=1):
+        key = f"C{index:02d}"
+        segment_ids = evidence.get(key)
+        note = notes.get(key)
+        if not isinstance(segment_ids, list) or not segment_ids:
+            return False
+        if not isinstance(note, dict):
+            return False
+        if note.get("confidence") not in {"high", "medium"}:
+            return False
+        rationale = str(note.get("rationale", "")).strip()
+        if len("".join(rationale.split())) < 10:
+            return False
+    return True
 
 
 def _prompt(batch):
@@ -79,21 +105,14 @@ def _prompt(batch):
 """
 
 
-def _parse_claude_output(stdout):
-    wrapper = json.loads(stdout)
-    payload = wrapper.get("structured_output")
-    if isinstance(payload, dict):
-        return payload, wrapper
-    raw = wrapper.get("result", "")
-    return json.loads(raw), wrapper
-
-
-def _unit_payloads(content_map, transcript, unit_ids=None):
+def _unit_payloads(
+        content_map, transcript, unit_ids=None, skip_complete=False):
     segments = {
         segment.get("id"): {
             "id": segment.get("id"),
             "start": segment.get("start"),
             "end": segment.get("end"),
+            "synthetic_boundary": segment.get("synthetic_boundary", False),
             "text": segment.get("text", ""),
         }
         for segment in transcript.get("segments", [])
@@ -102,6 +121,8 @@ def _unit_payloads(content_map, transcript, unit_ids=None):
     payloads = []
     for unit in content_map.get("units", []):
         if unit_ids and unit.get("id") not in unit_ids:
+            continue
+        if skip_complete and _has_complete_claim_evidence(unit):
             continue
         claims = unit.get("claims", [])
         if not claims:
@@ -141,37 +162,25 @@ def _batches(payloads, max_chars):
     return batches
 
 
-def _run_batch(claude, batch, model, effort):
-    cmd = [
-        claude,
-        "--safe-mode",
-        "-p",
-        _prompt(batch),
-        "--effort",
-        effort,
-        "--output-format",
-        "json",
-        "--json-schema",
-        json.dumps(CLAIM_EVIDENCE_SCHEMA, ensure_ascii=False),
-        "--permission-mode",
-        "dontAsk",
-        "--no-session-persistence",
-        "--allowedTools",
-        "",
-    ]
-    if model:
-        cmd.extend(["--model", model])
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
+def _run_batch(folder, batch, model, effort, batch_index):
+    result = run_json_task(
+        folder,
+        _prompt(batch) + (
+            f"\n本次 claim evidence 任务 effort 要求：{effort}。"
+            "只返回符合 schema 的 JSON，不修改任何文件。"
+        ),
+        CLAIM_EVIDENCE_SCHEMA,
+        task_name=f"claim_evidence_{batch_index:03d}",
+        model=model or None,
         timeout=600,
-        check=False,
     )
-    if result.returncode != 0:
+    payload = result["payload"]
+    if isinstance(payload, list):
+        payload = {"claims": payload}
+    if not isinstance(payload, dict):
         raise RuntimeError(
-            f"Claude claim evidence 批次失败: {result.stderr[-1000:]}")
-    return _parse_claude_output(result.stdout)
+            "claim evidence 返回值必须是对象或 claim 数组")
+    return payload, result
 
 
 def refine_claim_evidence(
@@ -188,28 +197,74 @@ def refine_claim_evidence(
     if missing:
         raise RuntimeError(f"缺少 claim evidence 输入文件: {missing}")
 
-    claude = shutil.which(os.environ.get("AI_REVIEW_COMMAND", "claude"))
-    if not claude:
-        raise RuntimeError("找不到 claude CLI，无法精炼 claim evidence")
     content_map = load_json(content_map_path)
     transcript = load_json(transcript_path)
+    content_map, transcript = enrich_content_map_evidence(
+        content_map, transcript)
+    save_json(content_map_path, content_map)
     payloads = _unit_payloads(
-        content_map, transcript, set(unit_ids or []))
+        content_map,
+        transcript,
+        set(unit_ids or []),
+        skip_complete=True,
+    )
     if not payloads:
-        raise RuntimeError("没有可精炼的 claim；请检查 --unit 参数")
+        errors, warnings = validate_content_map(content_map, transcript)
+        if errors:
+            raise RuntimeError(
+                "没有待精炼 claim，但现有 content map 校验失败: "
+                + "; ".join(errors[:10]))
+        return {
+            "claim_count": 0,
+            "batch_count": 0,
+            "max_batch_chars": max_batch_chars,
+            "concurrency": concurrency,
+            "warning_count": len(warnings),
+            "reported_cost_usd": None,
+            "retry_count": 0,
+            "duration_ms": 0,
+        }
     batches = _batches(payloads, max_batch_chars)
     mappings = []
     wrappers = []
+    failures = []
     with ThreadPoolExecutor(
             max_workers=max(1, min(concurrency, len(batches)))) as pool:
         futures = {
-            pool.submit(_run_batch, claude, batch, model, effort): batch
-            for batch in batches
+            pool.submit(
+                _run_batch, folder, batch, model, effort, index): batch
+            for index, batch in enumerate(batches, start=1)
         }
         for future in as_completed(futures):
-            payload, wrapper = future.result()
-            mappings.extend(payload.get("claims", []))
-            wrappers.append(wrapper)
+            batch = futures[future]
+            try:
+                payload, wrapper = future.result()
+                batch_mappings = payload.get("claims", [])
+                batch_unit_ids = {
+                    item["unit_id"] for item in batch
+                }
+                content_map, transcript = apply_claim_evidence_mapping(
+                    content_map,
+                    transcript,
+                    batch_mappings,
+                    unit_ids=batch_unit_ids,
+                )
+                save_json(content_map_path, content_map)
+                mappings.extend(batch_mappings)
+                wrappers.append(wrapper)
+            except Exception as exc:
+                failures.append(exc)
+    if failures:
+        completed_units = sum(
+            _has_complete_claim_evidence(unit)
+            for unit in content_map.get("units", [])
+            if unit.get("claims")
+        )
+        raise RuntimeError(
+            f"claim evidence 批次失败；已保存 {completed_units} 个 unit，"
+            "可直接重跑继续: "
+            f"{failures[0]}"
+        ) from failures[0]
 
     expected_claim_ids = {
         claim["claim_id"]
@@ -226,24 +281,20 @@ def refine_claim_evidence(
             "claim evidence 返回集合不完整: "
             f"missing={missing_claim_ids}, extra={extra_claim_ids}")
 
-    content_map, transcript = apply_claim_evidence_mapping(
-        content_map,
-        transcript,
-        mappings,
-    )
     errors, warnings = validate_content_map(content_map, transcript)
     if errors:
         raise RuntimeError(
             "claim evidence 精炼后校验失败: " + "; ".join(errors[:10]))
     content_map["claim_evidence_refiner"] = {
-        "command": "claude",
+        "command": "codex-subagent",
         "model": model or "default",
         "effort": effort,
         "batch_count": len(batches),
         "max_batch_chars": max_batch_chars,
         "concurrency": concurrency,
-        "reported_cost_usd": sum(
-            wrapper.get("total_cost_usd") or 0 for wrapper in wrappers),
+        "reported_cost_usd": None,
+        "retry_count": sum(
+            wrapper.get("retry_count", 0) for wrapper in wrappers),
         "duration_ms": sum(
             wrapper.get("duration_ms") or 0 for wrapper in wrappers),
     }
@@ -256,6 +307,8 @@ def refine_claim_evidence(
         "warning_count": len(warnings),
         "reported_cost_usd": content_map[
             "claim_evidence_refiner"]["reported_cost_usd"],
+        "retry_count": content_map[
+            "claim_evidence_refiner"]["retry_count"],
         "duration_ms": content_map[
             "claim_evidence_refiner"]["duration_ms"],
     }
@@ -263,12 +316,12 @@ def refine_claim_evidence(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="使用 Claude 为 content_map 生成 claim 级最小转录证据")
+        description="使用 subagent 为 content_map 生成 claim 级最小转录证据")
     parser.add_argument("folder")
     parser.add_argument(
-        "--model", default=os.environ.get("CLAIM_EVIDENCE_MODEL", "sonnet"))
+        "--model", default=os.environ.get("SUBAGENT_CLAIM_MODEL", ""))
     parser.add_argument(
-        "--effort", default=os.environ.get("CLAIM_EVIDENCE_EFFORT", "high"))
+        "--effort", default=os.environ.get("SUBAGENT_CLAIM_EFFORT", "high"))
     parser.add_argument(
         "--batch-chars",
         type=int,

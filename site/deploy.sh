@@ -6,9 +6,11 @@ set -e
 #   1. 先执行 wrangler login（OAuth 登录）
 #   2. 运行 bash deploy.sh
 
-SRC="."
-PROJECT="podcast-scripts"
-R2_BUCKET="podcast-audio"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONTENT_DIR="${PODCAST_DIR:-$REPO_ROOT/content}"
+PROJECT="${PAGES_PROJECT:-your-pages-project}"
+R2_BUCKET="${R2_BUCKET:-your-r2-bucket}"
 
 echo "=== 1/3: 创建 R2 桶（如已存在则跳过）==="
 npx wrangler r2 bucket create $R2_BUCKET --no-insights || true
@@ -22,7 +24,7 @@ while IFS= read -r -d '' mp3_path; do
     echo "  Uploading $filename..."
     npx wrangler r2 object put "${R2_BUCKET}/${folder}/${filename}" \
       --file "$mp3_path" --content-type audio/mpeg --remote
-done < <(find /home/zhuying/podcast-pipeline/content -name "*.mp3" \
+done < <(find "$CONTENT_DIR" -name "*.mp3" \
   -not -path "*/audio/*" -not -name "*原始音频*" -print0)
 
 echo "=== 3/3: 部署 Pages ==="

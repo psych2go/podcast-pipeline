@@ -4,75 +4,89 @@
 import re
 
 
-def validate_and_fix(text):
-    """校验讲稿质量，自动修复常见问题。返回 (text, issues_list)。"""
+def validate_and_fix(text, return_details=False):
+    """校验讲稿并执行既有机械修复，可选返回可审计的分类明细。"""
     issues = []
+    auto_fixes = []
+    warnings = []
+
+    def report(message, *, fixed=False):
+        issues.append(message)
+        (auto_fixes if fixed else warnings).append(message)
 
     # 1. 检查 ## 标题数量
     headers = re.findall(r"^## .+", text, re.MULTILINE)
     if len(headers) < 3:
-        issues.append(f"标题太少（{len(headers)}个，建议至少 3 个）")
+        report(f"标题太少（{len(headers)}个，建议至少 3 个）")
 
     # 2. 修复 ## ## 双标题（现有内容中发现的 bug）
     if re.search(r"^## ## ", text, re.MULTILINE):
         text = re.sub(r"^## ## ", r"## ", text, flags=re.MULTILINE)
-        issues.append("修复了 ## ## 双标题")
+        report("修复了 ## ## 双标题", fixed=True)
 
     # 3. 修复 ### → ##
     if "###" in text:
         text = text.replace("### ", "## ")
-        issues.append("修复了 ### -> ##")
+        report("修复了 ### -> ##", fixed=True)
 
     # 4. 清除 ** 加粗
     if "**" in text:
         text = text.replace("**", "")
-        issues.append("清除了 ** 加粗")
+        report("清除了 ** 加粗", fixed=True)
 
     # 5. 清除 * 斜体（单个星号，排除双星号已处理的）
     if re.search(r"(?<!\*)\*(?!\*)", text):
         text = re.sub(r"(?<!\*)\*(?!\*)", "", text)
-        issues.append("清除了 * 斜体")
+        report("清除了 * 斜体", fixed=True)
 
     # 6. 替换破折号
     if "——" in text:
         text = text.replace("——", "，")
-        issues.append("替换了破折号")
+        report("替换了破折号", fixed=True)
 
     # 7. 清除分隔线
     if re.search(r"^---+\s*$", text, re.MULTILINE):
         text = re.sub(r"^---+\s*$", "", text, flags=re.MULTILINE)
-        issues.append("清除了分隔线")
+        report("清除了分隔线", fixed=True)
 
     # 8. 清除树形图符号
     for sym in ["├", "└", "│", "━"]:
         if sym in text:
             text = text.replace(sym, "")
-            issues.append(f"清除了符号 {sym}")
+            report(f"清除了符号 {sym}", fixed=True)
 
     # 9. 清除代码块
     if "```" in text:
         text = re.sub(r"```[\s\S]*?```", "", text)
-        issues.append("清除了代码块")
+        report("清除了代码块", fixed=True)
 
     # 10. 检查私人化收尾
     for phrase in ["通勤愉快", "我们下期见", "我们下本书见", "大家好"]:
         if phrase in text:
             text = text.replace(phrase, "")
-            issues.append(f"清除了私人化表达：{phrase}")
+            report(f"清除了私人化表达：{phrase}", fixed=True)
 
     # 11. 检查篇幅
     if len(text) < 5000:
-        issues.append(f"篇幅偏短（{len(text)}字，建议 >= 5000）")
+        report(f"篇幅偏短（{len(text)}字，建议 >= 5000）")
 
     if issues:
-        print(
-            f"[校验] 发现 {len(issues)} 个问题"
-            f"（可自动修复项已处理）: {'; '.join(issues)}",
-            flush=True,
-        )
+        summary = [f"[校验] 发现 {len(issues)} 个问题"]
+        if auto_fixes:
+            summary.append(
+                f"已自动修复 {len(auto_fixes)} 项: {'; '.join(auto_fixes)}")
+        if warnings:
+            summary.append(
+                f"仅报告 {len(warnings)} 项: {'; '.join(warnings)}")
+        print("；".join(summary), flush=True)
     else:
         print("[校验] 通过，无问题", flush=True)
 
+    if return_details:
+        return text, issues, {
+            "auto_fixes": auto_fixes,
+            "warnings": warnings,
+        }
     return text, issues
 
 
