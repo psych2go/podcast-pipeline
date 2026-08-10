@@ -1,6 +1,8 @@
 """
 讲稿质量校验与自动修复 + 句子边界切片。
 """
+import copy
+import hashlib
 import re
 
 
@@ -121,6 +123,235 @@ def _split_chapters(text):
         elif not chapters:
             preamble = p
     return preamble, chapters
+
+
+_CN_DIGITS = "零一二三四五六七八九"
+_CN_SMALL_UNITS = ("", "十", "百", "千")
+_CN_BIG_UNITS = ("", "万", "亿", "兆")
+
+
+def _four_digit_chinese(value):
+    result = []
+    pending_zero = False
+    for position in range(3, -1, -1):
+        digit = value // (10 ** position) % 10
+        if digit:
+            if pending_zero and result:
+                result.append("零")
+            result.append(_CN_DIGITS[digit])
+            if position:
+                result.append(_CN_SMALL_UNITS[position])
+            pending_zero = False
+        elif result and value % (10 ** position or 1):
+            pending_zero = True
+    text = "".join(result)
+    if text.startswith("一十"):
+        text = text[1:]
+    return text
+
+
+def integer_to_chinese(value):
+    """Convert a non-negative integer without changing its magnitude."""
+    value = int(value)
+    if value == 0:
+        return "零"
+    groups = []
+    while value:
+        groups.append(value % 10000)
+        value //= 10000
+    result = []
+    pending_zero = False
+    for index in range(len(groups) - 1, -1, -1):
+        group = groups[index]
+        if not group:
+            if result:
+                pending_zero = True
+            continue
+        if result and (pending_zero or group < 1000):
+            if result[-1] != "零":
+                result.append("零")
+        result.append(_four_digit_chinese(group))
+        if index:
+            result.append(_CN_BIG_UNITS[index])
+        pending_zero = False
+    return "".join(result)
+
+
+def _normalize_known_terms(text):
+    changes = False
+
+    def oral_directive(match):
+        nonlocal changes
+        changes = True
+        return (
+            match.group(1)
+            + "三零零九，正式编号为三零零零点零九"
+        )
+
+    text = re.sub(
+        r"((?:自主武器(?:系统)?(?:指令|标准))"
+        r"[^。！？\n]{0,24}?)(?<!\d)3009(?!\d)",
+        oral_directive,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    def formal_directive(match):
+        nonlocal changes
+        changes = True
+        return match.group(1) + "三零零零点零九"
+
+    text = re.sub(
+        r"((?:自主武器(?:系统)?(?:指令|标准))"
+        r"[^。！？\n]{0,24}?)(?<!\d)3000\.09(?!\d)",
+        formal_directive,
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text, changes
+
+
+def _normalize_arabic_numbers(text):
+    changed = False
+    pattern = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?%?")
+
+    def replace(match):
+        nonlocal changed
+        token = match.group(0)
+        percent = token.endswith("%")
+        core = token[:-1] if percent else token
+        compact = core.replace(",", "")
+        following = text[match.end():match.end() + 4]
+        if "." in compact:
+            integer, fraction = compact.split(".", 1)
+            spoken = (
+                integer_to_chinese(int(integer))
+                + "点"
+                + "".join(_CN_DIGITS[int(digit)] for digit in fraction)
+            )
+        elif len(compact) == 4 and re.match(r"\s*年", following):
+            spoken = "".join(_CN_DIGITS[int(digit)] for digit in compact)
+        else:
+            spoken = integer_to_chinese(int(compact))
+        changed = True
+        return f"百分之{spoken}" if percent else spoken
+
+    return pattern.sub(replace, text), changed
+
+
+def _chapter_blocks(text):
+    parts = re.split(r"\n(?=## )", (text or "").strip())
+    preamble = []
+    chapters = []
+    for part in parts:
+        if part.startswith("## "):
+            lines = part.split("\n", 1)
+            chapters.append({
+                "title": lines[0][3:].strip(),
+                "body": lines[1].strip() if len(lines) > 1 else "",
+            })
+        else:
+            preamble.append(part.strip())
+    return "\n\n".join(item for item in preamble if item), chapters
+
+
+def _summary_chapter(summary_map, title):
+    for chapter in summary_map.get("chapters", []) or []:
+        if isinstance(chapter, dict) and chapter.get("title") == title:
+            return chapter
+    return None
+
+
+def _merge_summary_chapters(summary_map, left_title, right_title):
+    left = _summary_chapter(summary_map, left_title)
+    right = _summary_chapter(summary_map, right_title)
+    if not left or not right:
+        return
+    for key in ("unit_ids", "claim_ids"):
+        left[key] = list(dict.fromkeys(
+            list(left.get(key, []) or []) + list(right.get(key, []) or [])
+        ))
+    summary_map["chapters"] = [
+        chapter
+        for chapter in summary_map.get("chapters", [])
+        if chapter is not right
+    ]
+
+
+def normalize_briefing_artifacts(text, summary_map):
+    """Normalize TTS text and keep summary-map chapter bindings in sync."""
+    original = text
+    summary_map = copy.deepcopy(summary_map or {"chapters": []})
+    changes = []
+
+    text, known_terms_changed = _normalize_known_terms(text)
+    if known_terms_changed:
+        changes.append("normalized_known_terms")
+    text, numbers_changed = _normalize_arabic_numbers(text)
+    if numbers_changed:
+        changes.append("normalized_numbers")
+
+    compact = re.sub(
+        r"(?<=[\u3400-\u9fff])[ \t]+(?=[\u3400-\u9fff])",
+        "",
+        text,
+    )
+    if compact != text:
+        text = compact
+        changes.append("removed_cjk_spaces")
+
+    preamble, chapters = _chapter_blocks(text)
+    merged = False
+    while len(chapters) > 3:
+        fragment_index = next(
+            (
+                index for index, chapter in enumerate(chapters)
+                if _zh_chars(chapter["body"]) < MIN_CHAPTER_CHARS
+            ),
+            None,
+        )
+        if fragment_index is None:
+            break
+        if fragment_index + 1 < len(chapters):
+            left_index = fragment_index
+            right_index = fragment_index + 1
+        else:
+            left_index = fragment_index - 1
+            right_index = fragment_index
+        left = chapters[left_index]
+        right = chapters[right_index]
+        left["body"] = (left["body"] + "\n\n" + right["body"]).strip()
+        _merge_summary_chapters(
+            summary_map, left["title"], right["title"])
+        chapters.pop(right_index)
+        merged = True
+    if merged:
+        changes.append("merged_fragment_chapters")
+
+    rendered = [preamble] if preamble else []
+    rendered.extend(
+        f"## {chapter['title']}\n\n{chapter['body']}"
+        for chapter in chapters
+    )
+    text = "\n\n".join(rendered).strip()
+    if original.endswith("\n"):
+        text += "\n"
+
+    chapter_bodies = {
+        chapter["title"]: chapter["body"] for chapter in chapters
+    }
+    for chapter in summary_map.get("chapters", []) or []:
+        if not isinstance(chapter, dict):
+            continue
+        body = chapter_bodies.get(chapter.get("title"))
+        if body is not None:
+            chapter["body_sha256"] = hashlib.sha256(
+                body.strip().encode("utf-8")
+            ).hexdigest()
+
+    if text != original and not changes:
+        changes.append("normalized_formatting")
+    return text, summary_map, changes
 
 
 def structure_report(text):

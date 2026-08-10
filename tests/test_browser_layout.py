@@ -121,3 +121,54 @@ class MobileBrowserLayoutTests(unittest.TestCase):
                 self.assertTrue(state["backLinkHit"])
                 self.assertEqual(state["playerVisibility"], "hidden")
                 page.close()
+
+    def test_desktop_reading_column_and_toc_do_not_overlap(self):
+        html = _build_html(
+            (
+                "Google's AI Brain Drain, SpaceX's Huge Quarter, "
+                "Airtable's 90% Collapse, US Data Fuels China AI"
+            ),
+            [
+                (-1, None, "导览内容足够长，用于桌面阅读版式测试。"),
+                (0, "第一章：Google 失去的只是人才吗", "正文内容。" * 300),
+                (1, "第二章：前沿智能为什么仍有溢价", "正文内容。" * 300),
+            ],
+            word_count=6200,
+            date_str="2026-08-10",
+            mp3_url="episode.mp3",
+        )
+        page = self.browser.new_page(
+            viewport={"width": 1440, "height": 1000})
+        page.set_content(html, wait_until="domcontentloaded")
+        page.wait_for_timeout(100)
+        geometry = page.evaluate("""
+        () => {
+          const title = document.querySelector('.hero h1')
+            .getBoundingClientRect();
+          const chapter = document.querySelector('.chapter:not(.chapter-intro)')
+            .getBoundingClientRect();
+          const paragraph = document.querySelector(
+            '.chapter:not(.chapter-intro) p').getBoundingClientRect();
+          const toc = document.querySelector('.toc').getBoundingClientRect();
+          return {
+            titleRight: title.right,
+            titleBottom: title.bottom,
+            chapterRight: chapter.right,
+            paragraphWidth: paragraph.width,
+            tocLeft: toc.left,
+            tocRight: toc.right,
+            viewportWidth: innerWidth,
+            documentScrollWidth: document.documentElement.scrollWidth,
+          };
+        }
+        """)
+        self.assertLessEqual(
+            geometry["titleRight"], geometry["viewportWidth"])
+        self.assertLess(geometry["titleBottom"], 600)
+        self.assertLessEqual(geometry["paragraphWidth"], 672)
+        self.assertLessEqual(geometry["chapterRight"], geometry["tocLeft"])
+        self.assertLessEqual(
+            geometry["tocRight"], geometry["viewportWidth"])
+        self.assertLessEqual(
+            geometry["documentScrollWidth"], geometry["viewportWidth"])
+        page.close()

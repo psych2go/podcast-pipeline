@@ -61,6 +61,40 @@ DEFAULT_BATCH_CHARS = 35000
 DEFAULT_CONCURRENCY = 3
 
 
+def deterministic_fallback_mappings(payloads):
+    """Build auditable claim mappings when every configured runner is down.
+
+    The fallback distributes claims across the unit's ordered source segments
+    instead of copying the complete unit evidence onto every claim. Final AI
+    review still verifies semantic correctness before publication.
+    """
+    mappings = []
+    for payload in payloads:
+        segments = [
+            segment.get("id")
+            for segment in payload.get("segments", [])
+            if segment.get("id")
+        ]
+        claims = payload.get("claims", [])
+        if not segments and claims:
+            raise RuntimeError(
+                f"{payload.get('unit_id')}: 无片段可用于确定性证据降级")
+        for index, claim in enumerate(claims):
+            segment_id = segments[
+                min(len(segments) - 1, index * len(segments) // len(claims))
+            ]
+            mappings.append({
+                "claim_id": claim["claim_id"],
+                "segment_ids": [segment_id],
+                "confidence": "medium",
+                "rationale": (
+                    "外部审查服务不可用，按 claim 顺序绑定到该单元的"
+                    "对应原始片段，最终发布审查必须再次核对语义。"
+                ),
+            })
+    return mappings
+
+
 def _has_complete_claim_evidence(unit):
     claims = unit.get("claims", [])
     if not claims:
@@ -228,6 +262,7 @@ def refine_claim_evidence(
     mappings = []
     wrappers = []
     failures = []
+    fallback_claim_count = 0
     with ThreadPoolExecutor(
             max_workers=max(1, min(concurrency, len(batches)))) as pool:
         futures = {
@@ -253,7 +288,33 @@ def refine_claim_evidence(
                 mappings.extend(batch_mappings)
                 wrappers.append(wrapper)
             except Exception as exc:
-                failures.append(exc)
+                try:
+                    batch_mappings = deterministic_fallback_mappings(batch)
+                    batch_unit_ids = {
+                        item["unit_id"] for item in batch
+                    }
+                    content_map, transcript = apply_claim_evidence_mapping(
+                        content_map,
+                        transcript,
+                        batch_mappings,
+                        unit_ids=batch_unit_ids,
+                    )
+                    save_json(content_map_path, content_map)
+                    mappings.extend(batch_mappings)
+                    fallback_claim_count += len(batch_mappings)
+                    wrappers.append({
+                        "retry_count": 0,
+                        "duration_ms": 0,
+                        "fallback_error": str(exc),
+                    })
+                    print(
+                        "[claim evidence][降级] subagent 不可用，"
+                        f"已为 {len(batch_mappings)} 条 claim 写入"
+                        "确定性片段映射；最终 AI 审查仍会阻断错误发布",
+                        flush=True,
+                    )
+                except Exception as fallback_exc:
+                    failures.append(fallback_exc)
     if failures:
         completed_units = sum(
             _has_complete_claim_evidence(unit)
@@ -286,7 +347,10 @@ def refine_claim_evidence(
         raise RuntimeError(
             "claim evidence 精炼后校验失败: " + "; ".join(errors[:10]))
     content_map["claim_evidence_refiner"] = {
-        "command": "codex-subagent",
+        "command": (
+            "codex-subagent+deterministic-fallback"
+            if fallback_claim_count else "codex-subagent"
+        ),
         "model": model or "default",
         "effort": effort,
         "batch_count": len(batches),
@@ -297,6 +361,7 @@ def refine_claim_evidence(
             wrapper.get("retry_count", 0) for wrapper in wrappers),
         "duration_ms": sum(
             wrapper.get("duration_ms") or 0 for wrapper in wrappers),
+        "fallback_claim_count": fallback_claim_count,
     }
     save_json(content_map_path, content_map)
     return {
@@ -311,6 +376,7 @@ def refine_claim_evidence(
             "claim_evidence_refiner"]["retry_count"],
         "duration_ms": content_map[
             "claim_evidence_refiner"]["duration_ms"],
+        "fallback_claim_count": fallback_claim_count,
     }
 
 

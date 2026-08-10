@@ -213,6 +213,7 @@ def apply_claim_evidence_mapping(
 
 def enrich_summary_map_evidence(
         summary_map, notes_text, content_map, briefing_text=None):
+    normalize_summary_claim_ids(summary_map)
     summary_map["schema_version"] = SUMMARY_MAP_SCHEMA_VERSION
     summary_map["notes_sha256"] = body_sha256(notes_text)
     summary_map["notes_claim_ids"] = unit_claim_ids(content_map)
@@ -222,6 +223,35 @@ def enrich_summary_map_evidence(
             title = chapter.get("title")
             if title in chapters:
                 chapter["body_sha256"] = body_sha256(chapters[title])
+    return summary_map
+
+
+def normalize_claim_id(value):
+    """Return the canonical Uxxxx-Cxx claim identifier when recognizable."""
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(U\d{4,})[.\-](C\d{2,})", text, re.IGNORECASE)
+    if not match:
+        return text
+    return f"{match.group(1).upper()}-{match.group(2).upper()}"
+
+
+def normalize_summary_claim_ids(summary_map):
+    """Normalize common subagent claim-id variants in place."""
+    if not isinstance(summary_map, dict):
+        return summary_map
+    for chapter in summary_map.get("chapters", []) or []:
+        if not isinstance(chapter, dict):
+            continue
+        claim_ids = chapter.get("claim_ids")
+        if isinstance(claim_ids, list):
+            chapter["claim_ids"] = [
+                normalize_claim_id(claim_id) for claim_id in claim_ids
+            ]
+    notes_claim_ids = summary_map.get("notes_claim_ids")
+    if isinstance(notes_claim_ids, list):
+        summary_map["notes_claim_ids"] = [
+            normalize_claim_id(claim_id) for claim_id in notes_claim_ids
+        ]
     return summary_map
 
 

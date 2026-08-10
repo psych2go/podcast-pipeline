@@ -737,12 +737,38 @@ def health(since="7d", output=None):
 
 # ── 一键收尾 ──────────────────────────────────────────────────────
 
+def _is_wrangler_command(cmd):
+    return any(Path(str(part)).name == "wrangler" for part in cmd)
+
+
+def _wrangler_environment():
+    env = os.environ.copy()
+    for key in (
+            "CLOUDFLARE_API_TOKEN",
+            "CLOUDFLARE_API_KEY",
+            "CLOUDFLARE_EMAIL"):
+        env.pop(key, None)
+    return env
+
+
 def _run_with_output(cmd, cwd, dry_run=False):
     if dry_run:
         print("  [dry-run] " + " ".join(cmd))
         return True, "dry-run"
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=600)
+        run_cwd = SITE_DIR if _is_wrangler_command(cmd) else cwd
+        run_env = (
+            _wrangler_environment()
+            if _is_wrangler_command(cmd) else None
+        )
+        r = subprocess.run(
+            cmd,
+            cwd=run_cwd,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
         out = "\n".join(
             value for value in ((r.stdout or "").strip(), (r.stderr or "").strip())
             if value
@@ -760,6 +786,13 @@ def _run_with_output(cmd, cwd, dry_run=False):
 
 def _run(cmd, cwd, dry_run=False):
     return _run_with_output(cmd, cwd, dry_run=dry_run)[0]
+
+
+def _run_wrangler(cmd, dry_run=False):
+    """Run Wrangler away from the repository .env using OAuth by default."""
+    if not _is_wrangler_command(cmd):
+        raise ValueError("_run_wrangler 只接受 Wrangler 命令")
+    return _run_with_output(cmd, SITE_DIR, dry_run=dry_run)
 
 
 def _verify_publish_with_retry(*args, attempts=4, delay=3):

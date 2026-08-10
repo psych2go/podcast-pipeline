@@ -64,7 +64,11 @@ from agent_pipeline import content_pipeline_needed, run_content_pipeline
 from release import prepare_release
 from run_report import RunReport
 from tts import build_tts_plan
-from validator import validate_and_fix, structure_report
+from validator import (
+    normalize_briefing_artifacts,
+    structure_report,
+    validate_and_fix,
+)
 
 
 # 讲稿文件名候选（新统一用 讲书稿.md；简报.md 仅向后兼容旧产物）
@@ -544,6 +548,33 @@ def _run_structure_check(text):
         print("[结构体检] 通过", flush=True)
 
 
+def _prepare_briefing_files(folder, briefing_path):
+    """Normalize briefing text and keep summary-map hashes synchronized."""
+    text = briefing_path.read_text(encoding="utf-8")
+    summary_path = folder / "summary_map.json"
+    summary_map = (
+        json.loads(summary_path.read_text(encoding="utf-8"))
+        if summary_path.exists() else {"chapters": []}
+    )
+    normalized, summary_map, normalization_changes = (
+        normalize_briefing_artifacts(text, summary_map)
+    )
+    fixed, issues, validation = validate_and_fix(
+        normalized, return_details=True)
+    fixed, summary_map, post_validation_changes = (
+        normalize_briefing_artifacts(fixed, summary_map)
+    )
+    normalization_changes.extend(
+        change for change in post_validation_changes
+        if change not in normalization_changes
+    )
+    if fixed != text:
+        atomic_write_text(briefing_path, fixed)
+    if summary_path.exists():
+        atomic_write_json(summary_path, summary_map)
+    return text, fixed, issues, validation, normalization_changes
+
+
 def _run_quality_gate(
         folder, auto_ai_review=True, allow_legacy=False, run_report=None):
     """Compatibility wrapper around the shared preflight implementation."""
@@ -566,8 +597,13 @@ def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
         if briefing_path.exists():
             text = briefing_path.read_text(encoding="utf-8")
             _run_structure_check(text)
-            fixed, issues, validation = validate_and_fix(
-                text, return_details=True)
+            (
+                text,
+                fixed,
+                issues,
+                validation,
+                normalization_changes,
+            ) = _prepare_briefing_files(folder, briefing_path)
             if stage is not None:
                 stage.metrics.update({
                     "validator_issue_count": len(issues),
@@ -575,6 +611,7 @@ def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
                         validation["auto_fixes"]),
                     "automatic_fixes": validation["auto_fixes"],
                     "validator_warnings": validation["warnings"],
+                    "normalization_changes": normalization_changes,
                     "briefing_modified": fixed != text,
                     "briefing_sha256_before": _text_sha256(text),
                     "briefing_sha256_after": _text_sha256(fixed),
@@ -648,14 +685,20 @@ def run_html_step(
     with _stage(run_report, "html_quality_gate") as stage:
         text = md_path.read_text(encoding="utf-8")
         _run_structure_check(text)
-        fixed, issues, validation = validate_and_fix(
-            text, return_details=True)
+        (
+            text,
+            fixed,
+            issues,
+            validation,
+            normalization_changes,
+        ) = _prepare_briefing_files(folder, md_path)
         if stage is not None:
             stage.metrics.update({
                 "validator_issue_count": len(issues),
                 "automatic_fix_count": len(validation["auto_fixes"]),
                 "automatic_fixes": validation["auto_fixes"],
                 "validator_warnings": validation["warnings"],
+                "normalization_changes": normalization_changes,
                 "briefing_modified": fixed != text,
                 "briefing_sha256_before": _text_sha256(text),
                 "briefing_sha256_after": _text_sha256(fixed),

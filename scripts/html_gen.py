@@ -140,6 +140,15 @@ def _build_html(
     content_html = "\n\n".join(content_parts)
 
     safe_title = _escape_html(title)
+    hero_title = title
+    if len(hero_title) > 90 and " — " in hero_title:
+        hero_title = hero_title.split(" — ", 1)[0].strip()
+    safe_hero_title = _escape_html(hero_title)
+    hero_title_class = (
+        "title-xlong" if len(hero_title) > 90
+        else "title-long" if len(hero_title) > 55
+        else ""
+    )
     wc_str = f"{word_count:,} 字" if word_count else ""
     date_str = date_str or date.today().isoformat()
 
@@ -148,6 +157,8 @@ def _build_html(
     for key, val in {
         "title": safe_title,
         "podcast_title": safe_title,
+        "hero_title": safe_hero_title,
+        "hero_title_class": hero_title_class,
         "date": date_str,
         "word_count": wc_str,
         "toc_items": toc_html,
@@ -590,6 +601,374 @@ body:not(.toc-hidden) main {
     .toc { width: min(86vw, var(--rail)); }
     body:not(.toc-hidden) .toc-toggle { left: 0.75rem; }
 }
+
+/* Kami-inspired reading refinement: warm paper, one ink color, restrained type. */
+:root {
+    --ink: #141413;
+    --ink-raised: #252523;
+    --ink-soft: #66645e;
+    --paper: #f5f4ed;
+    --paper-light: #faf9f5;
+    --paper-deep: #e8e6dc;
+    --accent: #1b365d;
+    --accent-light: #2d5a8a;
+    --line: #dedcd2;
+    --rail: 15.5rem;
+    --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, Georgia, serif;
+    --sans: var(--serif);
+    --mono: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+}
+html { font-size: 16px; }
+body {
+    color: var(--ink);
+    background: var(--paper);
+    font-family: var(--serif);
+    font-size: 1rem;
+    line-height: 1.75;
+    letter-spacing: 0;
+}
+body::after { display: none; }
+::selection { color: var(--paper-light); background: var(--accent); }
+:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+    outline-offset: 3px;
+}
+.progress-bar { height: 2px; background: var(--accent); }
+
+main,
+body:not(.toc-hidden) main {
+    width: min(calc(100% - 3rem), 70rem);
+    margin-inline: auto;
+    padding-bottom: 7rem;
+}
+.hero,
+.player {
+    width: min(100%, 48rem);
+    margin-left: clamp(0rem, 4vw, 4.5rem);
+}
+.hero {
+    padding: clamp(5.5rem, 9vw, 7.5rem) 0 2rem;
+    border-bottom: 1px solid var(--line);
+}
+.hero-kicker {
+    margin-bottom: 1rem;
+    color: var(--accent);
+    font: 500 0.72rem/1.4 var(--mono);
+    letter-spacing: 0;
+    text-transform: none;
+}
+.hero h1 {
+    max-width: 26ch;
+    color: var(--ink);
+    font: 500 clamp(2.5rem, 4.6vw, 3.9rem)/1.14 var(--serif);
+    letter-spacing: 0;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+}
+.hero h1.title-long {
+    font-size: clamp(2.35rem, 4vw, 3.45rem);
+}
+.hero h1.title-xlong {
+    font-size: clamp(2.2rem, 3.6vw, 3.1rem);
+}
+.hero-sub {
+    gap: 0.65rem;
+    margin-top: 1.4rem;
+    color: var(--ink-soft);
+    font: 500 0.75rem/1.5 var(--mono);
+    letter-spacing: 0;
+}
+.hero-divider { display: none; }
+
+.toc {
+    inset: 6.5rem max(1.5rem, calc((100vw - 70rem) / 2)) auto auto;
+    width: var(--rail);
+    max-height: calc(100dvh - 8rem);
+    padding: 0;
+    color: var(--ink-soft);
+    background: transparent;
+    border: 0;
+    overflow-y: auto;
+}
+.toc-inner { max-width: none; }
+.toc-brand { margin-bottom: 2rem; }
+.back-link {
+    padding: 0.55rem 0;
+    color: var(--ink-soft);
+    font-size: 0.75rem;
+    font-weight: 500;
+    border-color: var(--line);
+}
+.back-link:hover { color: var(--accent); border-color: var(--accent); }
+.toc-title {
+    margin-bottom: 0.15rem;
+    color: var(--ink);
+    font: 500 1.15rem/1.4 var(--serif);
+    letter-spacing: 0;
+}
+.toc-sub {
+    color: #89877f;
+    font: 400 0.62rem/1.5 var(--mono);
+    letter-spacing: 0;
+    text-transform: none;
+}
+.toc-divider {
+    width: 100%;
+    height: 1px;
+    margin: 0.85rem 0 0.65rem;
+    background: var(--line);
+}
+.toc-link {
+    grid-template-columns: 1.5rem 1fr;
+    gap: 0.45rem;
+    padding: 0.55rem 0;
+    color: #77756e;
+    font-size: 0.76rem;
+    line-height: 1.55;
+    border-color: color-mix(in srgb, var(--line) 72%, transparent);
+}
+.toc-link:hover {
+    color: var(--accent);
+    transform: none;
+}
+.toc-link.active {
+    color: var(--accent);
+    font-weight: 600;
+}
+.toc-num {
+    color: var(--accent);
+    font: 500 0.62rem/1.8 var(--mono);
+    letter-spacing: 0;
+}
+.toc-toggle { display: none; }
+
+.player {
+    position: sticky;
+    top: 0.75rem;
+    margin-top: 1.75rem;
+    margin-bottom: 5.5rem;
+    padding: 0.85rem 0.95rem;
+    color: var(--ink);
+    background: color-mix(in srgb, var(--paper-light) 94%, transparent);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 0.6rem 2rem rgba(20, 20, 19, 0.06);
+}
+.player-play {
+    width: 3rem;
+    height: 3rem;
+    color: var(--paper-light);
+    background: var(--accent);
+}
+.player-play:hover { background: var(--accent-light); }
+.player-heading {
+    margin-bottom: 0.45rem;
+    color: var(--ink-soft);
+    font: 500 0.62rem/1 var(--mono);
+    letter-spacing: 0;
+    text-transform: none;
+}
+.player-time {
+    color: var(--ink-soft);
+    font: 500 0.66rem/1 var(--mono);
+}
+.player-seek {
+    background: linear-gradient(
+        90deg,
+        var(--accent) 0%,
+        var(--accent) var(--seek, 0%),
+        var(--paper-deep) var(--seek, 0%)
+    );
+}
+.player-seek::-webkit-slider-thumb {
+    background: var(--paper-light);
+    border-color: var(--accent);
+}
+.player-seek::-moz-range-thumb {
+    background: var(--paper-light);
+    border-color: var(--accent);
+}
+.player-btn,
+.player-dl {
+    color: var(--ink-soft);
+    border-color: var(--line);
+    border-radius: 4px;
+    font: 500 0.66rem/1 var(--serif);
+}
+.player-btn:hover,
+.player-dl:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.player-speed-options {
+    color: var(--ink);
+    background: var(--paper-light);
+    border-color: var(--line);
+    border-radius: 6px;
+    box-shadow: 0 0.8rem 2rem rgba(20, 20, 19, 0.1);
+}
+.player-speed-options button { color: var(--ink-soft); }
+.player-speed-options button:hover,
+.player-speed-options button.active {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.player-vol input { accent-color: var(--accent); }
+
+.chapter {
+    max-width: 42rem;
+    margin: 0 0 6.5rem clamp(0rem, 4vw, 4.5rem);
+    scroll-margin-top: 7rem;
+}
+.chapter-intro {
+    max-width: 44rem;
+    margin-bottom: 5.5rem;
+    padding: 0;
+    border: 0;
+}
+.chapter-intro::before {
+    content: "导读";
+    display: block;
+    width: fit-content;
+    margin-bottom: 0.75rem;
+    color: var(--accent);
+    font: 500 0.72rem/1.4 var(--mono);
+}
+.chapter-intro p {
+    color: var(--ink);
+    font: 400 clamp(1.12rem, 1.8vw, 1.28rem)/1.8 var(--serif);
+    letter-spacing: 0;
+}
+.chapter-decoration {
+    margin-bottom: 0.55rem;
+    padding-bottom: 0.55rem;
+    border-bottom: 1px solid var(--line);
+}
+.chapter-num {
+    color: var(--accent);
+    font: 500 0.72rem/1 var(--mono);
+    letter-spacing: 0;
+}
+.chapter-total {
+    color: #918f87;
+    font: 400 0.62rem/1 var(--mono);
+}
+.chapter-divider { display: none; }
+.chapter-title {
+    max-width: none;
+    margin-bottom: 1.65rem;
+    color: var(--ink);
+    font: 500 clamp(1.75rem, 3vw, 2.25rem)/1.35 var(--serif);
+    letter-spacing: 0;
+    text-wrap: balance;
+}
+.chapter p {
+    max-width: 38em;
+    margin-bottom: 1.3em;
+    color: #32322f;
+    font: 400 1.075rem/1.9 var(--serif);
+    letter-spacing: 0;
+    text-align: justify;
+    text-justify: inter-ideograph;
+    hanging-punctuation: first last;
+}
+.chapter.is-visible { animation-duration: 420ms; }
+
+.page-footer {
+    max-width: 42rem;
+    margin: 0 0 0 clamp(0rem, 4vw, 4.5rem);
+    padding-top: 1.5rem;
+    border-color: var(--line);
+}
+.page-footer a { color: var(--accent); font-weight: 500; }
+.page-footer p { color: var(--ink-soft); font-size: 0.75rem; }
+
+@media (min-width: 1101px) {
+    .toc-hidden .toc { transform: translateX(calc(100% + 2rem)); }
+    .toc-overlay { display: none !important; }
+}
+@media (max-width: 1100px) {
+    main,
+    body:not(.toc-hidden) main {
+        width: min(calc(100% - 2.5rem), 48rem);
+        margin-inline: auto;
+    }
+    .hero,
+    .player,
+    .chapter,
+    .chapter-intro,
+    .page-footer {
+        width: 100%;
+        margin-left: 0;
+    }
+    .toc-toggle {
+        display: grid;
+        color: var(--accent);
+        background: color-mix(in srgb, var(--paper-light) 94%, transparent);
+        border-color: var(--line);
+        border-radius: 6px;
+        box-shadow: 0 0.5rem 1.5rem rgba(20, 20, 19, 0.08);
+    }
+    .toc {
+        inset: 0 auto 0 0;
+        width: min(86vw, 19rem);
+        max-height: none;
+        padding: 1.25rem 1.35rem 2rem;
+        color: var(--ink-soft);
+        background: var(--paper-light);
+        border-right: 1px solid var(--line);
+        transform: translateX(-100%);
+    }
+    .toc.open { transform: translateX(0); }
+    .toc-overlay.show {
+        display: block;
+        background: rgba(20, 20, 19, 0.28);
+        backdrop-filter: blur(2px);
+    }
+    body:not(.toc-hidden) .toc-toggle { left: calc(min(86vw, 19rem) + 1rem); }
+}
+@media (max-width: 680px) {
+    html { font-size: 15px; }
+    main,
+    body:not(.toc-hidden) main {
+        width: calc(100% - 2rem);
+    }
+    .hero { padding-top: 5.5rem; }
+    .hero h1 {
+        max-width: none;
+        font-size: clamp(2.15rem, 10vw, 3.15rem);
+        line-height: 1.18;
+    }
+    .hero h1.title-long,
+    .hero h1.title-xlong {
+        font-size: 1.9rem;
+        line-height: 1.28;
+    }
+    .toc-toggle { top: 0.75rem; left: 0.75rem; }
+    .player {
+        position: fixed;
+        top: 0.75rem;
+        left: 4.25rem;
+        right: 0.75rem;
+        width: auto;
+        margin-top: 0;
+        padding: 0.65rem 0.7rem;
+    }
+    .player-play { width: 2.75rem; height: 2.75rem; }
+    .chapter { margin-bottom: 4.75rem; }
+    .chapter-title {
+        font-size: 1.72rem;
+        line-height: 1.4;
+    }
+    .chapter p {
+        max-width: none;
+        font-size: 1.04rem;
+        line-height: 1.88;
+        text-align: left;
+    }
+    body:not(.toc-hidden) .toc-toggle { left: 0.75rem; }
+}
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
 }
@@ -634,7 +1013,7 @@ body:not(.toc-hidden) main {
 <main id="main-content">
     <header class="hero">
         <p class="hero-kicker">中文深度讲稿 / AI reviewed</p>
-        <h1>{podcast_title}</h1>
+        <h1 class="{hero_title_class}">{hero_title}</h1>
         <p class="hero-sub">
             <span>{date}</span>
             <span class="sep">·</span>
@@ -981,6 +1360,8 @@ def md_to_html(md_path, output_path=None, podcast_title=None):
 
     # 清理可能的 YAML front matter
     md_text = re.sub(r"^---\n.*?\n---\n", "", md_text, flags=re.DOTALL)
+    # 页面 Hero 已展示标题，正文中的 Markdown H1 不再重复渲染。
+    md_text = re.sub(r"^# .+\n+", "", md_text, count=1)
 
     sections = parse_sections(md_text)
     if not sections:

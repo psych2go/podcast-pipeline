@@ -32,7 +32,7 @@ from tts import apply_tts_lexicon, run_tts, validate_tts_manifest
 import process as pipeline_process
 from ai_review import rebind_provenance_review, reviewed_hashes
 import catalog
-from html_gen import _build_html
+from html_gen import _build_html, md_to_html
 from publish import verify_publish
 from episode import (
     inspect_episode_state, load_episode, set_claim_evidence_mode,
@@ -2138,6 +2138,41 @@ class HtmlTests(unittest.TestCase):
             html,
         )
         self.assertNotIn("onmouseover=", html)
+
+    def test_long_hero_title_drops_show_suffix_but_keeps_full_metadata(self):
+        title = (
+            "A Very Long Episode Title About Several Important Topics "
+            "Across Technology and Business — Podcast Show with Hosts"
+        )
+        html = _build_html(
+            title,
+            [(-1, None, "导览。"), (0, "章节", "正文。")],
+            word_count=10,
+            date_str="2026-08-10",
+            mp3_url="episode.mp3",
+        )
+        self.assertIn(f"<title>{title} — 讲稿</title>", html)
+        self.assertIn(
+            ">A Very Long Episode Title About Several Important Topics "
+            "Across Technology and Business</h1>",
+            html,
+        )
+        self.assertNotIn(">Podcast Show with Hosts</h1>", html)
+
+    def test_markdown_h1_is_not_repeated_inside_intro(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td) / "Episode"
+            folder.mkdir()
+            md = folder / "讲书稿.md"
+            out = folder / "content.html"
+            md.write_text(
+                "# 重复标题\n\n导览正文。\n\n## 第一章\n章节正文。",
+                encoding="utf-8",
+            )
+            md_to_html(md, out, podcast_title="页面标题")
+            html = out.read_text(encoding="utf-8")
+        self.assertNotIn("# 重复标题", html)
+        self.assertIn("<p>导览正文。</p>", html)
 
     def test_homepage_source_link_is_not_behind_a_card_overlay(self):
         with tempfile.TemporaryDirectory() as td:

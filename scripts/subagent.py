@@ -27,8 +27,9 @@ class SubagentError(RuntimeError):
     """Raised when a subagent cannot complete a pipeline task."""
 
 
-def _runner_command():
-    raw = os.environ.get("SUBAGENT_COMMAND", "codex")
+def _runner_command(raw=None):
+    raw = raw if raw is not None else os.environ.get(
+        "SUBAGENT_COMMAND", "codex")
     command = shlex.split(raw)
     if not command:
         raise SubagentError("SUBAGENT_COMMAND 为空")
@@ -48,6 +49,16 @@ def _runner_command():
             "请使用 codex exec 或兼容的 SUBAGENT_COMMAND"
         )
     return command
+
+
+def _runner_commands():
+    commands = [_runner_command()]
+    fallback = os.environ.get("SUBAGENT_FALLBACK_COMMAND", "").strip()
+    if fallback:
+        fallback_command = _runner_command(fallback)
+        if fallback_command != commands[0]:
+            commands.append(fallback_command)
+    return commands
 
 
 def _base_prompt(task):
@@ -96,7 +107,7 @@ def _run(
         timeout=None,
 ):
     folder = Path(folder).resolve()
-    command = _runner_command()
+    commands = _runner_commands()
     timeout = timeout or int(os.environ.get("SUBAGENT_TIMEOUT", "1800"))
     max_retries = int(os.environ.get("SUBAGENT_MAX_RETRIES", "2"))
     output_path = None
@@ -108,85 +119,93 @@ def _run(
             else:
                 schema_path = None
             output_path = Path(tmp) / "last_message.txt"
-            cmd = [
-                *command,
-                "--ephemeral",
-                "--skip-git-repo-check",
-                "-C",
-                str(folder),
-                "-s",
-                "workspace-write" if write_files else "read-only",
-                "-o",
-                str(output_path),
-            ]
-            if write_files:
-                cmd.extend(["--add-dir", str(folder)])
-            if enable_search:
-                if (
-                        Path(command[0]).name == "codex"
-                        and len(cmd) > 1
-                        and cmd[1] == "exec"):
-                    cmd.insert(1, "--search")
-                else:
-                    cmd.append("--search")
-            if model:
-                cmd.extend(["--model", model])
-            if schema_path:
-                cmd.extend(["--output-schema", str(schema_path)])
-            cmd.append(_base_prompt(task))
             last_detail = ""
             total_duration_ms = 0
-            for attempt in range(max_retries + 1):
-                started = time.monotonic()
-                try:
-                    result = subprocess.run(
-                        cmd,
-                        cwd=folder,
-                        capture_output=True,
-                        text=True,
-                        timeout=timeout,
-                        check=False,
+            total_retries = 0
+            for runner_index, command in enumerate(commands):
+                cmd = [
+                    *command,
+                    "--ephemeral",
+                    "--skip-git-repo-check",
+                    "-C",
+                    str(folder),
+                    "-s",
+                    "workspace-write" if write_files else "read-only",
+                    "-o",
+                    str(output_path),
+                ]
+                if write_files:
+                    cmd.extend(["--add-dir", str(folder)])
+                if enable_search:
+                    if (
+                            Path(command[0]).name == "codex"
+                            and len(cmd) > 1
+                            and cmd[1] == "exec"):
+                        cmd.insert(1, "--search")
+                    else:
+                        cmd.append("--search")
+                if model:
+                    cmd.extend(["--model", model])
+                if schema_path:
+                    cmd.extend(["--output-schema", str(schema_path)])
+                cmd.append(_base_prompt(task))
+
+                for attempt in range(max_retries + 1):
+                    output_path.unlink(missing_ok=True)
+                    started = time.monotonic()
+                    try:
+                        result = subprocess.run(
+                            cmd,
+                            cwd=folder,
+                            capture_output=True,
+                            text=True,
+                            timeout=timeout,
+                            check=False,
+                        )
+                    except subprocess.TimeoutExpired:
+                        total_duration_ms += round(
+                            (time.monotonic() - started) * 1000)
+                        last_detail = f"timeout after {timeout}s"
+                    else:
+                        total_duration_ms += round(
+                            (time.monotonic() - started) * 1000)
+                        if result.returncode == 0:
+                            response = (
+                                output_path.read_text(encoding="utf-8")
+                                if output_path.exists()
+                                else result.stdout
+                            )
+                            return {
+                                "response": response,
+                                "duration_ms": total_duration_ms,
+                                "retry_count": total_retries,
+                                "runner_index": runner_index,
+                                "command": " ".join(command),
+                                "model": model or "",
+                                "task_name": task_name,
+                            }
+                        last_detail = (
+                            result.stderr or result.stdout or ""
+                        ).strip()[-1500:]
+                    if attempt < max_retries:
+                        total_retries += 1
+                        wait = exponential_delay(attempt + 1, 2.0)
+                        print(
+                            f"[subagent] {task_name} 失败，{wait:g}s 后重试 "
+                            f"{attempt + 1}/{max_retries}",
+                            flush=True,
+                        )
+                        time.sleep(wait)
+                if runner_index + 1 < len(commands):
+                    print(
+                        f"[subagent] {task_name} 主 runner 不可用，"
+                        f"切换备用 runner {runner_index + 1}",
+                        flush=True,
                     )
-                except subprocess.TimeoutExpired as exc:
-                    total_duration_ms += round(
-                        (time.monotonic() - started) * 1000)
-                    last_detail = f"timeout after {timeout}s"
-                    if attempt >= max_retries:
-                        raise SubagentError(
-                            f"{task_name} subagent 超时 ({timeout}s)"
-                        ) from exc
-                else:
-                    total_duration_ms += round(
-                        (time.monotonic() - started) * 1000)
-                    if result.returncode == 0:
-                        response = (
-                            output_path.read_text(encoding="utf-8")
-                            if output_path.exists()
-                            else result.stdout
-                        )
-                        return {
-                            "response": response,
-                            "duration_ms": total_duration_ms,
-                            "retry_count": attempt,
-                            "command": " ".join(command),
-                            "model": model or "",
-                            "task_name": task_name,
-                        }
-                    last_detail = (
-                        result.stderr or result.stdout or ""
-                    ).strip()[-1500:]
-                    if attempt >= max_retries:
-                        raise SubagentError(
-                            f"{task_name} subagent 失败 "
-                            f"(rc={result.returncode}): {last_detail}"
-                        )
-                wait = exponential_delay(attempt + 1, 2.0)
-                print(
-                    f"[subagent] {task_name} 失败，{wait:g}s 后重试 "
-                    f"{attempt + 1}/{max_retries}",
-                    flush=True,
-                )
-                time.sleep(wait)
+            raise SubagentError(
+                f"{task_name} subagent 失败，所有 runner 均不可用: "
+                f"{last_detail}"
+            )
     except subprocess.TimeoutExpired as exc:
         raise SubagentError(
             f"{task_name} subagent 超时 ({timeout}s)"

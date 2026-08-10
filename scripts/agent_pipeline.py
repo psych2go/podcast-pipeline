@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 try:
+    from atomic_io import atomic_write_text
     from claim_evidence import refine_claim_evidence
     from content_map import (
         body_sha256,
@@ -11,6 +12,7 @@ try:
         enrich_summary_map_evidence,
         init_content_map,
         load_json,
+        normalize_summary_claim_ids,
         save_json,
         validate_content_map,
         validate_summary_map,
@@ -22,7 +24,9 @@ try:
     )
     from evidence import ASR_SOURCE_KINDS, effective_source_kind
     from subagent import run_edit_task
+    from validator import normalize_briefing_artifacts
 except ImportError:
+    from scripts.atomic_io import atomic_write_text
     from scripts.claim_evidence import refine_claim_evidence
     from scripts.content_map import (
         body_sha256,
@@ -30,6 +34,7 @@ except ImportError:
         enrich_summary_map_evidence,
         init_content_map,
         load_json,
+        normalize_summary_claim_ids,
         save_json,
         validate_content_map,
         validate_summary_map,
@@ -41,6 +46,7 @@ except ImportError:
     )
     from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
     from scripts.subagent import run_edit_task
+    from scripts.validator import normalize_briefing_artifacts
 
 
 def _stage(report, name, metrics=None):
@@ -120,7 +126,8 @@ def content_pipeline_needed(folder, force=False):
             return True
         notes_text = (folder / "中文完整笔记.md").read_text(encoding="utf-8")
         briefing_text = (folder / "讲书稿.md").read_text(encoding="utf-8")
-        summary_map = load_json(folder / "summary_map.json")
+        summary_map = normalize_summary_claim_ids(
+            load_json(folder / "summary_map.json"))
         errors, _warnings = validate_content_map(content_map, transcript)
         summary_errors = validate_summary_map(
             summary_map, briefing_text, content_map, notes_text)
@@ -312,10 +319,15 @@ content_map、讲稿归因和最终 fact check 处理。
         summary_path = folder / "summary_map.json"
         notes_text = (folder / "中文完整笔记.md").read_text(encoding="utf-8")
         briefing_text = (folder / "讲书稿.md").read_text(encoding="utf-8")
+        summary_map = load_json(summary_path)
+        briefing_text, summary_map, normalization_changes = (
+            normalize_briefing_artifacts(briefing_text, summary_map)
+        )
+        atomic_write_text(folder / "讲书稿.md", briefing_text)
         content_map, transcript = enrich_content_map_evidence(
             content_map, transcript)
         summary_map = enrich_summary_map_evidence(
-            load_json(summary_path),
+            summary_map,
             notes_text,
             content_map,
             briefing_text,
@@ -339,6 +351,7 @@ content_map、讲稿归因和最终 fact check 处理。
             stage.metrics.update({
                 "unit_count": len(content_map.get("units", [])),
                 "warning_count": len(warnings),
+                "normalization_changes": normalization_changes,
             })
 
     sync_episode_state(folder)
