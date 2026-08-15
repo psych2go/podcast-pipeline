@@ -17,6 +17,7 @@ from asr_refinement import AsrContext, build_asr_context, refine_segments
 from config import FETCH_MAX_RETRIES, FETCH_TIMEOUT, API_RETRY_BACKOFF
 from playwright_runtime import playwright_launch_env
 from retry import exponential_delay, retry_after_seconds
+from sources import source_host
 
 
 # ── URL 抓取（四层降级）───────────────────────────────────────────
@@ -144,7 +145,7 @@ def fetch_transcript_from_url(url, return_metadata=False):
     html, fetch_meta = _fetch_html(url)
 
     if html:
-        if "podscripts.co" in url.lower():
+        if source_host(url) == "podscripts.co":
             segments = _extract_podscripts_segments(html)
             if segments and len(_render_source_segments(segments)) > 500:
                 text = _render_source_segments(segments)
@@ -317,7 +318,7 @@ def _try_curl_cffi_with_metadata(url):
         print(f"[抓取] curl_cffi 失败: {type(e).__name__}", flush=True)
         metadata["last_error"] = type(e).__name__
         if (
-                "podscripts.co" in url.lower()
+                source_host(url) == "podscripts.co"
                 and _is_certificate_verification_error(e)):
             try:
                 print("[抓取][警告] Podscripts 证书校验失败，使用降级抓取", flush=True)
@@ -355,7 +356,9 @@ def _fetch_html(url):
         return cached["html"], dict(cached["meta"])
 
     last_metadata = {}
+    last_attempt = 0
     for attempt in range(1, FETCH_MAX_RETRIES + 1):
+        last_attempt = attempt
         html, cffi_metadata = _try_curl_cffi_with_metadata(url)
         metadata = cffi_metadata
         if not html:
@@ -376,6 +379,12 @@ def _fetch_html(url):
             }
             return html, metadata
         last_metadata = dict(metadata or last_metadata)
+        status_code = last_metadata.get("status_code")
+        if (
+                isinstance(status_code, int)
+                and 400 <= status_code < 500
+                and status_code not in {408, 425, 429}):
+            break
         if attempt == FETCH_MAX_RETRIES:
             break
         wait = max(
@@ -388,7 +397,7 @@ def _fetch_html(url):
             flush=True,
         )
         time.sleep(wait)
-    last_metadata["fetch_retry_count"] = max(0, FETCH_MAX_RETRIES - 1)
+    last_metadata["fetch_retry_count"] = max(0, last_attempt - 1)
     return None, last_metadata
 
 

@@ -7,8 +7,38 @@ from pathlib import Path
 
 try:
     from atomic_io import atomic_write_json
+    from quality_errors import (
+        ASR_QUALITY_FAILED, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
+        CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
+        CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_MISSING,
+        SOURCE_QUALITY_FAILED, SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
+        TRANSCRIPT_CORRECTION_MISSING, TRANSCRIPT_INTEGRITY_FAILED,
+        TRANSCRIPT_MISSING,
+        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
+        AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
+        AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, CONTENT_MAP_SCHEMA,
+        CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
+        EVIDENCE_PROVENANCE_FAILED, SOURCE_REVIEW_STATUS,
+        SUMMARY_MAP_VALIDATION, TTS_READINESS_FAILED, add_error, coded_errors,
+        extend_errors,
+    )
 except ImportError:
     from scripts.atomic_io import atomic_write_json
+    from scripts.quality_errors import (
+        ASR_QUALITY_FAILED, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
+        CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
+        CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_MISSING,
+        SOURCE_QUALITY_FAILED, SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
+        TRANSCRIPT_CORRECTION_MISSING, TRANSCRIPT_INTEGRITY_FAILED,
+        TRANSCRIPT_MISSING,
+        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
+        AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
+        AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, CONTENT_MAP_SCHEMA,
+        CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
+        EVIDENCE_PROVENANCE_FAILED, SOURCE_REVIEW_STATUS,
+        SUMMARY_MAP_VALIDATION, TTS_READINESS_FAILED, add_error, coded_errors,
+        extend_errors,
+    )
 
 try:
     from content_map import (
@@ -18,7 +48,10 @@ try:
         validate_summary_map,
     )
     from validator import structure_report
-    from episode import inspect_episode_state
+    from episode import (
+        LEGACY_EVIDENCE_READ_CUTOFF, inspect_episode_state,
+        legacy_evidence_read_allowed,
+    )
     from evidence import (
         ASR_SOURCE_KINDS,
         correction_metrics,
@@ -39,7 +72,10 @@ except ImportError:  # package import
         validate_summary_map,
     )
     from scripts.validator import structure_report
-    from scripts.episode import inspect_episode_state
+    from scripts.episode import (
+        LEGACY_EVIDENCE_READ_CUTOFF, inspect_episode_state,
+        legacy_evidence_read_allowed,
+    )
     from scripts.evidence import (
         ASR_SOURCE_KINDS,
         correction_metrics,
@@ -255,6 +291,15 @@ def _ai_fact_check_consistency_v3(review, valid_claim_ids=None):
                     "faithfully_attributed", "qualified"}:
                 errors.append(f"{claim}: 一手信息 verdict 不符合归因规则")
 
+        if origin == "speaker_reported" and assertion == "fact":
+            if status == "used_as_fact":
+                errors.append(f"{claim}: speaker_reported 必须明确归因，不能作为无归因事实")
+            if status != "excluded" and not segments:
+                errors.append(f"{claim}: speaker_reported 缺少 transcript segment")
+            if status != "excluded" and verdict not in {
+                    "accurately_reported", "qualified", "uncertain"}:
+                errors.append(f"{claim}: speaker_reported verdict 不符合来源转述语义")
+
         if assertion in {"opinion", "prediction"}:
             if status == "used_as_fact":
                 errors.append(f"{claim}: 观点或预测不能升级为客观事实")
@@ -299,7 +344,10 @@ def _ai_fact_check_consistency_v3(review, valid_claim_ids=None):
                 and assertion == "fact" and status == "used_as_fact":
             if mode != "web_required":
                 errors.append(f"{claim}: 外部或编辑部客观事实必须 web_required")
-            if verdict in {"supported", "qualified"} and not urls:
+            if verdict not in {"supported", "qualified"}:
+                errors.append(
+                    f"{claim}: 作为事实采用时 verdict 必须为 supported 或 qualified")
+            if not urls:
                 errors.append(f"{claim}: 外部或编辑部客观事实缺少网页来源")
 
         if origin == "episode_metadata" and mode != "transcript_only":
@@ -464,7 +512,7 @@ def _ai_entity_accuracy_consistency(review):
     return errors, warnings
 
 
-def build_quality_report(folder, strict=True):
+def build_quality_report(folder, strict=True, *, today=None):
     folder = Path(folder)
     episode_quality = inspect_episode_state(folder)
     report = {
@@ -472,8 +520,10 @@ def build_quality_report(folder, strict=True):
         "strict": strict,
         "passed": True,
         "errors": [],
+        "error_details": [],
         "warnings": [],
     }
+    coded_errors(report)
     raw_path = folder / "transcript.raw.json"
     raw = None
     if raw_path.exists():
@@ -483,7 +533,7 @@ def build_quality_report(folder, strict=True):
         report["transcript"]["effective_source_kind"] = source_kind
         provenance_errors, provenance_warnings = validate_provenance(
             folder, raw)
-        report["errors"].extend(provenance_errors)
+        extend_errors(report, EVIDENCE_PROVENANCE_FAILED, provenance_errors)
         report["warnings"].extend(provenance_warnings)
         evidence = raw.get("evidence", {})
         transcript_path = folder / evidence.get(
@@ -492,13 +542,15 @@ def build_quality_report(folder, strict=True):
         expected_transcript_hash = evidence.get("transcript_sha256")
         if expected_transcript_hash:
             if not transcript_path.exists():
-                report["errors"].append(
+                add_error(
+                    report, TRANSCRIPT_INTEGRITY_FAILED,
                     f"原始 evidence 缺少 {transcript_path.name}")
             else:
                 actual_hash = hashlib.sha256(
                     transcript_path.read_bytes()).hexdigest()
                 if actual_hash != expected_transcript_hash:
-                    report["errors"].append(
+                    add_error(
+                        report, TRANSCRIPT_INTEGRITY_FAILED,
                         "原始转录与 transcript.raw.json 的 evidence hash 不一致")
 
         is_local_asr = source_kind in ASR_SOURCE_KINDS
@@ -510,21 +562,30 @@ def build_quality_report(folder, strict=True):
         if (
                 is_local_asr
                 and report["transcript"]["timestamp_coverage"] < 0.95):
-            target = report["errors"] if strict_asr else report["warnings"]
-            target.append("本地 ASR 时间戳覆盖率低于 95%")
+            if strict_asr:
+                add_error(report, ASR_QUALITY_FAILED,
+                          "本地 ASR 时间戳覆盖率低于 95%")
+            else:
+                report["warnings"].append("本地 ASR 时间戳覆盖率低于 95%")
         if (
                 is_local_asr
                 and report["transcript"]["low_confidence_ratio"] > 0.15):
-            target = report["errors"] if strict_asr else report["warnings"]
-            target.append("本地 ASR 低置信度片段超过 15%")
+            if strict_asr:
+                add_error(report, ASR_QUALITY_FAILED,
+                          "本地 ASR 低置信度片段超过 15%")
+            else:
+                report["warnings"].append("本地 ASR 低置信度片段超过 15%")
         language_probability = report["transcript"]["language_probability"]
         if (
                 is_local_asr
                 and isinstance(language_probability, (int, float))
                 and language_probability < 0.6):
-            target = report["errors"] if strict_asr else report["warnings"]
-            target.append(
+            message = (
                 f"ASR 语言识别置信度过低: {language_probability:.2f} < 0.60")
+            if strict_asr:
+                add_error(report, ASR_QUALITY_FAILED, message)
+            else:
+                report["warnings"].append(message)
         if report["transcript"]["diarization_warning"]:
             report["warnings"].append(
                 "说话人分离已降级跳过: "
@@ -555,12 +616,13 @@ def build_quality_report(folder, strict=True):
             report["warnings"].append(
                 "转录包含无时间戳文本的合成分段，segment 仅用于字符级定位")
         if report["transcript"]["tls_downgrade"]:
-            report["errors"].append(
+            add_error(
+                report, TRANSCRIPT_INTEGRITY_FAILED,
                 "转录来源抓取时关闭了 TLS 证书校验，严格模式拒绝发布")
         if report["transcript"]["source_warnings"]:
             report["warnings"].append("来源文本包含网页导语/链接/推荐内容，需人工确认正文边界")
     else:
-        report["errors"].append("缺少 transcript.raw.json，无法进行完整转录审计")
+        add_error(report, TRANSCRIPT_MISSING, "缺少 transcript.raw.json，无法进行完整转录审计")
 
     corrected_path = folder / "转录_纠错.txt"
     if corrected_path.exists():
@@ -577,7 +639,8 @@ def build_quality_report(folder, strict=True):
             raw
             and effective_source_kind(folder, raw) in ASR_SOURCE_KINDS
             and not corrected_path.exists()):
-        report["errors"].append(
+        add_error(
+            report, TRANSCRIPT_CORRECTION_MISSING,
             "ASR 单集缺少 转录_纠错.txt，不能进入下游发布")
 
     briefing = _find_briefing(folder)
@@ -598,16 +661,25 @@ def build_quality_report(folder, strict=True):
                     "schema_version", 1) < CONTENT_MAP_SCHEMA_VERSION):
             evidence_mode = episode_quality.get(
                 "claim_evidence_mode", "precise_required")
-            if (
-                    content_map.get("schema_version", 1) >= 2
-                    and evidence_mode == "legacy_broad"):
+            legacy_v2 = (
+                content_map.get("schema_version", 1) >= 2
+                and evidence_mode == "legacy_broad"
+            )
+            if legacy_v2 and legacy_evidence_read_allowed(today):
                 report["warnings"].append(
-                    "该已发布单集仍使用 evidence v2 粗粒度 claim 证据；"
-                    "新单集禁止使用此兼容模式")
+                    "该历史单集仍使用只读 evidence v2；兼容将于 "
+                    f"{LEGACY_EVIDENCE_READ_CUTOFF.isoformat()} 停止，"
+                    "届时必须迁移到 v3 claim 级精确证据")
             else:
-                report["errors"].append(
+                message = (
+                    "evidence v2 兼容已于 "
+                    f"{LEGACY_EVIDENCE_READ_CUTOFF.isoformat()} 停止；"
+                    "需生成 v3 claim 级精确证据"
+                    if legacy_v2 else
                     "content_map.json 证据 schema 过旧，"
-                    "需生成 v3 claim 级精确证据")
+                    "需生成 v3 claim 级精确证据"
+                )
+                add_error(report, CONTENT_MAP_SCHEMA, message)
         raw_for_validation = load_json(raw_path) if raw_path.exists() else None
         transcript_mode = (
             transcript_evidence_mode(raw_for_validation)
@@ -615,10 +687,10 @@ def build_quality_report(folder, strict=True):
         )
         map_mode = content_map_evidence_mode(content_map, raw_for_validation)
         if map_mode != transcript_mode:
-            report["errors"].append(
+            add_error(
+                report, CONTENT_MAP_MODE_MISMATCH,
                 "content_map.evidence_mode 与 transcript.raw.json "
-                "的 evidence_mode 不一致"
-            )
+                "的 evidence_mode 不一致")
         errors, warnings = validate_content_map(
             content_map, raw_for_validation)
         report["content_map"] = {
@@ -637,6 +709,12 @@ def build_quality_report(folder, strict=True):
                 "refined_at": content_map.get(
                     "claim_evidence_refined_at"),
             }
+            if (
+                    "deterministic-fallback" in str(refiner.get("command", ""))
+                    or int(refiner.get("fallback_claim_count", 0) or 0) > 0):
+                add_error(
+                    report, CLAIM_EVIDENCE_FALLBACK,
+                    "claim evidence 使用 deterministic fallback，严格发布禁止降级证据")
         has_multi_claim_units = any(
             len(unit.get("claims", [])) > 1
             for unit in content_map.get("units", [])
@@ -648,12 +726,13 @@ def build_quality_report(folder, strict=True):
                 and not content_map.get("claim_evidence_refined_at")):
             report["warnings"].append(
                 "evidence v3 含多 claim 单元，但缺少 claim evidence 精炼时间元数据")
-        report["errors"].extend(errors)
+        extend_errors(report, CONTENT_MAP_VALIDATION, errors)
         report["warnings"].extend(warnings)
         if summary_map_path.exists():
             summary_map = load_json(summary_map_path)
             if strict and summary_map.get("schema_version", 1) < 2:
-                report["errors"].append(
+                add_error(
+                    report, SUMMARY_MAP_SCHEMA,
                     "summary_map.json 仍是 v1，需运行 enrich-evidence")
             summary_errors = validate_summary_map(
                 summary_map, briefing_text, content_map, notes_text)
@@ -696,19 +775,21 @@ def build_quality_report(folder, strict=True):
                             corrected_path.read_text(encoding="utf-8"))):
                     report["corrected_transcript"][
                         "used_for_downstream_review"] = True
-            report["errors"].extend(summary_errors)
+            extend_errors(report, SUMMARY_MAP_VALIDATION, summary_errors)
             # 结构错误时不要继续调用 coverage_report，避免质量报告本身崩溃。
             if not errors and not summary_errors:
                 coverage = coverage_report(content_map, summary_map)
                 report["coverage"] = coverage
                 if not coverage["passed"]:
-                    report["errors"].append("总结覆盖率检查未通过")
+                    add_error(report, COVERAGE_FAILED, "总结覆盖率检查未通过")
         else:
-            report["errors"].append("缺少 summary_map.json，无法验证讲稿覆盖率")
+            add_error(report, SUMMARY_MAP_MISSING, "缺少 summary_map.json，无法验证讲稿覆盖率")
     else:
         message = "缺少 content_map.json，无法验证内容完整性"
-        target = report["errors"] if strict else report["warnings"]
-        target.append(message)
+        if strict:
+            add_error(report, CONTENT_MAP_MISSING, message)
+        else:
+            report["warnings"].append(message)
 
     if briefing:
         structure_warnings = structure_report(briefing_text)
@@ -719,10 +800,10 @@ def build_quality_report(folder, strict=True):
             "structure_warnings": structure_warnings,
         }
         if strict:
-            report["errors"].extend(
-                f"讲稿结构未通过: {warning}"
-                for warning in structure_warnings
-            )
+            extend_errors(
+                report, BRIEFING_STRUCTURE_FAILED,
+                (f"讲稿结构未通过: {warning}"
+                 for warning in structure_warnings))
         else:
             report["warnings"].extend(structure_warnings)
         arabic_numbers = re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?%?", briefing_text)
@@ -730,13 +811,13 @@ def build_quality_report(folder, strict=True):
         tts_readiness_issues = validate_tts_readiness(
             briefing_text, load_tts_lexicon(folder))
         report["briefing"]["tts_readiness_issues"] = tts_readiness_issues
-        report["errors"].extend(tts_readiness_issues)
+        extend_errors(report, TTS_READINESS_FAILED, tts_readiness_issues)
     else:
-        report["errors"].append("缺少讲书稿.md")
+        add_error(report, BRIEFING_MISSING, "缺少讲书稿.md")
 
     if content_map_path.exists():
         if not notes_path.exists():
-            report["errors"].append("缺少 中文完整笔记.md")
+            add_error(report, NOTES_MISSING, "缺少 中文完整笔记.md")
         else:
             notes_chars = _zh_chars(notes_text)
             briefing_chars = _zh_chars(briefing_text) if briefing else 0
@@ -756,19 +837,21 @@ def build_quality_report(folder, strict=True):
             "transcript_status", "未标注")
         report["source_quality"] = source_quality
         if not _transcript_status_accepted(source_quality):
-            report["errors"].append(f"来源质量未通过自动关口: {source_quality}")
+            add_error(
+                report, SOURCE_REVIEW_STATUS,
+                f"来源质量未通过自动关口: {source_quality}")
         content_review_status = episode_quality.get(
             "content_review_status", "pending")
         report["content_review_status"] = content_review_status
         if content_review_status != "passed":
-            report["errors"].append(
+            add_error(
+                report, CONTENT_REVIEW_STATUS,
                 "内容审查状态未通过: "
-                f"{content_review_status}"
-            )
+                f"{content_review_status}")
 
         review_path = folder / "ai_review.json"
         if not review_path.exists():
-            report["errors"].append("缺少 ai_review.json，不能自动发布")
+            add_error(report, AI_REVIEW_MISSING, "缺少 ai_review.json，不能自动发布")
         else:
             try:
                 from ai_review import reviewed_hashes
@@ -776,34 +859,42 @@ def build_quality_report(folder, strict=True):
                 from scripts.ai_review import reviewed_hashes
             review = load_json(review_path)
             ai_errors = []
+            ai_error_details = []
+
+            def ai_error(code, message):
+                ai_errors.append(message)
+                ai_error_details.append((code, message))
+
             if not review.get("passed"):
-                ai_errors.append("AI 最终审查未通过")
+                ai_error(AI_REVIEW_FAILED, "AI 最终审查未通过")
             for section in ("transcript_quality", "coverage", "factuality", "numbers", "attribution", "tts", "publish"):
                 if not review.get(section, {}).get("passed", False):
-                    ai_errors.append(f"AI 审查分项未通过: {section}")
+                    ai_error(AI_REVIEW_SECTION, f"AI 审查分项未通过: {section}")
             for section in ("transcript_quality", "coverage", "factuality"):
                 score = review.get(section, {}).get("score")
                 if not isinstance(score, (int, float)) or score < MIN_AI_REVIEW_SCORE:
-                    ai_errors.append(
-                        f"AI 审查分数不足: {section}={score!r} < {MIN_AI_REVIEW_SCORE}"
-                    )
+                    ai_error(
+                        AI_REVIEW_SCORE,
+                        f"AI 审查分数不足: {section}={score!r} < {MIN_AI_REVIEW_SCORE}")
             severe = [
                 issue for issue in review.get("issues", [])
                 if issue.get("severity") in {"critical", "high"}
             ]
             if severe:
-                ai_errors.append(f"AI 审查仍有 {len(severe)} 个 critical/high 问题")
+                ai_error(AI_REVIEW_SEVERE_ISSUE, f"AI 审查仍有 {len(severe)} 个 critical/high 问题")
             fact_check_errors, fact_check_warnings = (
                 _ai_fact_check_consistency(
                     review,
                     valid_claim_ids=set(unit_claim_ids(
                         content_map, include_excluded=True)),
                 ))
-            ai_errors.extend(fact_check_errors)
+            for message in fact_check_errors:
+                ai_error(AI_REVIEW_FACT_CHECK, message)
             report["warnings"].extend(fact_check_warnings)
             entity_errors, entity_warnings = (
                 _ai_entity_accuracy_consistency(review))
-            ai_errors.extend(entity_errors)
+            for message in entity_errors:
+                ai_error(ENTITY_ACCURACY_FAILED, message)
             report["warnings"].extend(entity_warnings)
             required_issue_evidence = {
                 "evidence_type", "evidence_segment_ids",
@@ -815,10 +906,10 @@ def build_quality_report(folder, strict=True):
                 if not required_issue_evidence.issubset(issue)
             ]
             if incomplete_evidence:
-                ai_errors.append(
+                ai_error(
+                    AI_REVIEW_ISSUE_EVIDENCE,
                     "AI 审查 issue 缺少结构化证据字段: "
-                    f"{incomplete_evidence}"
-                )
+                    f"{incomplete_evidence}")
             expected_hashes = review.get("reviewed_files", {})
             current_hashes = reviewed_hashes(folder)
             stale = sorted(
@@ -827,7 +918,7 @@ def build_quality_report(folder, strict=True):
             )
             missing_hashes = sorted(set(current_hashes) - set(expected_hashes))
             if stale or missing_hashes:
-                ai_errors.append(f"AI 审查已过期，文件变更: {stale + missing_hashes}")
+                ai_error(AI_REVIEW_STALE, f"AI 审查已过期，文件变更: {stale + missing_hashes}")
             report["ai_review"] = {
                 "passed": not ai_errors,
                 "errors": ai_errors,
@@ -842,7 +933,8 @@ def build_quality_report(folder, strict=True):
                     if key in review.get("transcript_quality", {})
                 },
             }
-            report["errors"].extend(ai_errors)
+            for code, message in ai_error_details:
+                add_error(report, code, message)
 
     report["passed"] = not report["errors"]
     return report

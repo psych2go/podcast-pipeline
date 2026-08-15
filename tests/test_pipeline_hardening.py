@@ -565,7 +565,7 @@ class ArtifactNormalizationTests(unittest.TestCase):
         )
         self.assertIn("merged_fragment_chapters", changes)
 
-    def test_numbers_and_known_directive_are_normalized_without_value_drift(self):
+    def test_numbers_are_normalized_without_episode_specific_fact_rewrite(self):
         briefing = (
             "节目称 24 英尺、230 比 1、23,000,000 总吨、5% 和 2018 年。"
             "受访者把自主武器指令称为 3009。"
@@ -577,10 +577,11 @@ class ArtifactNormalizationTests(unittest.TestCase):
         self.assertIn("二千三百万总吨", fixed)
         self.assertIn("百分之五", fixed)
         self.assertIn("二零一八年", fixed)
-        self.assertIn("三零零零点零九", fixed)
+        self.assertIn("三千零九", fixed)
+        self.assertNotIn("正式编号为", fixed)
         self.assertNotRegex(fixed, r"\d")
         self.assertIn("normalized_numbers", changes)
-        self.assertIn("normalized_known_terms", changes)
+        self.assertNotIn("normalized_known_terms", changes)
 
     def test_normalization_refreshes_body_hashes(self):
         briefing = (
@@ -605,6 +606,29 @@ class ArtifactNormalizationTests(unittest.TestCase):
 
 
 class WranglerIsolationTests(unittest.TestCase):
+    def test_wrangler_run_preserves_explicit_environment_token(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            site = root / "site"
+            site.mkdir()
+            with patch.object(catalog, "SITE_DIR", site), \
+                    patch.dict(os.environ, {
+                        "CLOUDFLARE_API_TOKEN": "ci-secret",
+                    }, clear=False), \
+                    patch.object(catalog.subprocess, "run") as run:
+                run.return_value = type("Result", (), {
+                    "returncode": 0,
+                    "stdout": "ok",
+                    "stderr": "",
+                })()
+                ok, _output = catalog._run_wrangler(
+                    ["npx", "wrangler", "r2", "bucket", "list"])
+        self.assertTrue(ok)
+        self.assertEqual(
+            run.call_args.kwargs["env"]["CLOUDFLARE_API_TOKEN"],
+            "ci-secret",
+        )
+
     def test_wrangler_run_ignores_repository_dotenv_token(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

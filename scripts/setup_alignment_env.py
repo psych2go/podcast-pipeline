@@ -44,6 +44,10 @@ def main():
         str(pip), "install", "--no-deps", "whisperx==3.8.6",
     ])
 
+    run([
+        str(python), "-m", "nltk.downloader", "punkt_tab",
+    ])
+
     output = subprocess.check_output(
         [
             str(python), "-c",

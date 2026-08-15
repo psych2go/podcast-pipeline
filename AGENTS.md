@@ -33,7 +33,7 @@
 .venv/bin/python scripts/check_public_repo.py
 ```
 
-`private-` 或 `private/` 分支可能在 Git 历史中包含播客内容，不得直接推送到公开远端。即使当前文件已经取消跟踪，也不能据此判断历史已脱敏。
+`private-` 或 `private/` 分支可能在 Git 历史中包含播客内容，不得直接推送到公开远端。无法确认来源的 detached HEAD 同样不得公开推送。即使当前文件已经取消跟踪，也不能据此判断历史已脱敏。
 
 ## 强制规则
 

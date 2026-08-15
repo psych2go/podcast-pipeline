@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
+    from hashing import sha256_file
+except ImportError:
+    from scripts.hashing import sha256_file
+
+try:
     from atomic_io import atomic_write_json
     from episode import page_path
 except ImportError:
@@ -24,14 +29,6 @@ RELEASE_SUCCESS_STATES = (
     "published",
 )
 RELEASE_STATES = frozenset((*RELEASE_SUCCESS_STATES, "failed"))
-
-
-def _sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def load_release(folder):
@@ -80,11 +77,23 @@ def _git_provenance(folder):
         "--",
         "scripts",
         "tests",
+        ".github",
+        "docs",
+        "benchmarks",
         "CLAUDE.md",
+        "AGENTS.md",
+        "README.md",
+        "README.en.md",
         ".env.example",
+        ".gitignore",
         "requirements.txt",
+        "requirements-alignment.txt",
+        "requirements-asr.txt",
+        "requirements-asr-gpu.txt",
         "requirements-benchmark.txt",
+        "requirements-browser.txt",
         "requirements-diarization.txt",
+        "requirements-tts.txt",
     ) or b""
     untracked_raw = _git_output(
         root,
@@ -95,8 +104,23 @@ def _git_provenance(folder):
         "--",
         "scripts",
         "tests",
+        ".github",
+        "docs",
+        "benchmarks",
         "CLAUDE.md",
+        "AGENTS.md",
+        "README.md",
+        "README.en.md",
         ".env.example",
+        ".gitignore",
+        "requirements.txt",
+        "requirements-alignment.txt",
+        "requirements-asr.txt",
+        "requirements-asr-gpu.txt",
+        "requirements-benchmark.txt",
+        "requirements-browser.txt",
+        "requirements-diarization.txt",
+        "requirements-tts.txt",
     ) or b""
     digest = hashlib.sha256()
     digest.update(diff_raw)
@@ -104,7 +128,7 @@ def _git_provenance(folder):
         digest.update(b"\0untracked\0" + raw_name + b"\0")
         path = root / raw_name.decode("utf-8", errors="surrogateescape")
         if path.is_file():
-            digest.update(_sha256_file(path).encode("ascii"))
+            digest.update(sha256_file(path).encode("ascii"))
     return {
         "git_commit": commit_raw.decode("ascii", errors="ignore").strip(),
         "git_dirty": bool(status_raw),
@@ -114,8 +138,8 @@ def prepare_release(folder, mp3_path, briefing_path, *, require_clean=False):
     folder = Path(folder)
     mp3_path = Path(mp3_path)
     briefing_path = Path(briefing_path)
-    audio_sha256 = _sha256_file(mp3_path)
-    briefing_sha256 = _sha256_file(briefing_path)
+    audio_sha256 = sha256_file(mp3_path)
+    briefing_sha256 = sha256_file(briefing_path)
     slug = page_path(folder)
     release_id = hashlib.sha256(
         f"{slug}\n{audio_sha256}\n{briefing_sha256}".encode("utf-8")

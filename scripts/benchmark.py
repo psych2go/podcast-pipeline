@@ -10,9 +10,9 @@ from collections import Counter
 from pathlib import Path
 
 try:
-    from rapidfuzz.distance import Levenshtein
+    from text_distance import levenshtein_distance
 except ImportError:
-    Levenshtein = None
+    from scripts.text_distance import levenshtein_distance
 
 try:
     from content_map import coverage_report, load_json
@@ -33,28 +33,10 @@ def _numbers(text):
     return re.findall(r"(?<![a-z])\$?\d+(?:[,.]\d+)*(?:%|x|k|m|b)?", text.lower())
 
 
-def _edit_distance(reference, hypothesis):
-    previous = list(range(len(hypothesis) + 1))
-    for i, ref_word in enumerate(reference, 1):
-        current = [i]
-        for j, hyp_word in enumerate(hypothesis, 1):
-            current.append(min(
-                current[-1] + 1,
-                previous[j] + 1,
-                previous[j - 1] + (ref_word != hyp_word),
-            ))
-        previous = current
-    return previous[-1]
-
-
 def asr_metrics(reference_text, hypothesis_text):
     reference = _words(reference_text)
     hypothesis = _words(hypothesis_text)
-    distance = (
-        Levenshtein.distance(reference, hypothesis)
-        if Levenshtein is not None
-        else _edit_distance(reference, hypothesis)
-    )
+    distance = levenshtein_distance(reference, hypothesis)
     ref_numbers = Counter(_numbers(reference_text))
     hyp_numbers = Counter(_numbers(hypothesis_text))
     matched_numbers = sum((ref_numbers & hyp_numbers).values())

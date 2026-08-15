@@ -42,7 +42,7 @@ The boundary is enforced by `.gitignore`, `scripts/check_public_repo.py`, and CI
 .venv/bin/python scripts/check_public_repo.py
 ```
 
-Branches prefixed with `private-` or `private/` may contain private episode data in Git history. The checker refuses to treat them as public branches. `--allow-private-branch` checks only the current index and does not prove that history is sanitized.
+Branches prefixed with `private-` or `private/` may contain private episode data in Git history. The checker refuses to treat them as public branches, and also fails closed for a detached HEAD whose branch cannot be established from local or GitHub Actions context. `--allow-private-branch` and `--allow-detached-head` inspect only the current index and do not prove that history is sanitized.
 
 ## Documentation
 

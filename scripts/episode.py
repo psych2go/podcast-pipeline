@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from datetime import date
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -27,6 +28,15 @@ except ImportError:
 
 EPISODE_SCHEMA_VERSION = 1
 MANIFEST_NAME = "episode.json"
+
+# Evidence v2 is frozen as read-only historical compatibility on 2026-08-15
+# and stops passing the strict publication gate on 2026-09-01.
+LEGACY_EVIDENCE_WRITE_CUTOFF = date(2026, 8, 15)
+LEGACY_EVIDENCE_READ_CUTOFF = date(2026, 9, 1)
+
+
+def legacy_evidence_read_allowed(today=None):
+    return (today or date.today()) < LEGACY_EVIDENCE_READ_CUTOFF
 
 
 def _legacy_source(folder):
@@ -502,11 +512,33 @@ def update_transcript_status(folder, transcript_status, correction_status):
     )
 
 
+def _has_historical_publication(folder):
+    folder = Path(folder)
+    for filename in ("publish_report.json", "release.json"):
+        path = folder / filename
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if filename == "publish_report.json" and payload.get("passed") is True:
+            return True
+        if filename == "release.json" and payload.get("state") in {
+                "deployed", "published"}:
+            return True
+    return False
+
+
 def set_claim_evidence_mode(folder, mode):
     allowed = {"precise_required", "legacy_broad", "legacy"}
     if mode not in allowed:
         raise ValueError(f"无效 claim evidence mode: {mode}")
     folder = Path(folder)
+    if mode != "precise_required":
+        raise ValueError(
+            "legacy evidence 已于 2026-08-15 冻结为只读；"
+            "不能再新设或恢复兼容模式，请迁移到 precise_required")
     payload = load_episode(folder, create=True)
     payload.setdefault("quality", {})["claim_evidence_mode"] = mode
     save_episode(folder, payload)

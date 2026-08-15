@@ -25,10 +25,29 @@
   -> publish.py 远端验收
 ```
 
+### 核心深模块
+
+- `process.py` 的内部入口是 `process_episode(source, name, EpisodeOptions)`；旧的
+  多参数 `process(...)` 只保留为兼容 adapter，CLI 不再逐项位置透传参数。
+- `sections.py` 是 TTS 和 HTML 唯一的 Markdown 章节解析 seam；两侧只保留返回
+  旧 tuple 形状的轻量 adapter，避免章节数、标题和正文边界静默漂移。
+- `pipeline_metrics.py` 统一读取质量报告指标，`process.py` 与 `preflight.py` 不再
+  各维护一份副本。
+- `quality_errors.py` 给质量错误附加稳定 `error_details[].code`；自动复审依据 error
+  code 决策，不再依赖中文错误文案前缀。原 `errors[]` 文本继续保留用于人类阅读。
+- `catalog_health.py` 独立聚合 `run_report.json`/质量/发布状态；
+  `site_index.py` 独立完成首页统计和卡片渲染。`catalog.py` 保留 CLI 与发布事务编排，
+  通过兼容 wrapper 调用这两个深模块。
+- `hashing.py` 统一文件、文本和 bytes 的 SHA-256；`text_distance.py` 统一 benchmark
+  Levenshtein 距离及插入/删除/替换明细，避免两套 DP 漂移。
+
 流水线把三类判断分开：
 
 - **语义审查**：Codex subagent 检查转录、覆盖、事实、数字、归因和 TTS 文本。
 - **确定性质量门**：校验 schema、证据 ID、正文哈希、覆盖率、审查哈希和 TTS manifest。
+  AI 分数是模型自评，确定性层验证的是结构、证据、verdict/URL 与新鲜度，
+  不把自评分数表述为人工参考真值。哈希链用于防意外漂移，不防有本地写权限者
+  重算整条链；release Git provenance 是外部版本锚。
 - **远端发布验收**：验证 Pages 页面和 R2 音频真实可访问、可 Range 播放。
 
 Codex subagent 使用临时 `CODEX_HOME`。隔离配置不是简单丢弃用户
@@ -388,10 +407,13 @@ AI review 之后，`process.py` 的 TTS/HTML 路径只读验证讲稿和 summary
 
 ## 3. 严格模式与旧期
 
+**Evidence v2 停止兼容时间：** 2026-08-15 起 legacy 模式只读，禁止新设或恢复；2026-09-01 起 strict 质量门不再接受 evidence v2，所有待重新发布单集必须先迁移到 evidence v3。
+
 新单集一律严格模式。缺少 `content_map.json` 时，`process.py` 默认失败。
 新单集还必须使用 evidence v3。历史 evidence v2 只有在
-`episode.json.quality.claim_evidence_mode=legacy_broad` 时可暂时兼容，
-`publish_report.json` 不再参与兼容判定。一次性迁移使用：
+`episode.json.quality.claim_evidence_mode=legacy_broad` 时可暂时兼容。设置该模式前
+命令会验证单集已有通过的 `publish_report.json` 或已部署的 `release.json`；新单集
+不能降级。一次性迁移使用：
 
 ```bash
 .venv/bin/python scripts/episode.py set-evidence-mode \
@@ -420,8 +442,9 @@ npx wrangler whoami
 
 不要把 `CLOUDFLARE_API_TOKEN` 写入项目 `.env`。Wrangler 会在命令启动时
 再次读取工作目录中的 `.env`，过期 token 会覆盖有效 OAuth。流水线的
-Wrangler 包装层会在 `site/` 目录运行并清除 Cloudflare 凭据环境变量。
-CI 如需 API Token，应由 CI secret store 直接注入进程环境。
+Wrangler 包装层会在 `site/` 目录运行；若项目 `.env` 中含 Cloudflare 凭据且值
+与当前环境相同，会移除该疑似本地注入值，避免覆盖 OAuth。CI/shell 直接注入且不在
+项目 `.env` 中的 API Token 会保留。
 
 音频上传必须带 `--remote` 和 `audio/mpeg`：
 

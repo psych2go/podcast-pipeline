@@ -4,7 +4,7 @@ import os
 import ssl
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
@@ -807,8 +807,12 @@ class QualityReportTests(unittest.TestCase):
                     "timestamps": [[0, 1]],
                 }],
             }), encoding="utf-8")
-            set_claim_evidence_mode(folder, "legacy_broad")
-            report = build_quality_report(folder)
+            (folder / "episode.json").write_text(json.dumps({
+                "schema_version": 1,
+                "quality": {"claim_evidence_mode": "legacy_broad"},
+            }), encoding="utf-8")
+            report = build_quality_report(
+                folder, today=date(2026, 8, 31))
         self.assertFalse(any(
             "证据 schema 过旧" in error for error in report["errors"]))
         self.assertTrue(any(
@@ -996,12 +1000,18 @@ class ContentMapTests(unittest.TestCase):
         )
         self.assertTrue(any("不存在" in error for error in errors))
 
-    def test_high_unit_cannot_be_hidden_as_excluded(self):
+    def test_high_unit_can_be_explicitly_excluded_with_reason(self):
         self.content_map["units"][0]["status"] = "excluded"
         self.content_map["units"][0]["notes"] = "duplicate"
-        result = coverage_report(self.content_map, {"chapters": []})
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["high_missing"], ["U0001"])
+        result = coverage_report(self.content_map, {
+            "chapters": [{
+                "title": "B",
+                "unit_ids": ["U0002"],
+                "claim_ids": ["U0002-C01"],
+            }],
+        })
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["high_missing"], [])
 
     def test_claim_ids_and_body_hash_must_match(self):
         briefing = "导览。\n\n## A\n正文甲。\n\n## B\n正文乙。"
@@ -1761,9 +1771,16 @@ class ProcessTests(unittest.TestCase):
                     "来源质量未通过自动关口: 待人工抽查",
                     "缺少 ai_review.json，不能自动发布",
                 ],
+                "error_details": [
+                    {"code": "source_review_status",
+                     "message": "来源质量未通过自动关口: 待人工抽查"},
+                    {"code": "ai_review_missing",
+                     "message": "缺少 ai_review.json，不能自动发布"},
+                ],
                 "warnings": [],
             }
-            passed = {"passed": True, "errors": [], "warnings": []}
+            passed = {"passed": True, "errors": [],
+                      "error_details": [], "warnings": []}
             with patch(
                     "quality_report.build_quality_report",
                     side_effect=[missing, passed]), \
@@ -2287,7 +2304,8 @@ class HtmlTests(unittest.TestCase):
             date_str="2026-08-02",
             mp3_url="episode.mp3",
         )
-        self.assertIn(".toc-toggle { top: 0.75rem; left: 0.75rem;", html)
+        self.assertRegex(
+            html, r"(?s)\.toc-toggle \{[^}]*top: 0\.75rem;[^}]*left: 0\.75rem;")
         self.assertIn(
             "position: fixed;\n"
             "        top: 0.75rem;\n"
@@ -2295,7 +2313,8 @@ class HtmlTests(unittest.TestCase):
             "        right: 0.75rem;",
             html,
         )
-        self.assertIn("width: auto;\n        margin: 0;", html)
+        self.assertRegex(
+            html, r"(?s)\.player \{[^}]*margin: 0;[^}]*width: auto;")
         self.assertIn("scroll-margin-top: 10rem;", html)
 
 

@@ -1,28 +1,34 @@
 """Shared deterministic preflight for all artifact-producing entry points."""
-import json
 import os
 from pathlib import Path
 
 try:
     from atomic_io import atomic_write_json
+    from pipeline_metrics import quality_metrics as _quality_metrics
+    from quality_errors import (
+        AI_REVIEW_MISSING, AI_REVIEW_STALE, AUTO_REVIEW_CODES,
+    )
 except ImportError:
     from scripts.atomic_io import atomic_write_json
+    from scripts.pipeline_metrics import quality_metrics as _quality_metrics
+    from scripts.quality_errors import (
+        AI_REVIEW_MISSING, AI_REVIEW_STALE, AUTO_REVIEW_CODES,
+    )
 
 
-def _quality_metrics(folder):
-    path = Path(folder) / "quality_report.json"
-    try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return {
-        "passed": bool(report.get("passed")),
-        "error_count": len(report.get("errors", [])),
-        "warning_count": len(report.get("warnings", [])),
-        "claim_coverage": report.get("coverage", {}).get("claim_coverage"),
-        "notes_claim_coverage": report.get(
-            "coverage", {}).get("notes_claim_coverage"),
-    }
+def _review_recovery_decision(report):
+    details = report.get("error_details")
+    if not isinstance(details, list):
+        return False, False
+    codes = [
+        item.get("code") for item in details
+        if isinstance(item, dict) and item.get("code")
+    ]
+    review_missing_or_stale = any(
+        code in {AI_REVIEW_MISSING, AI_REVIEW_STALE} for code in codes)
+    can_auto_review = review_missing_or_stale and bool(codes) and all(
+        code in AUTO_REVIEW_CODES for code in codes)
+    return review_missing_or_stale, can_auto_review
 
 
 def quality_gate(
@@ -50,21 +56,8 @@ def quality_gate(
     report = build_quality_report(folder, strict=True)
     out = folder / "quality_report.json"
     atomic_write_json(out, report)
-    review_only_prefixes = (
-        "来源质量未通过自动关口:",
-        "内容审查状态未通过:",
-        "缺少 ai_review.json",
-        "AI ",
-    )
-    review_missing_or_stale = any(
-        error.startswith("缺少 ai_review.json")
-        or error.startswith("AI 审查已过期")
-        for error in report.get("errors", [])
-    )
-    can_auto_review = review_missing_or_stale and all(
-        error.startswith(review_only_prefixes)
-        for error in report["errors"]
-    )
+    review_missing_or_stale, can_auto_review = (
+        _review_recovery_decision(report))
     if not report.get("passed", False) and auto_ai_review and can_auto_review:
         print("[质量门] AI 审查缺失或过期，自动运行 subagent...", flush=True)
         try:

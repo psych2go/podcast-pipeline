@@ -17,6 +17,11 @@ try:
 except ImportError:
     from scripts.atomic_io import atomic_write_json
 
+try:
+    from sections import chapter_body_map
+except ImportError:
+    from scripts.sections import chapter_body_map
+
 
 STATUS_VALUES = {"pending", "included", "condensed", "excluded", "needs_review", "unsupported"}
 IMPORTANCE_VALUES = {"high", "medium", "low"}
@@ -576,16 +581,8 @@ def unit_claim_ids(content_map, include_excluded=False):
 
 
 def briefing_chapters(text):
-    """返回 {章节标题: 正文}，用于防止 summary_map 与真实讲稿脱节。"""
-    result = {}
-    parts = re.split(r"\n(?=## )", (text or "").strip())
-    for part in parts:
-        if not part.startswith("## "):
-            continue
-        lines = part.splitlines()
-        title = lines[0][3:].strip()
-        result[title] = "\n".join(lines[1:]).strip()
-    return result
+    """Return chapter bodies using the canonical Markdown section parser."""
+    return chapter_body_map(text)
 
 
 def body_sha256(body):
@@ -698,9 +695,11 @@ def coverage_report(content_map, summary_map):
     excluded = {u["id"] for u in units if u.get("status") == "excluded"}
     unsupported = {u["id"] for u in units if u.get("status") == "unsupported"}
 
+    required_high = high - excluded
+    required_medium = medium - excluded
     unknown = sorted(referenced_set - set(unit_by_id))
-    high_missing = sorted(high - referenced_set)
-    medium_missing = sorted(medium - referenced_set - excluded)
+    high_missing = sorted(required_high - referenced_set)
+    medium_missing = sorted(required_medium - referenced_set)
     duplicate_refs = sorted(uid for uid in set(referenced) if referenced.count(uid) > 1)
     explicit_exclusion_missing_reason = sorted(
         u["id"] for u in units
@@ -714,12 +713,16 @@ def coverage_report(content_map, summary_map):
         "chapter_count": len(chapters),
         "unit_count": len(units),
         "referenced_unit_count": len(referenced_set),
-        "high_total": len(high),
-        "high_covered": len(high & referenced_set),
-        "high_coverage": round(len(high & referenced_set) / len(high), 4) if high else 1.0,
-        "medium_total": len(medium),
-        "medium_covered": len(medium & referenced_set),
-        "medium_coverage": round(len(medium & referenced_set) / len(medium), 4) if medium else 1.0,
+        "high_total": len(required_high),
+        "high_covered": len(required_high & referenced_set),
+        "high_coverage": round(
+            len(required_high & referenced_set) / len(required_high), 4
+        ) if required_high else 1.0,
+        "medium_total": len(required_medium),
+        "medium_covered": len(required_medium & referenced_set),
+        "medium_coverage": round(
+            len(required_medium & referenced_set) / len(required_medium), 4
+        ) if required_medium else 1.0,
         "unknown_unit_ids": unknown,
         "high_missing": high_missing,
         "medium_missing": medium_missing,

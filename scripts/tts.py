@@ -17,7 +17,6 @@ if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
 import glob
-import hashlib
 import json
 import os
 import re
@@ -41,6 +40,13 @@ from config import (
     validate_for_stage,
 )
 from retry import exponential_delay, retry_after_seconds
+try:
+    from hashing import (
+        sha256_bytes as _sha256_bytes, sha256_file as _sha256_file)
+except ImportError:
+    from scripts.hashing import (
+        sha256_bytes as _sha256_bytes, sha256_file as _sha256_file)
+from sections import parse_markdown_sections
 from validator import smart_chunk
 
 
@@ -98,18 +104,6 @@ class TTSUsage:
             "synthesized_characters": self.synthesized_characters,
             "last_error": self.last_error,
         }
-
-
-def _sha256_bytes(value):
-    return hashlib.sha256(value).hexdigest()
-
-
-def _sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _write_manifest(path, payload):
@@ -431,27 +425,11 @@ def synth_chunks_concurrent(
 # ── 章节拆分 ───────────────────────────────────────────────────────
 
 def split_sections(md_text):
-    """
-    按 ## 标题拆分 markdown，返回 [(title_or_None, body), ...]。
-    第一个 ## 之前的引言段以 (None, body) 保留（不再被丢弃）。
-    """
-    parts = re.split(r"\n(?=## )", md_text)
-    secs = []
-    for idx, p in enumerate(parts):
-        p = p.strip()
-        if not p:
-            continue
-        if not p.startswith("## "):
-            # 仅首段（preamble）保留；其余游离段忽略
-            if idx == 0:
-                secs.append((None, p))
-            continue
-        lines = p.split("\n", 1)
-        secs.append((
-            lines[0].replace("## ", "").strip(),
-            lines[1] if len(lines) > 1 else "",
-        ))
-    return secs
+    """Compatibility adapter over the canonical section parser."""
+    return [
+        (section.title, section.body)
+        for section in parse_markdown_sections(md_text)
+    ]
 
 
 def safe_filename(name, max_len=40):
@@ -578,9 +556,13 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
     os.makedirs(audio_dir, exist_ok=True)
     manifest_path = os.path.join(folder, "tts_manifest.json")
 
-    # .tmp 永远是半成品，一律清掉
-    for f in glob.glob(os.path.join(audio_dir, "*.tmp")):
-        os.remove(f)
+    # 普通 .tmp 与 atomic_io 生成的 .<name>.<rand>.tmp.mp3 都是半成品。
+    for candidate in Path(audio_dir).iterdir():
+        if not candidate.is_file():
+            continue
+        name = candidate.name
+        if name.endswith(".tmp") or (name.startswith(".") and ".tmp" in name):
+            candidate.unlink()
     briefing_path = os.path.join(folder, briefing_file)
     if not os.path.exists(briefing_path):
         print(f"  [TTS] 找不到 {briefing_file}", flush=True)

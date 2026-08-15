@@ -1,12 +1,16 @@
 """Adaptive ASR context building and difficult-segment refinement."""
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from statistics import fmean
 from typing import Callable, Iterable, Sequence
+
+try:
+    from hashing import sha256_text as _text_sha256
+except ImportError:
+    from scripts.hashing import sha256_text as _text_sha256
 
 
 _GENERIC_WORDS = frozenset({
@@ -408,9 +412,6 @@ def _plausible_word_rate(segments):
     rate = len(_text_tokens(_render_text(segments))) / duration
     return 0.35 <= rate <= 5.5, round(rate, 4)
 
-
-def _text_sha256(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _candidate_decision(original, candidate, context_terms):

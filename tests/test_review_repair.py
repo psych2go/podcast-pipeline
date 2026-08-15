@@ -163,7 +163,7 @@ class PartialReviewTests(unittest.TestCase):
 
             self.assertEqual(scope["mode"], "partial_then_full")
             self.assertEqual(scope["changed_files"], ["讲书稿.md"])
-            self.assertIn("不得直接继承 passed", prompt)
+            self.assertIn("不会提供上次 ai_review.json", prompt)
             self.assertIn("完整发布判定", prompt)
 
     def test_review_prompt_does_not_require_web_for_guest_firsthand_claims(self):
@@ -172,7 +172,6 @@ class PartialReviewTests(unittest.TestCase):
                 "mode": "full",
                 "changed_files": [],
                 "unchanged_files": [],
-                "previous_passed": False,
             })
         self.assertIn("不强制联网", prompt)
         self.assertIn("不能因无公开网页而扣 factuality 分", prompt)

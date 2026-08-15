@@ -29,12 +29,12 @@ if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
 import argparse
-import hashlib
 import json
 import os
 import re
 import uuid
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
@@ -60,6 +60,12 @@ from fetcher import (
 from tts import run_tts
 from tts import load_tts_lexicon
 from html_gen import md_to_html
+try:
+    from hashing import (
+        sha256_file as _source_sha256, sha256_text as _text_sha256)
+except ImportError:
+    from scripts.hashing import (
+        sha256_file as _source_sha256, sha256_text as _text_sha256)
 from preflight import quality_gate as shared_quality_gate
 from agent_pipeline import content_pipeline_needed, run_content_pipeline
 from release import prepare_release
@@ -70,6 +76,7 @@ from content_finalizer import (
     finalize_content_artifacts,
     validate_tts_readiness,
 )
+from pipeline_metrics import quality_metrics as _quality_metrics
 from validator import (
     normalize_briefing_artifacts,
     structure_report,
@@ -82,6 +89,60 @@ BRIEFING_CANDIDATES = ("讲书稿.md", "简报.md")
 HTML_CANDIDATES = ("讲书稿.html",)
 
 
+@dataclass(frozen=True)
+class EpisodeOptions:
+    asr_model: str | None = None
+    tts_speed: float = 1.0
+    force_tts: bool = False
+    read_titles: bool = True
+    fetch_only: bool = False
+    tts_only: bool = False
+    html_only: bool = False
+    no_html: bool = False
+    quality: str = "balanced"
+    initial_prompt: str | None = None
+    hotwords: object | None = None
+    engine: str = "whisper"
+    lm_path: str | None = None
+    diarize_audio: bool = True
+    min_speakers: int | None = None
+    max_speakers: int | None = None
+    content_policy: str = "faithful"
+    auto_ai_review: bool = True
+    allow_legacy: bool = False
+    display_title: str | None = None
+    force_refetch: bool = False
+    asr_language: str | None = "en"
+    auto_content: bool = True
+    adaptive_refinement: bool = True
+    align_audio: bool = True
+
+    @property
+    def mode(self):
+        if self.html_only:
+            return "html-only"
+        if self.tts_only:
+            return "tts-only"
+        if self.fetch_only:
+            return "fetch-only"
+        return "full"
+
+    def run_metadata(self, source):
+        return {
+            "mode": self.mode,
+            "source": source if source and str(source).startswith("http") else (
+                str(source) if source else ""),
+            "asr_quality": self.quality,
+            "asr_model": self.asr_model,
+            "asr_language": self.asr_language,
+            "force_refetch": self.force_refetch,
+            "adaptive_refinement": self.adaptive_refinement,
+            "align_audio": self.align_audio,
+            "tts_speed": self.tts_speed,
+            "auto_content": self.auto_content,
+        }
+
+
 def sanitize_title(name):
     """清理文件夹/音频文件名：去掉文件系统与 shell 通配符不安全的字符，折叠空白。
 
@@ -91,6 +152,9 @@ def sanitize_title(name):
     name = re.sub(r'[\\/:*?"<>|\[\]$`]', "", name)
     name = re.sub(r"\s+", " ", name).strip()
     name = name.rstrip(".")  # Windows 不允许文件名以点结尾
+    encoded = name.encode("utf-8")
+    if len(encoded) > 180:
+        name = encoded[:180].decode("utf-8", errors="ignore").rstrip(" .")
     return name or "untitled"
 
 
@@ -123,22 +187,6 @@ def _stage(run_report, name, metrics=None):
     return run_report.stage(name, metrics)
 
 
-def _quality_metrics(folder):
-    path = Path(folder) / "quality_report.json"
-    try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return {
-        "passed": bool(report.get("passed")),
-        "error_count": len(report.get("errors", [])),
-        "warning_count": len(report.get("warnings", [])),
-        "claim_coverage": report.get("coverage", {}).get("claim_coverage"),
-        "notes_claim_coverage": report.get(
-            "coverage", {}).get("notes_claim_coverage"),
-    }
-
-
 def _tts_metrics(folder, briefing_file):
     folder = Path(folder)
     path = folder / "tts_manifest.json"
@@ -147,12 +195,15 @@ def _tts_metrics(folder, briefing_file):
     except (OSError, json.JSONDecodeError):
         return {}
     config = manifest.get("config", {})
-    plan = build_tts_plan(
-        folder,
-        briefing_file,
-        speed=config.get("speed", 1.0),
-        read_titles=config.get("read_titles", True),
-    )
+    try:
+        plan = build_tts_plan(
+            folder,
+            briefing_file,
+            speed=config.get("speed", 1.0),
+            read_titles=config.get("read_titles", True),
+        )
+    except Exception:
+        return {}
     plan_by_name = {item["filename"]: item for item in plan}
     sections = manifest.get("sections", [])
     synthesized = [
@@ -177,18 +228,6 @@ def _tts_metrics(folder, briefing_file):
     }
     metrics.update(manifest.get("usage", {}))
     return metrics
-
-
-def _source_sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _text_sha256(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _segment_text_sha256(segment):
@@ -521,7 +560,7 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
                     text, "转录方式", "本地 ASR（Whisper）")
         text = _upsert_source_field(
             text, "处理日期", date.today().isoformat())
-        text = _upsert_source_field(text, "pipeline 版本", "v7")
+        text = _upsert_source_field(text, "pipeline 版本", "v8")
         text = _upsert_source_field(text, "ASR 质量", quality)
         atomic_write_text(source_path, text)
 
@@ -758,17 +797,32 @@ def _warn_if_asr_needs_correction(folder):
         )
 
 
-def _process_impl(
-        source, name, folder, run_report, asr_model=None, tts_speed=1.0,
-        force_tts=False, read_titles=True, fetch_only=False, tts_only=False,
-        html_only=False, no_html=False, quality="balanced",
-        initial_prompt=None, hotwords=None, engine="whisper",
-        lm_path=None, diarize_audio=True,
-        min_speakers=None, max_speakers=None,
-        content_policy="faithful", auto_ai_review=True,
-        allow_legacy=False, display_title=None, force_refetch=False,
-        asr_language="en", auto_content=True, adaptive_refinement=True,
-        align_audio=True):
+def _process_impl(source, name, folder, run_report, options):
+    asr_model = options.asr_model
+    tts_speed = options.tts_speed
+    force_tts = options.force_tts
+    read_titles = options.read_titles
+    fetch_only = options.fetch_only
+    tts_only = options.tts_only
+    html_only = options.html_only
+    no_html = options.no_html
+    quality = options.quality
+    initial_prompt = options.initial_prompt
+    hotwords = options.hotwords
+    engine = options.engine
+    lm_path = options.lm_path
+    diarize_audio = options.diarize_audio
+    min_speakers = options.min_speakers
+    max_speakers = options.max_speakers
+    content_policy = options.content_policy
+    auto_ai_review = options.auto_ai_review
+    allow_legacy = options.allow_legacy
+    display_title = options.display_title
+    force_refetch = options.force_refetch
+    asr_language = options.asr_language
+    auto_content = options.auto_content
+    adaptive_refinement = options.adaptive_refinement
+    align_audio = options.align_audio
 
     # ---- 仅 HTML 模式：从已有讲稿生成 HTML，跳过其他一切 ----
     if html_only:
@@ -908,6 +962,23 @@ def _process_impl(
     return True
 
 
+def process_episode(source, name, options):
+    """Run one episode through the deep process interface."""
+    folder = BASE_DIR / name
+    folder.mkdir(parents=True, exist_ok=True)
+    with exclusive_file_lock(
+            f"episode:{folder.resolve()}", blocking=False):
+        report = RunReport(
+            folder, "process", options.run_metadata(source))
+        try:
+            ok = _process_impl(source, name, folder, report, options)
+        except Exception as exc:
+            report.finish(False, exc)
+            raise
+        report.finish(ok, None if ok else "pipeline returned failure")
+        return ok
+
+
 def process(source, name, asr_model=None, tts_speed=1.0,
             force_tts=False, read_titles=True, fetch_only=False, tts_only=False,
             html_only=False, no_html=False, quality="balanced",
@@ -918,44 +989,34 @@ def process(source, name, asr_model=None, tts_speed=1.0,
             allow_legacy=False, display_title=None, force_refetch=False,
             asr_language="en", auto_content=True, adaptive_refinement=True,
             align_audio=True):
-    """抓取转录 / 跑 TTS，并将每次执行追加到 run_report.json。"""
-    folder = BASE_DIR / name
-    folder.mkdir(parents=True, exist_ok=True)
-    mode = (
-        "html-only" if html_only
-        else "tts-only" if tts_only
-        else "fetch-only" if fetch_only
-        else "full"
-    )
-    with exclusive_file_lock(
-            f"episode:{folder.resolve()}", blocking=False):
-        report = RunReport(folder, "process", {
-            "mode": mode,
-            "source": source if source and source.startswith("http") else (
-                str(source) if source else ""),
-            "asr_quality": quality,
-            "asr_model": asr_model,
-            "asr_language": asr_language,
-            "force_refetch": force_refetch,
-            "adaptive_refinement": adaptive_refinement,
-            "align_audio": align_audio,
-            "tts_speed": tts_speed,
-            "auto_content": auto_content,
-        })
-        try:
-            ok = _process_impl(
-                source, name, folder, report, asr_model, tts_speed,
-                force_tts, read_titles, fetch_only, tts_only,
-                html_only, no_html, quality, initial_prompt, hotwords, engine,
-                lm_path, diarize_audio, min_speakers, max_speakers,
-                content_policy, auto_ai_review, allow_legacy, display_title,
-                force_refetch, asr_language, auto_content,
-                adaptive_refinement, align_audio)
-        except Exception as exc:
-            report.finish(False, exc)
-            raise
-        report.finish(ok, None if ok else "pipeline returned failure")
-        return ok
+    """Backward-compatible adapter; use process_episode + EpisodeOptions internally."""
+    return process_episode(source, name, EpisodeOptions(
+        asr_model=asr_model,
+        tts_speed=tts_speed,
+        force_tts=force_tts,
+        read_titles=read_titles,
+        fetch_only=fetch_only,
+        tts_only=tts_only,
+        html_only=html_only,
+        no_html=no_html,
+        quality=quality,
+        initial_prompt=initial_prompt,
+        hotwords=hotwords,
+        engine=engine,
+        lm_path=lm_path,
+        diarize_audio=diarize_audio,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+        content_policy=content_policy,
+        auto_ai_review=auto_ai_review,
+        allow_legacy=allow_legacy,
+        display_title=display_title,
+        force_refetch=force_refetch,
+        asr_language=asr_language,
+        auto_content=auto_content,
+        adaptive_refinement=adaptive_refinement,
+        align_audio=align_audio,
+    ))
 
 
 # ===================================================================
@@ -1090,25 +1151,37 @@ def main():
 
     # 说话人分离：--diarize 默认启用，--no-diarize 可覆盖
     _diarize = args.diarize and not args.no_diarize
-    ok = process(source, name, args.asr_model, args.tts_speed,
-                 args.force_tts, not args.no_tts_titles, args.fetch_only, args.tts_only,
-                 args.html_only, args.no_html, quality=args.asr_quality,
-                 initial_prompt=args.initial_prompt, hotwords=args.hotwords,
-                 engine=args.asr_engine, lm_path=args.lm,
-                 diarize_audio=_diarize,
-                 min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                 content_policy=args.content_policy,
-                 auto_ai_review=not args.skip_ai_review,
-                 allow_legacy=args.allow_legacy_quality,
-                 display_title=raw_title,
-                 force_refetch=args.force_refetch,
-                 asr_language=(
-                     None if args.asr_language.lower() == "auto"
-                     else args.asr_language
-                 ),
-                 auto_content=not args.no_auto_content,
-                 adaptive_refinement=not args.no_asr_refine,
-                 align_audio=not args.no_align)
+    options = EpisodeOptions(
+        asr_model=args.asr_model,
+        tts_speed=args.tts_speed,
+        force_tts=args.force_tts,
+        read_titles=not args.no_tts_titles,
+        fetch_only=args.fetch_only,
+        tts_only=args.tts_only,
+        html_only=args.html_only,
+        no_html=args.no_html,
+        quality=args.asr_quality,
+        initial_prompt=args.initial_prompt,
+        hotwords=args.hotwords,
+        engine=args.asr_engine,
+        lm_path=args.lm,
+        diarize_audio=_diarize,
+        min_speakers=args.min_speakers,
+        max_speakers=args.max_speakers,
+        content_policy=args.content_policy,
+        auto_ai_review=not args.skip_ai_review,
+        allow_legacy=args.allow_legacy_quality,
+        display_title=raw_title,
+        force_refetch=args.force_refetch,
+        asr_language=(
+            None if args.asr_language.lower() == "auto"
+            else args.asr_language
+        ),
+        auto_content=not args.no_auto_content,
+        adaptive_refinement=not args.no_asr_refine,
+        align_audio=not args.no_align,
+    )
+    ok = process_episode(source, name, options)
     return 0 if ok else 1
 
 

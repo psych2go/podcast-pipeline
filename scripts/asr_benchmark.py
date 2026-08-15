@@ -8,6 +8,10 @@ from pathlib import Path
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+try:
+    from text_distance import edit_details
+except ImportError:
+    from scripts.text_distance import edit_details
 
 
 def words(text):
@@ -23,69 +27,6 @@ def numbers(text):
         r"(?<![a-z])\$?\d+(?:[,.]\d+)*(?:%|x|k|m|b)?",
         (text or "").lower(),
     )
-
-
-def edit_details(reference, hypothesis):
-    """Levenshtein details for token sequences."""
-    rows = len(reference) + 1
-    cols = len(hypothesis) + 1
-    cost = [[None] * cols for _ in range(rows)]
-    cost[0][0] = (0, 0, 0, 0)
-    for i in range(1, rows):
-        cost[i][0] = (i, 0, i, 0)
-    for j in range(1, cols):
-        cost[0][j] = (j, j, 0, 0)
-
-    for i in range(1, rows):
-        for j in range(1, cols):
-            if reference[i - 1] == hypothesis[j - 1]:
-                cost[i][j] = cost[i - 1][j - 1]
-                continue
-            insertion = cost[i][j - 1]
-            deletion = cost[i - 1][j]
-            substitution = cost[i - 1][j - 1]
-            candidates = [
-                (
-                    insertion[0] + 1,
-                    insertion[1] + 1,
-                    insertion[2],
-                    insertion[3],
-                ),
-                (
-                    deletion[0] + 1,
-                    deletion[1],
-                    deletion[2] + 1,
-                    deletion[3],
-                ),
-                (
-                    substitution[0] + 1,
-                    substitution[1],
-                    substitution[2],
-                    substitution[3] + 1,
-                ),
-            ]
-            cost[i][j] = min(
-                candidates,
-                key=lambda item: (
-                    item[0],
-                    item[3],
-                    item[2],
-                    item[1],
-                ),
-            )
-    errors, insertions, deletions, substitutions = cost[-1][-1]
-    return {
-        "errors": errors,
-        "reference_words": len(reference),
-        "hypothesis_words": len(hypothesis),
-        "insertions": insertions,
-        "deletions": deletions,
-        "substitutions": substitutions,
-        "wer": (
-            round(errors / len(reference), 4)
-            if reference else (0.0 if not hypothesis else None)
-        ),
-    }
 
 
 def read_rttm(path, uri=None):

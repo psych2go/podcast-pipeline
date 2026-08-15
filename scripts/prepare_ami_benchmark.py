@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+try:
+    from hashing import sha256_file
+except ImportError:
+    from scripts.hashing import sha256_file
 from zipfile import ZipFile
 
 try:
@@ -36,14 +40,6 @@ EXPECTED_HASHES = {
     ),
 }
 NITE_ID = "{http://nite.sourceforge.net/}id"
-
-
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def verify_sources(root):

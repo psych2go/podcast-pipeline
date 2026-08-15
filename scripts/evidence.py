@@ -1,11 +1,15 @@
 """Evidence provenance and legacy ASR migration."""
 import argparse
-import hashlib
 import json
 import subprocess
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
+
+try:
+    from hashing import sha256_file as _sha256_file
+except ImportError:
+    from scripts.hashing import sha256_file as _sha256_file
 
 try:
     from atomic_io import atomic_write_json
@@ -16,14 +20,6 @@ except ImportError:
 PROVENANCE_SCHEMA_VERSION = 1
 ASR_SOURCE_KINDS = frozenset({"local_asr", "legacy_asr"})
 _AUDIO_SUFFIXES = frozenset({".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg"})
-
-
-def _sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _audio_duration_seconds(path):

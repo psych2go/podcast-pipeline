@@ -193,6 +193,8 @@ def _run_process(cmd, *, cwd, env, timeout):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         start_new_session=True,
     )
     try:
@@ -354,27 +356,100 @@ def _copy_sanitized_codex_config(source_home, isolated, command):
         target.chmod(0o600)
 
 
+_RUNNER_ENV_KEYS = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM",
+    "LANG", "LANGUAGE", "TMPDIR", "TEMP", "TMP", "TZ", "NO_COLOR",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+    "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+    "XDG_RUNTIME_DIR", "GIT_PAGER", "PAGER",
+    # Model credentials are necessary when auth.json is not used. Pipeline
+    # credentials such as FISH_KEY/HF_TOKEN/Cloudflare tokens are excluded.
+    "OPENAI_API_KEY", "CODEX_API_KEY",
+})
+
+
+def _configured_provider_env_keys(home, command):
+    keys = set()
+    paths = [Path(home) / "config.toml"]
+    paths.extend(
+        Path(home) / f"{profile}.config.toml"
+        for profile in _profile_names(command)
+    )
+    for path in paths:
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            config = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        providers = config.get("model_providers")
+        if not isinstance(providers, dict):
+            continue
+        for provider in providers.values():
+            if not isinstance(provider, dict):
+                continue
+            env_key = provider.get("env_key")
+            if isinstance(env_key, str) and env_key.strip():
+                keys.add(env_key.strip())
+            headers = provider.get("env_http_headers")
+            if isinstance(headers, dict):
+                keys.update(
+                    str(value).strip()
+                    for value in headers.values()
+                    if isinstance(value, str) and value.strip()
+                )
+    return keys
+
+
+def _filtered_runner_environment(source_env, *, provider_keys=()):
+    explicit = {
+        item.strip()
+        for item in source_env.get("SUBAGENT_ENV_ALLOWLIST", "").split(",")
+        if item.strip()
+    }
+    allowed = set(_RUNNER_ENV_KEYS) | set(provider_keys) | explicit
+    allowed.update(
+        key for key in source_env
+        if key.startswith("LC_") or key.startswith("SUBAGENT_")
+    )
+    return {key: value for key, value in source_env.items() if key in allowed}
+
+
 def _runner_environment(tmp, command):
-    """Isolate hooks/MCPs while preserving the active model provider."""
-    env = os.environ.copy()
-    if Path(command[0]).name != "codex":
+    """Isolate runner config and expose only runtime/provider environment."""
+    source_env = os.environ.copy()
+    is_codex = Path(command[0]).name == "codex"
+    source = Path(
+        source_env.get("CODEX_HOME", str(Path.home() / ".codex"))
+    ).expanduser()
+    configured = source_env.get("SUBAGENT_CODEX_HOME", "").strip()
+    provider_home = (
+        Path(configured).expanduser().resolve() if configured else source
+    )
+    provider_keys = (
+        _configured_provider_env_keys(provider_home, command)
+        if is_codex else set()
+    )
+    env = _filtered_runner_environment(
+        source_env, provider_keys=provider_keys)
+    if not is_codex:
         return env
-    inherit = env.get(
+
+    inherit = source_env.get(
         "SUBAGENT_INHERIT_CODEX_HOME", "").strip().lower() in {
             "1", "true", "yes", "on",
         }
     if inherit:
+        env["CODEX_HOME"] = str(source)
         return env
-    configured = env.get("SUBAGENT_CODEX_HOME", "").strip()
     if configured:
         isolated = Path(configured).expanduser().resolve()
         isolated.mkdir(parents=True, exist_ok=True)
         env["CODEX_HOME"] = str(isolated)
         return env
 
-    source = Path(
-        env.get("CODEX_HOME", str(Path.home() / ".codex"))
-    ).expanduser()
     isolated = Path(tmp) / "codex-home"
     isolated.mkdir(parents=True, exist_ok=True)
     auth = source / "auth.json"

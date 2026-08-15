@@ -136,6 +136,19 @@ def content_pipeline_needed(folder, force=False):
         return True
 
 
+def _correction_prompt(source_kind):
+    prompt_path = Path(__file__).resolve().parent / "纠错提示词.md"
+    prompt = prompt_path.read_text(encoding="utf-8").strip()
+    return (
+        prompt
+        + "\n\n## 本次受限任务\n"
+        + f"当前 source_kind={source_kind!r}。\n"
+        + "只允许创建或更新 转录_纠错.txt；不要修改 原始转录.txt、"
+        + "transcript.raw.json 或 来源.md。来源状态由主流程统一写回。\n"
+        + "本地 ASR 必须生成纠错稿；第三方文本只有在确实发现问题时生成。"
+    )
+
+
 def run_content_pipeline(folder, title, run_report=None, force=False):
     """Run correction, content mapping, writing, evidence, and hash enrichment."""
     folder = Path(folder).resolve()
@@ -173,15 +186,7 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
         else:
             run_edit_task(
                 folder,
-                f"""读取 transcript.raw.json、原始转录.txt 和 来源.md。
-逐段检查人名、公司名、数字、单位、专有名词、说话人归属和明显听写错误。
-原始转录不可修改。
-转录_纠错.txt 只能修复听写、断句、专名和说话人识别错误，必须保持嘉宾实际表达。
-如果嘉宾本身陈述了错误事实，不得在纠错稿中静默改成正确事实；应保留原话，交给
-content_map、讲稿归因和最终 fact check 处理。
-如果发现会影响总结的错误，写入 转录_纠错.txt；否则不要创建该文件。
-当前 source_kind={source_kind!r}。
-本地 ASR 必须生成纠错稿；第三方文本只有在确实发现问题时生成。""",
+                _correction_prompt(source_kind),
                 task_name="transcript_correction",
                 allowed_files=[correction_path],
                 input_files=correction_inputs,

@@ -5,6 +5,11 @@ import copy
 import hashlib
 import re
 
+try:
+    from sections import chapter_sections, parse_markdown_sections, preamble_text
+except ImportError:
+    from scripts.sections import chapter_sections, parse_markdown_sections, preamble_text
+
 
 def validate_and_fix(text, return_details=False):
     """校验讲稿并执行既有机械修复，可选返回可审计的分类明细。"""
@@ -107,22 +112,12 @@ def _zh_chars(s):
 
 
 def _split_chapters(text):
-    """按 ## 章节拆分。返回 (preamble, [(title, body_zh_chars), ...])。"""
-    parts = re.split(r"\n(?=## )", text.strip())
-    preamble = ""
-    chapters = []
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        if p.startswith("## "):
-            lines = p.split("\n", 1)
-            title = lines[0].replace("## ", "").strip()
-            body = lines[1] if len(lines) > 1 else ""
-            chapters.append((title, _zh_chars(body)))
-        elif not chapters:
-            preamble = p
-    return preamble, chapters
+    """Return preamble and chapter sizes from the canonical section model."""
+    chapters = [
+        (section.title, _zh_chars(section.body))
+        for section in chapter_sections(text)
+    ]
+    return preamble_text(text), chapters
 
 
 _CN_DIGITS = "零一二三四五六七八九"
@@ -177,39 +172,6 @@ def integer_to_chinese(value):
     return "".join(result)
 
 
-def _normalize_known_terms(text):
-    changes = False
-
-    def oral_directive(match):
-        nonlocal changes
-        changes = True
-        return (
-            match.group(1)
-            + "三零零九，正式编号为三零零零点零九"
-        )
-
-    text = re.sub(
-        r"((?:自主武器(?:系统)?(?:指令|标准))"
-        r"[^。！？\n]{0,24}?)(?<!\d)3009(?!\d)",
-        oral_directive,
-        text,
-        flags=re.IGNORECASE,
-    )
-
-    def formal_directive(match):
-        nonlocal changes
-        changes = True
-        return match.group(1) + "三零零零点零九"
-
-    text = re.sub(
-        r"((?:自主武器(?:系统)?(?:指令|标准))"
-        r"[^。！？\n]{0,24}?)(?<!\d)3000\.09(?!\d)",
-        formal_directive,
-        text,
-        flags=re.IGNORECASE,
-    )
-    return text, changes
-
 
 def _normalize_arabic_numbers(text):
     changed = False
@@ -240,19 +202,15 @@ def _normalize_arabic_numbers(text):
 
 
 def _chapter_blocks(text):
-    parts = re.split(r"\n(?=## )", (text or "").strip())
-    preamble = []
-    chapters = []
-    for part in parts:
-        if part.startswith("## "):
-            lines = part.split("\n", 1)
-            chapters.append({
-                "title": lines[0][3:].strip(),
-                "body": lines[1].strip() if len(lines) > 1 else "",
-            })
-        else:
-            preamble.append(part.strip())
-    return "\n\n".join(item for item in preamble if item), chapters
+    sections = parse_markdown_sections(text)
+    preamble = "\n\n".join(
+        section.body for section in sections if section.title is None
+    )
+    chapters = [
+        {"title": section.title, "body": section.body}
+        for section in sections if section.title is not None
+    ]
+    return preamble, chapters
 
 
 def _summary_chapter(summary_map, title):
@@ -284,9 +242,6 @@ def normalize_briefing_artifacts(text, summary_map):
     summary_map = copy.deepcopy(summary_map or {"chapters": []})
     changes = []
 
-    text, known_terms_changed = _normalize_known_terms(text)
-    if known_terms_changed:
-        changes.append("normalized_known_terms")
     text, numbers_changed = _normalize_arabic_numbers(text)
     if numbers_changed:
         changes.append("normalized_numbers")

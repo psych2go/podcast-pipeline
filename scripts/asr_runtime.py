@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-import hashlib
 import importlib.metadata
 import json
 import os
@@ -16,6 +15,11 @@ import time
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
+
+try:
+    from hashing import sha256_text as _text_sha256
+except ImportError:
+    from scripts.hashing import sha256_text as _text_sha256
 
 try:
     from atomic_io import atomic_write_json
@@ -272,9 +276,6 @@ def _audio_duration_seconds(path):
     except ValueError:
         return None
 
-
-def _text_sha256(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class _GpuMemorySampler:

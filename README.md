@@ -42,7 +42,7 @@
 .venv/bin/python scripts/check_public_repo.py
 ```
 
-以 `private-` 或 `private/` 开头的本地分支可能含有历史私有内容，检查器会拒绝把它当成公开分支。需要只检查当前索引是否干净时，可使用 `--allow-private-branch`；这不代表该分支历史适合公开。
+以 `private-` 或 `private/` 开头的本地分支可能含有历史私有内容，检查器会拒绝把它当成公开分支。无法从本地分支名或 GitHub Actions 环境确定来源的 detached HEAD 也会 fail closed。`--allow-private-branch` / `--allow-detached-head` 只用于人工检查当前索引，不代表历史适合公开。
 
 ## AI 与维护文档
 

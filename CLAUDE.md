@@ -29,6 +29,8 @@ URL 会自动提取展示标题并创建 `content/<storage_name>/`。Podscripts 
 
 抓取成功后，`process.py` 默认继续调用 Codex subagent 编排纠错、
 content map、中文笔记、讲书稿、summary map、claim evidence 和 AI review。
+内部编排通过 `EpisodeOptions` 参数对象进入 `process_episode()`；公开 CLI 与旧
+`process(...)` 调用保持兼容，但阶段实现不再接收二十多个位置参数。
 如需只停在原始转录，使用 `--fetch-only` 或 `--no-auto-content`。
 
 同名目录已有完整原始证据时，重复执行抓取命令会直接复用，不再次访问来源。
@@ -195,19 +197,23 @@ claim 单元的映射。历史数据需要按 unit 精炼：
 ```
 
 strict 模式下 claim evidence runner 失败会按单 unit 重试，仍失败则阻断。
-只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；该模式默认
-不能发布，也不能被用来降低 evidence v3 或逐 claim 证据要求。
+只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；确定性
+质量门会识别 `deterministic-fallback` 并阻断发布，不能用它降低 evidence v3
+或逐 claim 证据要求。
 
 已经发布的 evidence v2 单集只有在 `episode.json` 显式标记后才能暂时兼容，
 `publish_report.json` 不再具备放行能力：
+
+**Evidence v2 停止兼容时间：** 2026-08-15 起 legacy 模式只读，禁止新设或恢复；2026-09-01 起 strict 质量门不再接受 evidence v2，所有待重新发布单集必须先迁移到 evidence v3。
 
 ```bash
 .venv/bin/python scripts/episode.py set-evidence-mode \
   "content/旧期" legacy_broad
 ```
 
-该命令会修改受审文件，因此已有 `ai_review.json` 会按哈希规则失效，需要重审。
-新单集不能使用 v2。
+该命令会先验证 `publish_report.json` 或 `release.json` 中存在历史发布记录；
+全新单集会被拒绝。命令会修改受审文件，因此已有 `ai_review.json` 会按哈希规则
+失效，需要重审。新单集不能使用 v2。
 
 ### 4. AI 审查和确定性质量门
 
@@ -233,8 +239,9 @@ subclaim，并用 `parent_claim_id` / `subclaim_id` 绑定 content_map；每个�
 
 `claim_type` 只保留为 v2 兼容派生字段；主持人观点、专家解释、第三方指控和节目
 元数据不能再硬塞进 guest/public 类别。说话人内部数据和亲历事件不强制联网，
-但必须保留原话、数字、范围和归因；诉状或报道只核查来源是否准确转述，不能把
-指控本身当作已证明事实；高风险建议必须执行 safety cross-check。
+但必须保留原话、数字、范围和归因；`speaker_reported` 的第三方事实必须明确
+归因，不能标记为无归因的 `used_as_fact`；诉状或报道只核查来源是否准确转述，
+不能把指控本身当作已证明事实；高风险建议必须执行 safety cross-check。
 
 只有 external_source/editorial_added 的客观 fact 可以写入
 `fact_check_cache.json`。一手信息、观点、建议、解释和 allegation 不进入外部事实
@@ -258,6 +265,17 @@ subclaim，并用 `parent_claim_id` / `subclaim_id` 绑定 content_map；每个�
 - 结构体检存在错误
 
 AI 只审内容，HTML、MP3、R2 和 Pages 的新鲜度由后续确定性检查负责。修改任一受审文件后必须重审。
+质量报告同时写入人类可读的 `errors[]` 和机器稳定的
+`error_details[].code`。自动复审只根据结构化 code 判断，不依赖中文错误文案。
+
+AI 的 transcript/coverage/factuality 分数属于模型自评；确定性质量门能机械验证
+schema、哈希、证据覆盖、verdict/URL 约束和产物新鲜度，但不能证明模型“诚实打分”。
+因此结构约束是主要安全保证，分数门是补充信号，不应被解释为人工参考 WER 或
+独立事实证明。
+
+evidence 哈希链的信任边界是防止意外漂移和陈旧产物复用，不是抵御拥有本地写权限
+且能重跑 enrich/review 的恶意修改。release 中的 Git commit 和 pipeline diff 指纹
+提供外部版本锚；需要更强防篡改时应把 revision hash 固化到受保护的远端提交。
 
 `transcript_quality.score` 表示下游实际使用的综合转录质量。ASR 审查还会
 区分 `raw_score`、`corrected_score` 和 `accuracy_basis`；没有人工标准稿时
@@ -279,6 +297,8 @@ AI 只审内容，HTML、MP3、R2 和 Pages 的新鲜度由后续确定性检查
 ```
 
 TTS 使用内容与配置指纹缓存，而不是文件时间。`tts_manifest.json` 绑定实际朗读文本、音色、模型、语速、章节设置、每节音频 SHA-256 和最终 MP3 SHA-256。
+TTS、release、evidence 和 ASR 共用 `hashing.py`；TTS 与 HTML 共用
+`sections.py`，避免缓存指纹、音频章节和页面章节采用不同边界。
 
 通过 AI review 后，TTS 和 HTML 阶段只做只读校验，不再自动修改
 `讲书稿.md` 或 `summary_map.json`。如果最终化仍会产生任何变化，流水线会阻断并
@@ -287,7 +307,8 @@ TTS 使用内容与配置指纹缓存，而不是文件时间。`tts_manifest.js
 - 任一章节失败会立即阻断。
 - 失败时不会合并，也不会覆盖已有最终 MP3。
 - 成功后先生成临时合并文件，再原子替换最终 MP3。
-- 429 会遵守 `Retry-After`，429/5xx/网络错误按可配置指数退避重试。
+- 429 会遵守 `Retry-After`，但服务端指定的等待时间最多采用五分钟；
+  429/5xx/网络错误按可配置指数退避重试。
 - HTML 只会在质量门和 TTS 都通过后生成。
 
 仅重建页面：
@@ -326,10 +347,14 @@ TTS 使用内容与配置指纹缓存，而不是文件时间。`tts_manifest.js
   "播客一" "播客二" "播客三"
 ```
 
-`finish-batch` 只提供完整发布事务，不支持脱离 Pages 的单独 R2 上传。R2 上传
-默认并发三路，可用 `--upload-concurrency` 调整；上传完成后必须继续生成站点、
+`finish-batch` 只提供完整发布事务，不支持脱离 Pages 的单独 R2 上传。每期都会
+追加 `catalog.finish-batch` 的 `run_report.json` 记录。R2 上传默认并发三路，可用
+`--upload-concurrency` 调整；上传完成后必须继续生成站点、
 部署 Pages，并逐期通过页面、R2 HEAD、`Content-Type`、文件大小、
 `Accept-Ranges` 和 Range 响应验收，才算发布成功。
+
+`catalog.py` 仍是唯一发布 CLI；健康报告实现位于 `catalog_health.py`，首页
+渲染实现位于 `site_index.py`，CLI 和 `finish`/`finish-batch` 调用方式不变。
 
 `finish` 会依次：
 
@@ -433,7 +458,9 @@ subagent 默认创建隔离的临时 `CODEX_HOME`：复制 `auth.json`，并从�
 `config.toml` 生成最小安全配置，只保留 model、自定义 model provider、认证相关
 字段和 `model_catalog_json`。hooks、plugins、remote plugins、workspace
 dependencies、MCP servers、project trust、hook state 和 notice 不会复制。
-这样既保留 custom provider 认证路径，也不会启动用户级 hook/MCP。
+这样既保留 custom provider 认证路径，也不会启动用户级 hook/MCP。子进程环境
+只保留基础运行变量、实际 model provider 的认证变量和显式
+`SUBAGENT_ENV_ALLOWLIST`；FISH、HF、Cloudflare 等流水线密钥不会透传。
 可用 `SUBAGENT_CODEX_HOME` 指定由调用方维护的专用目录；只有显式设置
 `SUBAGENT_INHERIT_CODEX_HOME=true` 才完整继承当前配置。所有 object
 structured-output schema 会递归补齐 `required` 和

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -68,6 +69,23 @@ def current_branch() -> str:
     return _git("branch", "--show-current").decode("utf-8").strip()
 
 
+def branch_context() -> str:
+    branch = current_branch()
+    if branch:
+        return branch
+    return (
+        os.environ.get("GITHUB_HEAD_REF", "").strip()
+        or os.environ.get("GITHUB_REF_NAME", "").strip()
+    )
+
+
+def is_private_branch(branch: str) -> bool:
+    normalized = str(branch or "").removeprefix("refs/heads/")
+    if normalized.startswith("origin/"):
+        normalized = normalized[len("origin/"):]
+    return normalized.startswith(PRIVATE_BRANCH_PREFIXES)
+
+
 def privacy_reason(path: str) -> str | None:
     if path in PRIVATE_EXACT:
         return "local secret/tool state"
@@ -120,10 +138,15 @@ def main() -> int:
         action="store_true",
         help="只检查当前索引；允许在 private-* / private/* 本地分支运行。",
     )
+    parser.add_argument(
+        "--allow-detached-head",
+        action="store_true",
+        help="允许无法确定分支身份的 detached HEAD；仅用于人工审计。",
+    )
     args = parser.parse_args()
 
-    branch = current_branch()
-    branch_is_private = branch.startswith(PRIVATE_BRANCH_PREFIXES)
+    branch = branch_context()
+    branch_is_private = is_private_branch(branch)
     violations = find_violations(tracked_files())
 
     if violations:
@@ -132,6 +155,13 @@ def main() -> int:
             print(f"  - {path} ({reason})")
         print("请取消跟踪并保留本地文件，例如：git rm --cached <path>")
         return 1
+
+    if not branch and not args.allow_detached_head:
+        print(
+            "[public-check] 无法确定 detached HEAD 对应的分支；"
+            "拒绝把未知历史当作公开分支。"
+        )
+        return 3
 
     if branch_is_private and not args.allow_private_branch:
         print(

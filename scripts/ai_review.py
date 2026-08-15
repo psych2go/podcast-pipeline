@@ -1,12 +1,18 @@
 """使用 subagent 对单集转录、内容台账和中文讲稿执行全自动 AI 审查。"""
 import argparse
-import hashlib
 import json
 import os
+import shutil
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from hashing import sha256_file as sha256
+except ImportError:
+    from scripts.hashing import sha256_file as sha256
 
 try:
     from atomic_io import atomic_write_json
@@ -284,14 +290,6 @@ REVIEW_SCHEMA = {
 }
 
 
-def sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def reviewed_hashes(folder):
     folder = Path(folder)
     return {
@@ -316,7 +314,6 @@ def review_scope(folder):
             "mode": "full",
             "changed_files": sorted(current),
             "unchanged_files": [],
-            "previous_passed": False,
         }
     changed = sorted(
         name for name, digest in current.items()
@@ -328,8 +325,36 @@ def review_scope(folder):
         "mode": "partial_then_full" if changed else "full_confirmation",
         "changed_files": changed,
         "unchanged_files": sorted(set(current) - set(changed)),
-        "previous_passed": bool(previous.get("passed")),
     }
+
+
+def changed_review_inputs(before, after):
+    """Return review inputs changed between two hash snapshots."""
+    return sorted(
+        name for name in set(before) | set(after)
+        if before.get(name) != after.get(name)
+    )
+
+
+@contextmanager
+def isolated_review_workspace(folder, snapshot):
+    """Expose only current review inputs, never a prior verdict or score."""
+    folder = Path(folder)
+    with tempfile.TemporaryDirectory(prefix="podcast-ai-review-") as td:
+        workspace = Path(td)
+        for name in snapshot:
+            source = folder / name
+            destination = workspace / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        cache = folder / CACHE_FILENAME
+        if cache.exists():
+            shutil.copy2(cache, workspace / CACHE_FILENAME)
+        staged = reviewed_hashes(workspace)
+        changed = changed_review_inputs(snapshot, staged)
+        if changed:
+            raise RuntimeError(f"AI 审查 staging 哈希不一致: {changed}")
+        yield workspace
 
 
 def _replace_provenance_wording(value):
@@ -402,17 +427,14 @@ def rebind_provenance_review(folder, output=None):
 def _prompt(folder, scope=None):
     folder = Path(folder).resolve()
     scope = scope or review_scope(folder)
-    previous_review = folder / "ai_review.json"
-    scope_instruction = ""
-    if previous_review.exists():
-        scope_instruction = f"""
+    scope_instruction = f"""
 
-本次复审范围：{scope['mode']}。
-- 与上次审查相比发生变化的文件：{scope['changed_files']}。
+本次复审范围线索：{scope['mode']}。
+- 与上次输入哈希相比发生变化的文件：{scope['changed_files']}。
 - 哈希未变化的文件：{scope['unchanged_files']}。
-- 可以把上次 ai_review.json 中对未变化文件的观察作为检查线索，但不得直接继承 passed、分数或结论。
-- 先重点重审发生变化的文件及其关联 claim；最后必须重新执行一次完整发布判定，确保所有阈值仍满足。
-- 即使没有文件变化，也必须独立输出本次审查结果，禁止只复制旧 JSON。
+- staging 中不会提供上次 ai_review.json、passed、分数或结论；必须从当前证据独立判断。
+- 先重点重审发生变化的文件及其关联 claim；最后必须重新执行一次完整发布判定。
+- 即使没有文件变化，也必须独立输出本次审查结果。
 """
     cache_instruction = ""
     if (folder / CACHE_FILENAME).exists():
@@ -505,7 +527,7 @@ def _prompt(folder, scope=None):
 """
 
 
-def run_ai_review(folder, output=None, model=None, effort="max"):
+def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True):
     folder = Path(folder).resolve()
     missing = [name for name in REVIEW_FILES if not (folder / name).exists()]
     if missing:
@@ -513,9 +535,8 @@ def run_ai_review(folder, output=None, model=None, effort="max"):
     print(
         f"[AI审查] subagent model={model or 'default'} "
         f"effort={effort} folder={folder.name}",
-        file=sys.stderr,
-        flush=True,
-    )
+        file=sys.stderr, flush=True)
+    input_snapshot = reviewed_hashes(folder)
     scope = review_scope(folder)
     schema_file = tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", encoding="utf-8", delete=False)
@@ -523,24 +544,27 @@ def run_ai_review(folder, output=None, model=None, effort="max"):
     try:
         json.dump(REVIEW_SCHEMA, schema_file, ensure_ascii=False)
         schema_file.close()
-        result = run_json_task(
-            folder,
-            _prompt(folder, scope) + (
-                f"\n本次审查 effort 要求：{effort}。"
-                "只返回符合 schema 的 JSON，不修改任何文件。"
-            ),
-            schema_path,
-            task_name="ai_review",
-            enable_search=True,
-            model=model or None,
-            timeout=1800,
-        )
-        review = result["payload"]
+        with isolated_review_workspace(folder, input_snapshot) as workspace:
+            result = run_json_task(
+                workspace,
+                _prompt(workspace, scope) + (
+                    f"\n本次审查 effort 要求：{effort}。"
+                    "只返回符合 schema 的 JSON，不修改任何文件。"),
+                schema_path, task_name="ai_review", enable_search=True,
+                model=model or None, timeout=1800)
+            review = result["payload"]
     finally:
         try:
             schema_file.close()
         finally:
             schema_path.unlink(missing_ok=True)
+
+    current_snapshot = reviewed_hashes(folder)
+    changed = changed_review_inputs(input_snapshot, current_snapshot)
+    if changed:
+        raise RuntimeError(
+            "AI 审查期间输入发生变化，已丢弃结果: " + ", ".join(changed))
+
     review["schema_version"] = AI_REVIEW_SCHEMA_VERSION
     review["reviewed_at"] = datetime.now(timezone.utc).isoformat()
     review["reviewer"] = {
@@ -554,11 +578,13 @@ def run_ai_review(folder, output=None, model=None, effort="max"):
         "retry_count": result.get("retry_count", 0),
     }
     review["review_scope"] = scope
+    review["reviewed_files"] = input_snapshot
+    review["input_snapshot_verified"] = True
     review["fact_check_cache_entries_written"] = update_cache_from_review(
         folder, review)
-    review["reviewed_files"] = reviewed_hashes(folder)
-    output = Path(output) if output else folder / "ai_review.json"
-    atomic_write_json(output, review)
+    if persist:
+        output = Path(output) if output else folder / "ai_review.json"
+        atomic_write_json(output, review)
     return review
 
 
@@ -582,9 +608,22 @@ def review_episode(
     })
     try:
         with report.stage("ai_review") as stage:
-            review = run_ai_review(folder, output, model, effort)
+            review = run_ai_review(
+                folder, output, model, effort, persist=False)
+            before_status = dict(review["reviewed_files"])
             update_source_status(folder, review.get("passed", False))
-            review["reviewed_files"] = reviewed_hashes(folder)
+            after_status = reviewed_hashes(folder)
+            status_changes = changed_review_inputs(before_status, after_status)
+            unexpected = sorted(set(status_changes) - {"episode.json", "来源.md"})
+            if unexpected:
+                raise RuntimeError(
+                    "AI 审查后状态绑定出现非预期输入变化: "
+                    + ", ".join(unexpected))
+            review["status_binding"] = {
+                "trusted_metadata_files": status_changes,
+                "reason": "pipeline_review_status_only",
+            }
+            review["reviewed_files"] = after_status
             atomic_write_json(output, review)
             reviewer = review.get("reviewer", {})
             stage.metrics.update({
