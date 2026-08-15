@@ -73,13 +73,10 @@ def require_hf_token() -> str:
     return _require("HF_TOKEN", "HuggingFace token，用于说话人分离")
 
 
-# Optional values.  Keep the legacy names for callers that import them.
+# Optional values imported by current pipeline modules.
 FISH_KEY = os.environ.get("FISH_KEY", "")
 FISH_VOICE = os.environ.get("FISH_VOICE", "b561236e80b04f22843c6637682b5478")
 FISH_MODEL = os.environ.get("FISH_MODEL", "s2.1-pro-free")
-DEEPSEEK_KEY = os.environ.get("DEEPSEEK_KEY", "")
-DS_MODEL = os.environ.get("DS_MODEL", "deepseek-chat")
-LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com/v1")
 BASE_DIR = Path(os.environ.get("PODCAST_DIR", str(PROJECT_ROOT / "content")))
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 R2_PUBLIC_URL = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")

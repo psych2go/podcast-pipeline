@@ -1,9 +1,37 @@
-# ===== 密钥（绝不进 git）=====
+# ============================================================================
+# PUBLIC / PRIVATE BOUNDARY
+# The public repository contains pipeline code and reproducible methodology.
+# Personal podcast inputs, transcripts, notes, audio, generated pages, and logs
+# stay local and must never be committed.
+# ============================================================================
+
+# Secrets
 .env
 api_keys*
 *.key
+*.pem
 
-# ===== Python =====
+# Private podcast workspace: transcripts, notes, reviews, audio and metadata
+/content/
+
+# Generated website is private/local. Only deployment configuration is public.
+/site/**
+!/site/deploy.sh
+!/site/wrangler.toml
+
+# Local run output and ad-hoc reports
+/reports/
+/.runlogs/
+
+# Source and generated media
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.wav
+*原始音频*
+
+# Python environments and caches
 __pycache__/
 *.pyc
 *.pyo
@@ -12,35 +40,32 @@ __pycache__/
 .venv-alignment/
 venv/
 
-# ===== OS =====
+# Local Cloudflare / agent / editor state
+.wrangler/
+.claude/
+.codex/
+.agents/
+.vscode/
+.idea/
+.mcp.json
+skills-lock.json
+test.txt
+
+# Personal shell and system configuration
+.bash_profile
+.bashrc
+.zshrc
+.zprofile
+.profile
+.ripgreprc
+.gitconfig
+.gitmodules
 .DS_Store
 Thumbs.db
 *.tmp
 
-# ===== 播客内容（私有，由流水线生成，不进 git）=====
-# content/ 存放每期的转录/讲稿/MP3，属于你的私有数据，公开仓库不含任何内容
-content/
-*原始音频.mp3
-content/**/audio/
-
-# ===== 站点生成产物（由 catalog.py 重建，不进 git）=====
-# 注意：site/deploy.sh 和 site/wrangler.toml 是部署方法论，需要进 git
-site/index.html
-site/site.json
-site/*/
-site/**/*.mp3
-
-# ===== IDE / 个人 / 工具配置 =====
-.vscode/
-.idea/
-.claude/
-.wrangler/
-.agents/
-skills-lock.json
-.mcp.json
-test.txt
-
-# ===== 基准数据（脚本与报告可公开，原始媒体和生成结果不进 git）=====
-benchmarks/**/audio/*.wav
-benchmarks/**/source/*.zip
+# Public benchmark contracts/references stay tracked; downloaded media and
+# generated runs do not.
+benchmarks/**/audio/
+benchmarks/**/source/
 benchmarks/**/results/

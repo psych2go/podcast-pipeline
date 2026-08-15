@@ -26,7 +26,7 @@ reference set covers more acoustic and language conditions.
 - Primary scoring: zero collar, overlapping speech included.
 
 Source URLs, pinned hashes, annotation parsing rules, and attribution are in
-`reports/multispeaker-benchmark-sources.md`.
+`benchmarks/reports/multispeaker-sources.md`.
 
 ## Reproduction
 

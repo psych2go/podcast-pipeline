@@ -3,7 +3,7 @@
 This directory defines a reproducible five-minute, four-speaker benchmark
 from AMI meeting `ES2004a`. Source selection, license, URLs, hashes, and metric
 definitions are documented in
-`reports/multispeaker-benchmark-sources.md`.
+`benchmarks/reports/multispeaker-sources.md`.
 
 ## Source Layout
 

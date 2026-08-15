@@ -1,91 +1,53 @@
-**English** | [中文](./README.md)
+[中文](README.md) | [English](README.en.md)
 
-# Podcast Pipeline · English Podcast → Chinese Script
+# Podcast Pipeline
 
-> Turn English podcasts into Chinese scripts, producing a **TTS Chinese audio track** and a **self-contained HTML reader page**, deployed to Cloudflare (Pages + R2).
+Turn English podcasts into auditable Chinese notes, Chinese narration scripts, TTS audio, and mobile reader pages, then publish the complete release to Cloudflare Pages + R2.
 
-An end-to-end pipeline: **fetch → transcribe → correct → script → narrate → render → publish**. Review and scripting tasks run through isolated Codex subagents, with evidence binding, quality gates, recoverable release transactions, reproducible ASR benchmarks, and Fish Audio narration.
-
-> 📌 This repo contains **methodology only** (scripts, prompts, docs, deploy config). The actual episode content (transcripts, scripts, MP3s) is private and **not in the repo** — you generate it locally under `content/` by running the pipeline.
-
-## Preview
-
-Want to see what the reader page looks like? Open the example in a browser:
-
-👉 **[`examples/reader-page-example.html`](./examples/reader-page-example.html)** — download and open in a browser. Includes the full audio player, collapsible TOC, and chapter numbering.
-
-Input format reference: [`examples/sample-script.md`](./examples/sample-script.md) — a sample script with intro + three chapters that renders into the page above.
-
-## Features
-
-- 🎙️ **Multi-source fetch**: web transcripts (incl. JS-rendered and anti-scrape sites), RSS, local MP3 (ASR)
-- 📝 **Tiered correction**: correction policy decided by source type — forced for local ASR, skipped for official subtitles
-- ✍️ **Isolated agent orchestration**: Codex subagents receive allowlisted inputs and may commit only declared outputs
-- 🔎 **Evidence and quality gates**: transcript revisions, claim-level evidence, SHA-256 binding, AI review, and release preflight
-- 🎛️ **ASR quality engineering**: adaptive re-decoding, forced alignment, diarization, and a pinned AMI policy benchmark
-- 🔊 **Fish Audio TTS**: sliced by `## ` headings, sentence-boundary segmentation, inter-chapter silence, resumable
-- 📖 **Self-contained reader page**: warm design, built-in player (play / speed / volume / download), collapsible TOC, auto chapter numbering
-- ☁️ **Cloudflare deploy**: Pages hosts the site, R2 streams audio (Range-supported seeking)
-- 🤖 **Transactional release**: `catalog.py finish` / `finish-batch` run preflight, upload, deploy, remote verification, and recoverable state tracking
-
-## Pipeline
-
-```
-English podcast URL / MP3
-        │
-        ▼  process.py (fetch / ASR)
-raw transcript
-        │
-        ▼  correction gate (tiered by source)
-corrected transcript
-        │
-        ▼  evidence mapping / isolated review / script generation
-script.md  ──▶ validator.py (intro / chapter size / format checks)
-        │
-        ▼  tts.py (Fish Audio, sliced by ## headings)
-{name}.mp3
-        │
-        ▼  html_gen.py (script → reader page with player)
-content.html
-        │
-        ▼  catalog.py (catalog + site.json + index) → R2 audio → Pages deploy
-live site
-```
-
-## Quick Start
-
-Full walkthrough in [`CLAUDE.md`](./CLAUDE.md). In short:
-
-1. **Fetch** — `python scripts/process.py "https://transcript-url"`
-2. **Correct** — decide by source type (forced for ASR, skip for official subtitles)
-3. **Review and write** — isolated subagents follow evidence maps and `scripts/讲稿提示词.md`
-4. **TTS + HTML** — `python scripts/process.py --name "name" --tts-only`
-5. **Publish** — `python scripts/catalog.py finish "name"` (catalog + site + R2 + deploy)
-
-## Setup
+## Canonical commands
 
 ```bash
-cp .env.example .env   # fill in FISH_KEY, optionally HF_TOKEN, R2_PUBLIC_URL
-pip install -r requirements.txt
+# Process one episode
+.venv/bin/python scripts/process.py "https://transcript-page"
+
+# Process local audio
+.venv/bin/python scripts/process.py "episode.mp3" --name "Episode name" --asr-quality max
+
+# Complete publication
+.venv/bin/python scripts/catalog.py finish "Episode name"
+.venv/bin/python scripts/catalog.py finish-batch "Episode one" "Episode two"
 ```
 
-| Variable | Purpose | Required |
-|----------|---------|----------|
-| `FISH_KEY` | Fish Audio API key (TTS) | ✅ |
-| `FISH_VOICE` | Fish Audio voice ID | ✅ |
-| `HF_TOKEN` | HuggingFace token (speaker diarization) | – |
-| `R2_PUBLIC_URL` | R2 public bucket URL (audio streaming) | – |
+`finish-batch` always performs the complete transaction: quality checks, R2 upload, site generation, Pages deployment, and remote verification. There is no R2-only publication path.
 
-Cloudflare deploy needs `wrangler` (`npx wrangler login`, OAuth — no API token required).
+## Public and private directories
 
-## Tech Stack
+| Path | Purpose | Public GitHub repository |
+|---|---|---|
+| `scripts/` | Pipeline implementation | Yes |
+| `tests/`, `.github/` | Tests and CI | Yes |
+| `examples/` | Sanitized reader-page and script examples | Yes |
+| `docs/pipeline.md` | Current architecture | Yes |
+| `benchmarks/` | Contracts, manual references, durable reports | Yes, except downloaded media and generated runs |
+| `site/deploy.sh`, `site/wrangler.toml` | Cloudflare deployment configuration | Yes |
+| `requirements*.txt`, `.env.example` | Dependencies and secret-free configuration template | Yes |
+| `content/` | Transcripts, corrections, notes, scripts, reviews, and audio | **No** |
+| Other files under `site/` | Generated index, episode pages, and catalog | **No** |
+| `reports/`, `.runlogs/` | Local reports and logs | **No** |
+| `.env`, `.wrangler/`, `.venv*/`, local agent state | Secrets, credentials, and machine state | **No** |
 
-httpx + curl_cffi · Whisper ASR · pyannote diarization · isolated Codex subagents · Fish Audio TTS · vanilla HTML/CSS/JS · Cloudflare Pages + R2
+The boundary is enforced by `.gitignore`, `scripts/check_public_repo.py`, and CI. Before a public push, run:
 
-## License
+```bash
+.venv/bin/python scripts/check_public_repo.py
+```
 
-MIT — see [`LICENSE`](./LICENSE).
+Branches prefixed with `private-` or `private/` may contain private episode data in Git history. The checker refuses to treat them as public branches. `--allow-private-branch` checks only the current index and does not prove that history is sanitized.
 
-The pinned AMI reference material under `benchmarks/ami/ES2004a/reference/`
-is licensed under CC BY 4.0; attribution and provenance are documented in the
-benchmark README.
+## Documentation
+
+- `AGENTS.md`: mandatory routing, privacy, and Git rules for coding agents.
+- `CLAUDE.md`: complete operating guide, quality gates, and recovery procedures.
+- `docs/pipeline.md`: internal modules and data flow.
+
+For normal work, use `process.py` rather than manually chaining internal CLIs such as `tts.py`, `html_gen.py`, or `ai_review.py`.

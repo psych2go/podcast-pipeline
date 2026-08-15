@@ -1,5 +1,10 @@
 # 播客处理流水线 v8 技术文档
 
+
+> **文档角色：内部技术说明。** 普通处理请从 `scripts/process.py` 进入，
+> 完整发布请使用 `scripts/catalog.py finish` / `finish-batch`。下文列出的
+> 单阶段命令只用于明确的维护和诊断任务，不是可自由拼接的新流程。
+
 ## 1. 架构
 
 ```text
@@ -170,7 +175,7 @@ community-1 的 pyannote 4.x 输出优先读取
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-基准报告位于 `reports/ami-es2004a-model-policy.md`。
+基准报告位于 `benchmarks/reports/asr-model-policy.md`。
 
 Podscripts 只有在明确的证书校验异常时才允许 source-scoped TLS 降级；降级状态
 写入转录元数据，并由严格质量门阻断发布。

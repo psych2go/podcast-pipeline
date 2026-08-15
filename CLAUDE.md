@@ -2,6 +2,16 @@
 
 把英文播客转成可审计的中文完整笔记、中文讲稿、TTS 音频和移动端阅读页，并发布到 Cloudflare Pages + R2。
 
+## AI 入口规则（先读）
+
+- 普通新单集或单集重跑，只从 `scripts/process.py` 进入。
+- 发布只使用 `scripts/catalog.py finish` 或 `finish-batch`，且必须完整发布到 R2 + Pages 并验收。
+- 其他 `scripts/*.py` CLI 是内部维护/诊断接口；任务未明确指向某阶段时不要直接调用。
+- `content/`、生成后的 `site/`、`reports/` 和 `.runlogs/` 是本地私有数据，禁止公开提交。
+- 当前有效提示词只有 `scripts/纠错提示词.md` 与 `scripts/讲稿提示词.md`。
+- 公开推送前运行 `scripts/check_public_repo.py`；私有分支历史不能仅靠 `.gitignore` 脱敏。
+- 更短的入口和目录说明见 `README.md`；编码代理安全规则见 `AGENTS.md`。
+
 ## 标准流程
 
 ### 1. 抓取
@@ -122,7 +132,7 @@ diarization 默认模型为
 3. `asr_benchmark_workflow.py verify`
 4. `.venv/bin/python -m unittest discover -s tests -v`
 
-结果和策略说明见 `reports/ami-es2004a-model-policy.md`。
+结果和策略说明见 `benchmarks/reports/asr-model-policy.md`。
 
 历史单集如果保留了 `*原始音频.mp3`，但旧转录没有模型、时间戳和说话人
 元数据，先迁移为 `legacy_asr`：
