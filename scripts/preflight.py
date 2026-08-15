@@ -68,9 +68,11 @@ def quality_gate(
     if not report.get("passed", False) and auto_ai_review and can_auto_review:
         print("[质量门] AI 审查缺失或过期，自动运行 subagent...", flush=True)
         try:
-            from ai_review import review_episode
-            review_episode(
+            from review_repair import review_and_repair
+            review_and_repair(
                 folder,
+                max_rounds=max(0, int(os.environ.get(
+                    "REVIEW_REPAIR_MAX_ROUNDS", "2"))),
                 model=os.environ.get("SUBAGENT_REVIEW_MODEL", ""),
                 effort=os.environ.get("SUBAGENT_REVIEW_EFFORT", "max"),
                 run_report=run_report,

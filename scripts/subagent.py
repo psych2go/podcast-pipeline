@@ -6,13 +6,16 @@ runner is ``codex exec``; callers can replace it with a compatible command via
 ``SUBAGENT_COMMAND`` without changing pipeline code.
 """
 import hashlib
+import copy
 import json
 import os
+import signal
 import shlex
 import shutil
 import subprocess
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 
 try:
@@ -25,6 +28,74 @@ except ImportError:
 
 class SubagentError(RuntimeError):
     """Raised when a subagent cannot complete a pipeline task."""
+
+
+_SAFE_CODEX_CONFIG_KEYS = frozenset({
+    "model",
+    "review_model",
+    "model_provider",
+    "model_context_window",
+    "model_auto_compact_token_limit",
+    "model_reasoning_effort",
+    "model_reasoning_summary",
+    "model_verbosity",
+    "disable_response_storage",
+    "preferred_auth_method",
+    "chatgpt_base_url",
+    "openai_base_url",
+    "forced_chatgpt_workspace_id",
+    "model_catalog_json",
+    "responses_websockets",
+    "request_max_retries",
+    "stream_max_retries",
+    "stream_idle_timeout_ms",
+    "tool_output_token_limit",
+    "cli_auth_credentials_store",
+})
+
+_SAFE_MODEL_PROVIDER_KEYS = frozenset({
+    "name",
+    "base_url",
+    "env_key",
+    "env_key_instructions",
+    "experimental_bearer_token",
+    "http_headers",
+    "env_http_headers",
+    "query_params",
+    "request_max_retries",
+    "requires_openai_auth",
+    "stream_idle_timeout_ms",
+    "stream_max_retries",
+    "wire_api",
+})
+
+
+def prepare_output_schema(schema):
+    """Return a Codex-compatible strict structured-output schema.
+
+    Codex structured outputs require every object to reject unknown keys and
+    to list every declared property in ``required``.  Callers should not need
+    to duplicate those runner-specific constraints in each task schema.
+    """
+    prepared = copy.deepcopy(schema)
+
+    def visit(node):
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        properties = node.get("properties")
+        if node.get("type") == "object" or isinstance(properties, dict):
+            node["additionalProperties"] = False
+            if isinstance(properties, dict):
+                node["required"] = list(properties)
+        for value in node.values():
+            visit(value)
+
+    visit(prepared)
+    return prepared
 
 
 def _runner_command(raw=None):
@@ -95,6 +166,226 @@ def _json_from_text(text):
     )
 
 
+def _terminate_process_tree(process, grace_seconds=2):
+    """Terminate a subprocess and every descendant in its process group."""
+    if process.poll() is not None:
+        return
+    try:
+        group = os.getpgid(process.pid)
+        os.killpg(group, signal.SIGTERM)
+        process.wait(timeout=grace_seconds)
+        return
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        pass
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    process.wait()
+
+
+def _run_process(cmd, *, cwd, env, timeout):
+    """Run one runner attempt with process-group timeout cleanup."""
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_tree(process)
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout,
+            output=stdout or exc.output,
+            stderr=stderr or exc.stderr,
+        ) from exc
+    return subprocess.CompletedProcess(
+        cmd,
+        process.returncode,
+        stdout,
+        stderr,
+    )
+
+
+def _toml_key(value):
+    value = str(value)
+    if value and all(char.isalnum() or char in "_-" for char in value):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _toml_value(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    raise SubagentError(
+        f"隔离 Codex 配置包含不支持的值类型: {type(value).__name__}")
+
+
+def _toml_text(payload):
+    """Serialize the small, sanitized Codex config subset we retain."""
+    lines = []
+
+    def emit(mapping, path=()):
+        scalars = [
+            (key, value) for key, value in mapping.items()
+            if not isinstance(value, dict)
+        ]
+        tables = [
+            (key, value) for key, value in mapping.items()
+            if isinstance(value, dict)
+        ]
+        if path:
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append("[" + ".".join(_toml_key(item) for item in path) + "]")
+        for key, value in scalars:
+            lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
+        for key, value in tables:
+            emit(value, (*path, key))
+
+    emit(payload)
+    return "\n".join(lines).strip() + "\n"
+
+
+def _copy_model_catalog(config, source_home, isolated, *, prefix=""):
+    catalog = config.get("model_catalog_json")
+    if not isinstance(catalog, str) or not catalog.strip():
+        return
+    source = Path(catalog).expanduser()
+    if not source.is_absolute():
+        source = source_home / source
+    if not source.is_file() or source.is_symlink():
+        raise SubagentError(
+            f"Codex model_catalog_json 不可安全复制: {source}")
+    destination_name = (
+        f"{prefix}-{source.name}" if prefix else source.name)
+    destination = isolated / destination_name
+    shutil.copy2(source, destination)
+    destination.chmod(0o600)
+    config["model_catalog_json"] = destination_name
+
+
+def _sanitized_codex_config(source_path, source_home, isolated, *, prefix=""):
+    try:
+        raw = tomllib.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise SubagentError(
+            f"无法读取 Codex 配置 {source_path}: {exc}") from exc
+    sanitized = {
+        key: copy.deepcopy(raw[key])
+        for key in _SAFE_CODEX_CONFIG_KEYS
+        if key in raw
+    }
+    providers = raw.get("model_providers")
+    if isinstance(providers, dict):
+        sanitized_providers = {}
+        for provider_id, provider in providers.items():
+            if not isinstance(provider, dict):
+                continue
+            sanitized_provider = {
+                key: copy.deepcopy(provider[key])
+                for key in _SAFE_MODEL_PROVIDER_KEYS
+                if key in provider
+            }
+            if sanitized_provider:
+                sanitized_providers[str(provider_id)] = sanitized_provider
+        if sanitized_providers:
+            sanitized["model_providers"] = sanitized_providers
+    # Hooks are explicitly disabled even when the user config enables them.
+    # MCP servers, hook state, projects, notices, skills and UI preferences are
+    # omitted rather than copied into the isolated runner home.
+    sanitized["features"] = {
+        "hooks": False,
+        "plugins": False,
+        "remote_plugin": False,
+        "workspace_dependencies": False,
+    }
+    _copy_model_catalog(
+        sanitized, source_home, isolated, prefix=prefix)
+    return sanitized
+
+
+def _profile_names(command):
+    names = []
+    index = 0
+    while index < len(command):
+        part = command[index]
+        if part in {"-p", "--profile"} and index + 1 < len(command):
+            names.append(command[index + 1])
+            index += 2
+            continue
+        if part.startswith("--profile="):
+            names.append(part.split("=", 1)[1])
+        index += 1
+    return [name for name in names if name]
+
+
+def _copy_sanitized_codex_config(source_home, isolated, command):
+    config_path = source_home / "config.toml"
+    if config_path.exists():
+        sanitized = _sanitized_codex_config(
+            config_path, source_home, isolated)
+        target = isolated / "config.toml"
+        target.write_text(_toml_text(sanitized), encoding="utf-8")
+        target.chmod(0o600)
+    for profile in _profile_names(command):
+        source = source_home / f"{profile}.config.toml"
+        if not source.exists():
+            raise SubagentError(f"Codex profile 配置不存在: {source}")
+        sanitized = _sanitized_codex_config(
+            source, source_home, isolated, prefix=profile)
+        target = isolated / f"{profile}.config.toml"
+        target.write_text(_toml_text(sanitized), encoding="utf-8")
+        target.chmod(0o600)
+
+
+def _runner_environment(tmp, command):
+    """Isolate hooks/MCPs while preserving the active model provider."""
+    env = os.environ.copy()
+    if Path(command[0]).name != "codex":
+        return env
+    inherit = env.get(
+        "SUBAGENT_INHERIT_CODEX_HOME", "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+    if inherit:
+        return env
+    configured = env.get("SUBAGENT_CODEX_HOME", "").strip()
+    if configured:
+        isolated = Path(configured).expanduser().resolve()
+        isolated.mkdir(parents=True, exist_ok=True)
+        env["CODEX_HOME"] = str(isolated)
+        return env
+
+    source = Path(
+        env.get("CODEX_HOME", str(Path.home() / ".codex"))
+    ).expanduser()
+    isolated = Path(tmp) / "codex-home"
+    isolated.mkdir(parents=True, exist_ok=True)
+    auth = source / "auth.json"
+    if auth.is_file() and not auth.is_symlink():
+        shutil.copy2(auth, isolated / "auth.json")
+        (isolated / "auth.json").chmod(0o600)
+    _copy_sanitized_codex_config(source, isolated, command)
+    env["CODEX_HOME"] = str(isolated)
+    return env
+
+
 def _run(
         folder,
         task,
@@ -123,6 +414,7 @@ def _run(
             total_duration_ms = 0
             total_retries = 0
             for runner_index, command in enumerate(commands):
+                runner_env = _runner_environment(tmp, command)
                 cmd = [
                     *command,
                     "--ephemeral",
@@ -154,13 +446,11 @@ def _run(
                     output_path.unlink(missing_ok=True)
                     started = time.monotonic()
                     try:
-                        result = subprocess.run(
+                        result = _run_process(
                             cmd,
                             cwd=folder,
-                            capture_output=True,
-                            text=True,
+                            env=runner_env,
                             timeout=timeout,
-                            check=False,
                         )
                     except subprocess.TimeoutExpired:
                         total_duration_ms += round(
@@ -226,17 +516,27 @@ def run_json_task(
 ):
     """Run a read-only subagent and parse its structured JSON response."""
     temporary_schema = None
-    if isinstance(schema_path, dict):
+    schema_disabled = os.environ.get(
+        "SUBAGENT_DISABLE_OUTPUT_SCHEMA", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+    if schema_disabled:
+        runner_schema = None
+    else:
+        if isinstance(schema_path, dict):
+            raw_schema = schema_path
+        else:
+            raw_schema = json.loads(
+                Path(schema_path).read_text(encoding="utf-8"))
         temporary_schema = tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", encoding="utf-8", delete=False)
-        json.dump(schema_path, temporary_schema, ensure_ascii=False)
+        json.dump(
+            prepare_output_schema(raw_schema),
+            temporary_schema,
+            ensure_ascii=False,
+        )
         temporary_schema.close()
-        schema_path = temporary_schema.name
-    runner_schema = schema_path
-    if os.environ.get(
-            "SUBAGENT_DISABLE_OUTPUT_SCHEMA", "").strip().lower() in {
-                "1", "true", "yes", "on"}:
-        runner_schema = None
+        runner_schema = temporary_schema.name
     try:
         result = _run(
             folder,

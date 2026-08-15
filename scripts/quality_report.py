@@ -14,7 +14,8 @@ try:
     from content_map import (
         CONTENT_MAP_SCHEMA_VERSION,
         body_sha256, content_map_evidence_mode, coverage_report, load_json,
-        transcript_evidence_mode, validate_content_map, validate_summary_map,
+        transcript_evidence_mode, unit_claim_ids, validate_content_map,
+        validate_summary_map,
     )
     from validator import structure_report
     from episode import inspect_episode_state
@@ -24,11 +25,18 @@ try:
         effective_source_kind,
         validate_provenance,
     )
+    from content_finalizer import validate_tts_readiness
+    from tts import load_tts_lexicon
+    from claim_taxonomy import (
+        atomic_subclaim_parent,
+        derive_legacy_claim_type,
+    )
 except ImportError:  # package import
     from scripts.content_map import (
         CONTENT_MAP_SCHEMA_VERSION,
         body_sha256, content_map_evidence_mode, coverage_report, load_json,
-        transcript_evidence_mode, validate_content_map, validate_summary_map,
+        transcript_evidence_mode, unit_claim_ids, validate_content_map,
+        validate_summary_map,
     )
     from scripts.validator import structure_report
     from scripts.episode import inspect_episode_state
@@ -37,6 +45,12 @@ except ImportError:  # package import
         correction_metrics,
         effective_source_kind,
         validate_provenance,
+    )
+    from scripts.content_finalizer import validate_tts_readiness
+    from scripts.tts import load_tts_lexicon
+    from scripts.claim_taxonomy import (
+        atomic_subclaim_parent,
+        derive_legacy_claim_type,
     )
 
 
@@ -161,32 +175,292 @@ def _transcript_metrics(raw):
     }
 
 
-def _ai_fact_check_consistency(review):
+def _ai_fact_check_consistency_v3(review, valid_claim_ids=None):
+    fact_checks = review.get("fact_checks", [])
+    errors = []
+    warnings = []
+    required = {
+        "claim", "parent_claim_id", "subclaim_id", "claim_type",
+        "claim_origin", "speaker_role", "assertion_type",
+        "verification_mode", "risk_domain", "verdict",
+        "publication_status", "evidence_segment_ids", "source_urls",
+        "checked_at", "notes",
+    }
+    seen_subclaims = set()
+    subclaim_numbers = {}
+    compound_pattern = re.compile(
+        r"；|，(?:但|而|因此|从而|同时|并且)|以及|并认为|并称")
+
+    for index, item in enumerate(fact_checks):
+        if not isinstance(item, dict):
+            errors.append(f"AI fact_checks[{index}] 必须是对象")
+            continue
+        claim = item.get("claim") or f"fact_checks[{index}]"
+        missing = sorted(required - set(item))
+        if missing:
+            errors.append(f"{claim}: AI review v3 缺少字段 {missing}")
+            continue
+
+        parent = item.get("parent_claim_id")
+        subclaim = item.get("subclaim_id")
+        parsed_parent = atomic_subclaim_parent(subclaim)
+        if parsed_parent != parent:
+            errors.append(
+                f"{claim}: subclaim_id 必须使用 {{parent_claim_id}}-Fxx")
+        if subclaim in seen_subclaims:
+            errors.append(f"{claim}: subclaim_id 重复: {subclaim}")
+        seen_subclaims.add(subclaim)
+        if parsed_parent:
+            number = int(str(subclaim).rsplit("F", 1)[1])
+            subclaim_numbers.setdefault(parent, []).append(number)
+        if valid_claim_ids is not None and parent not in valid_claim_ids:
+            errors.append(f"{claim}: parent_claim_id 不存在于 content_map: {parent}")
+
+        expected_legacy = derive_legacy_claim_type(item)
+        if item.get("claim_type") != expected_legacy:
+            errors.append(
+                f"{claim}: claim_type 应由 v3 维度派生为 "
+                f"{expected_legacy!r}，实际为 {item.get('claim_type')!r}")
+
+        origin = item.get("claim_origin")
+        role = item.get("speaker_role")
+        assertion = item.get("assertion_type")
+        mode = item.get("verification_mode")
+        risk = item.get("risk_domain")
+        verdict = item.get("verdict")
+        status = item.get("publication_status")
+        segments = item.get("evidence_segment_ids") or []
+        urls = item.get("source_urls") or []
+
+        if origin in {"speaker_firsthand", "speaker_reported"} and role in {
+                "editorial", "not_applicable"}:
+            errors.append(f"{claim}: speaker 来源必须填写真实 speaker_role")
+        if origin == "editorial_added" and role != "editorial":
+            errors.append(f"{claim}: editorial_added 必须使用 speaker_role=editorial")
+
+        if verdict in {"unsupported", "contradicted"} and status == "used_as_fact":
+            errors.append(f"{claim}: 未获支持或被反驳内容仍作为事实采用")
+        if verdict in {"faithfully_attributed", "accurately_reported", "not_applicable"} \
+                and status == "used_as_fact":
+            errors.append(f"{claim}: 该 verdict 不能作为无归因客观事实采用")
+
+        if origin == "speaker_firsthand":
+            if mode != "transcript_attribution":
+                errors.append(f"{claim}: speaker_firsthand 必须 transcript_attribution")
+            if status == "used_as_fact":
+                errors.append(f"{claim}: 一手信息必须明确归因")
+            if status != "excluded" and not segments:
+                errors.append(f"{claim}: 一手信息缺少 transcript segment")
+            if status != "excluded" and verdict not in {
+                    "faithfully_attributed", "qualified"}:
+                errors.append(f"{claim}: 一手信息 verdict 不符合归因规则")
+
+        if assertion in {"opinion", "prediction"}:
+            if status == "used_as_fact":
+                errors.append(f"{claim}: 观点或预测不能升级为客观事实")
+            if status != "excluded" and not segments:
+                errors.append(f"{claim}: 观点或预测缺少转录归因证据")
+            if mode not in {"transcript_attribution", "transcript_only", "not_applicable"}:
+                errors.append(f"{claim}: 观点或预测不应要求外部事实证明")
+
+        if assertion == "recommendation":
+            if origin in {"speaker_firsthand", "speaker_reported"} \
+                    and status != "excluded" and not segments:
+                errors.append(f"{claim}: 建议缺少说话人转录证据")
+            if risk in {"medical", "legal", "financial", "safety"} \
+                    and status != "excluded":
+                if mode != "safety_cross_check":
+                    errors.append(f"{claim}: 高风险建议必须 safety_cross_check")
+                if not urls:
+                    errors.append(f"{claim}: 高风险建议缺少公开安全核查来源")
+
+        if assertion in {"explanation", "definition"}:
+            if mode not in {
+                    "transcript_attribution", "transcript_only",
+                    "web_spot_check", "safety_cross_check"}:
+                errors.append(f"{claim}: 解释或定义的核查模式不匹配")
+            if origin in {"speaker_firsthand", "speaker_reported"} \
+                    and status != "excluded" and not segments:
+                errors.append(f"{claim}: 解释或定义缺少转录证据")
+
+        if assertion == "allegation":
+            if mode != "source_document_required":
+                errors.append(f"{claim}: allegation 必须 source_document_required")
+            if status != "excluded" and not urls:
+                errors.append(f"{claim}: allegation 缺少来源文件 URL")
+            if status == "used_as_fact":
+                errors.append(f"{claim}: 未裁判指控不能写成既定事实")
+            if status != "excluded" and verdict not in {
+                    "accurately_reported", "qualified", "unsupported",
+                    "contradicted", "uncertain"}:
+                errors.append(f"{claim}: allegation verdict 不符合来源转述语义")
+
+        if origin in {"external_source", "editorial_added"} \
+                and assertion == "fact" and status == "used_as_fact":
+            if mode != "web_required":
+                errors.append(f"{claim}: 外部或编辑部客观事实必须 web_required")
+            if verdict in {"supported", "qualified"} and not urls:
+                errors.append(f"{claim}: 外部或编辑部客观事实缺少网页来源")
+
+        if origin == "episode_metadata" and mode != "transcript_only":
+            errors.append(f"{claim}: episode_metadata 应使用 transcript_only")
+        if assertion == "inference" and status == "used_as_fact":
+            errors.append(f"{claim}: 推论必须明确限定，不能写成既定事实")
+
+        if compound_pattern.search(str(claim)):
+            warnings.append(
+                f"{subclaim}: 子主张仍含复合连接词，请确认已保持单一 assertion_type")
+
+    for parent, numbers in subclaim_numbers.items():
+        ordered = sorted(set(numbers))
+        expected = list(range(1, len(ordered) + 1))
+        if ordered != expected:
+            errors.append(
+                f"{parent}: subclaim_id 序号必须从 F01 连续递增，实际 {ordered}")
+    return errors, warnings
+
+
+def _ai_fact_check_consistency(review, valid_claim_ids=None):
     fact_checks = review.get("fact_checks")
     if not isinstance(fact_checks, list):
         return ["AI 审查缺少可复现的 fact_checks"], []
     errors = []
     warnings = []
-    unsupported_used = [
-        item.get("claim")
-        for item in fact_checks
-        if item.get("verdict") == "unsupported"
-        and item.get("publication_status") == "used_as_fact"
-    ]
-    if unsupported_used:
-        errors.append(
-            "AI fact_checks 存在未获支持但仍作为事实采用的内容: "
-            f"{unsupported_used}")
+    schema_version = int(review.get("schema_version", 1) or 1)
+    if schema_version >= 3:
+        return _ai_fact_check_consistency_v3(
+            review, valid_claim_ids=valid_claim_ids)
+    required_v2 = {"claim_type", "verification_mode"}
+
+    for index, item in enumerate(fact_checks):
+        if not isinstance(item, dict):
+            errors.append(f"AI fact_checks[{index}] 必须是对象")
+            continue
+        claim = item.get("claim") or f"fact_checks[{index}]"
+        missing_v2 = sorted(required_v2 - set(item))
+        if missing_v2:
+            target = errors if schema_version >= 2 else warnings
+            target.append(
+                f"{claim}: AI fact_check 缺少 claim 分类字段 {missing_v2}")
+            # Preserve legacy review compatibility after reporting the gap.
+            if schema_version < 2:
+                if (
+                        item.get("verdict") == "unsupported"
+                        and item.get("publication_status") == "used_as_fact"):
+                    errors.append(
+                        "AI fact_checks 存在未获支持但仍作为事实采用的内容: "
+                        f"{claim}")
+                continue
+
+        claim_type = item.get("claim_type")
+        mode = item.get("verification_mode")
+        verdict = item.get("verdict")
+        status = item.get("publication_status")
+        segment_ids = item.get("evidence_segment_ids")
+        source_urls = item.get("source_urls")
+        segment_ids = segment_ids if isinstance(segment_ids, list) else []
+        source_urls = source_urls if isinstance(source_urls, list) else []
+
+        if verdict == "unsupported" and status == "used_as_fact":
+            errors.append(
+                "AI fact_checks 存在未获支持但仍作为事实采用的内容: "
+                f"{claim}")
+        if verdict == "faithfully_attributed" and status not in {
+                "attributed_or_qualified", "excluded"}:
+            errors.append(
+                f"{claim}: faithfully_attributed 内容不能作为无归因事实采用")
+        if verdict == "not_applicable" and status == "used_as_fact":
+            errors.append(
+                f"{claim}: not_applicable 内容不能作为客观事实采用")
+
+        if claim_type == "guest_firsthand":
+            if mode != "transcript_attribution":
+                errors.append(
+                    f"{claim}: guest_firsthand 必须使用 transcript_attribution")
+            if status == "used_as_fact":
+                errors.append(
+                    f"{claim}: 嘉宾一手信息必须明确归因，不能标记 used_as_fact")
+            if status != "excluded" and not segment_ids:
+                errors.append(
+                    f"{claim}: 嘉宾一手信息缺少转录 segment 证据")
+            if status != "excluded" and verdict not in {
+                    "faithfully_attributed", "qualified"}:
+                errors.append(
+                    f"{claim}: 嘉宾一手信息应判 faithfully_attributed 或 qualified")
+        elif claim_type == "guest_opinion":
+            if mode not in {"not_applicable", "transcript_attribution"}:
+                errors.append(
+                    f"{claim}: guest_opinion 核查模式不应要求外部事实证明")
+            if status == "used_as_fact":
+                errors.append(
+                    f"{claim}: 嘉宾观点不能升级为客观事实")
+            if status != "excluded" and not segment_ids:
+                errors.append(f"{claim}: 嘉宾观点缺少转录归因证据")
+            if status != "excluded" and verdict not in {
+                    "faithfully_attributed", "not_applicable", "qualified"}:
+                errors.append(f"{claim}: 嘉宾观点 verdict 与归因状态不一致")
+        elif claim_type == "public_fact":
+            if (
+                    status == "used_as_fact"
+                    and verdict in {"supported", "qualified"}
+                    and mode == "web_required"
+                    and not source_urls):
+                errors.append(f"{claim}: 公开事实缺少网页来源")
+        elif claim_type == "editorial_fact":
+            if status == "used_as_fact" and mode != "web_required":
+                errors.append(f"{claim}: 编辑部新增事实必须使用 web_required")
+            if (
+                    status == "used_as_fact"
+                    and verdict in {"supported", "qualified"}
+                    and not source_urls):
+                errors.append(f"{claim}: 编辑部新增事实缺少网页来源")
+        elif claim_type == "editorial_inference":
+            if status == "used_as_fact":
+                errors.append(f"{claim}: 编辑推论必须明确限定，不能写成既定事实")
+
     unsupported_without_status = [
         item.get("claim")
         for item in fact_checks
-        if item.get("verdict") == "unsupported"
+        if isinstance(item, dict)
+        and item.get("verdict") == "unsupported"
         and not item.get("publication_status")
     ]
     if unsupported_without_status:
         warnings.append(
             "旧版 AI fact_checks 缺少 publication_status，"
             "无法机械判断 unsupported 内容是否进入发布稿")
+    return errors, warnings
+
+
+def _ai_entity_accuracy_consistency(review):
+    section = review.get("entity_accuracy")
+    schema_version = int(review.get("schema_version", 1) or 1)
+    if not isinstance(section, dict):
+        message = "AI 审查缺少 entity_accuracy 实体准确性分项"
+        return ([message], []) if schema_version >= 2 else ([], [message])
+    errors = []
+    warnings = []
+    if not section.get("passed", False):
+        errors.append("AI 实体准确性审查未通过")
+    checks = section.get("checked_entities")
+    if not isinstance(checks, list):
+        target = errors if schema_version >= 2 else warnings
+        target.append("AI entity_accuracy 缺少 checked_entities")
+        return errors, warnings
+    incorrect = [
+        item.get("observed")
+        for item in checks
+        if isinstance(item, dict) and item.get("verdict") == "incorrect"
+    ]
+    if incorrect:
+        errors.append(f"AI 实体核查仍有错误名称或归属: {incorrect}")
+    uncertain = [
+        item.get("observed")
+        for item in checks
+        if isinstance(item, dict) and item.get("verdict") == "uncertain"
+    ]
+    if uncertain:
+        warnings.append(f"AI 实体核查仍有不确定项: {uncertain}")
     return errors, warnings
 
 
@@ -453,8 +727,10 @@ def build_quality_report(folder, strict=True):
             report["warnings"].extend(structure_warnings)
         arabic_numbers = re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?%?", briefing_text)
         report["briefing"]["arabic_numbers"] = arabic_numbers
-        if arabic_numbers:
-            report["errors"].append(f"讲稿仍有阿拉伯数字，不适合直接 TTS: {arabic_numbers[:20]}")
+        tts_readiness_issues = validate_tts_readiness(
+            briefing_text, load_tts_lexicon(folder))
+        report["briefing"]["tts_readiness_issues"] = tts_readiness_issues
+        report["errors"].extend(tts_readiness_issues)
     else:
         report["errors"].append("缺少讲书稿.md")
 
@@ -518,9 +794,17 @@ def build_quality_report(folder, strict=True):
             if severe:
                 ai_errors.append(f"AI 审查仍有 {len(severe)} 个 critical/high 问题")
             fact_check_errors, fact_check_warnings = (
-                _ai_fact_check_consistency(review))
+                _ai_fact_check_consistency(
+                    review,
+                    valid_claim_ids=set(unit_claim_ids(
+                        content_map, include_excluded=True)),
+                ))
             ai_errors.extend(fact_check_errors)
             report["warnings"].extend(fact_check_warnings)
+            entity_errors, entity_warnings = (
+                _ai_entity_accuracy_consistency(review))
+            ai_errors.extend(entity_errors)
+            report["warnings"].extend(entity_warnings)
             required_issue_evidence = {
                 "evidence_type", "evidence_segment_ids",
                 "source_urls", "checked_at",

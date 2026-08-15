@@ -369,7 +369,7 @@ def render_source_markdown(folder, payload=None, state=None, processing_date="")
         "",
         "## 处理信息",
         f"- 处理日期：{processing_date}",
-        "- pipeline 版本：v7",
+        "- pipeline 版本：v8",
         f"- 转录质量：{state['transcript_status']}",
         f"- 纠错状态：{state['correction_status']}",
         "- 内容审查：" + {

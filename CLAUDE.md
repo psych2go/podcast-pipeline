@@ -1,4 +1,4 @@
-# Podcast Pipeline v7
+# Podcast Pipeline v8
 
 把英文播客转成可审计的中文完整笔记、中文讲稿、TTS 音频和移动端阅读页，并发布到 Cloudflare Pages + R2。
 
@@ -171,6 +171,11 @@ SHA-256。多 claim 单元不得给所有 claim 复制整个 unit 的 segment �
 3. 写 `summary_map.json`，绑定章节正文哈希、unit/claim ID、笔记 claim ID 和笔记正文哈希。
 4. 专有名词需要控制读音时添加 `tts_lexicon.json`，格式为 `{"原词": "朗读文本"}`。
 
+内容 subagent 完成后，`content_finalizer.py` 是唯一允许写回讲稿和
+`summary_map.json` 的最终化阶段：它同步逐字标题、刷新正文哈希、只在自然段和
+连续 unit 边界都明确时拆分超过一千字的章节，并只为全大写缩写生成确定性读音。
+无法安全拆分或无法确认专名读音时必须阻断，不能猜测。
+
 `enrich-evidence` 只刷新 unit 证据和已有精确 claim 证据，不会再猜测多
 claim 单元的映射。历史数据需要按 unit 精炼：
 
@@ -178,6 +183,10 @@ claim 单元的映射。历史数据需要按 unit 精炼：
 .venv/bin/python scripts/content_map.py enrich-evidence "content/播客名"
 .venv/bin/python scripts/claim_evidence.py "content/播客名" --unit U0001
 ```
+
+strict 模式下 claim evidence runner 失败会按单 unit 重试，仍失败则阻断。
+只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；该模式默认
+不能发布，也不能被用来降低 evidence v3 或逐 claim 证据要求。
 
 已经发布的 evidence v2 单集只有在 `episode.json` 显式标记后才能暂时兼容，
 `publish_report.json` 不再具备放行能力：
@@ -197,6 +206,30 @@ claim 单元的映射。历史数据需要按 unit 精炼：
 .venv/bin/python scripts/quality_report.py "content/播客名"
 ```
 
+缺失或过期审查会进入最多两轮的受限 `review → safe repair → independent
+re-review`。自动修复只允许 summary map 最终化、确定性 TTS 词典和明确 unit 的
+claim evidence；事实性、医疗、数字、归因、转录质量及未知 high/critical 类别
+一律阻断。修复记录写入 `review_repair.json`，绝不直接把 `passed` 改为 true。
+
+复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定，
+分数和 high/critical 阈值不变。AI review v3 要求先把复合 claim 拆为原子
+subclaim，并用 `parent_claim_id` / `subclaim_id` 绑定 content_map；每个子主张分别填写：
+
+- `claim_origin`：speaker_firsthand、speaker_reported、external_source、editorial_added、episode_metadata。
+- `speaker_role`：guest、host、quoted_third_party、editorial、not_applicable、unknown。
+- `assertion_type`：fact、opinion、prediction、recommendation、explanation、definition、anecdote、allegation、inference。
+- `verification_mode`：web_required、source_document_required、web_spot_check、transcript_attribution、transcript_only、safety_cross_check、not_applicable。
+- `risk_domain`：general、medical、legal、financial、political、safety。
+
+`claim_type` 只保留为 v2 兼容派生字段；主持人观点、专家解释、第三方指控和节目
+元数据不能再硬塞进 guest/public 类别。说话人内部数据和亲历事件不强制联网，
+但必须保留原话、数字、范围和归因；诉状或报道只核查来源是否准确转述，不能把
+指控本身当作已证明事实；高风险建议必须执行 safety cross-check。
+
+只有 external_source/editorial_added 的客观 fact 可以写入
+`fact_check_cache.json`。一手信息、观点、建议、解释和 allegation 不进入外部事实
+缓存。动态公开事实有 TTL，缓存只能作为线索，不能替代本次来源和日期核对。
+
 以下任一情况都会阻断 TTS：
 
 - 缺 `episode.json`、结构化转录、evidence v3、完整笔记或讲稿
@@ -210,6 +243,8 @@ claim 单元的映射。历史数据需要按 unit 精炼：
 - 本地 ASR 缺少纠错稿，或 `summary_map.transcript_basis` 未绑定纠错稿
 - 原始音频存在但来源身份、音频哈希或 ASR provenance 缺失/冲突
 - 数字、归因、TTS 可读性或稿件内容发布状态失败
+- 实体准确性失败，例如公司、人名、产品、机构、职务或人物归属错误
+- lexicon 应用后的真实 TTS 输入仍有数字、未映射缩写、难读符号、重复替换或未确认英文专名
 - 结构体检存在错误
 
 AI 只审内容，HTML、MP3、R2 和 Pages 的新鲜度由后续确定性检查负责。修改任一受审文件后必须重审。
@@ -234,6 +269,10 @@ AI 只审内容，HTML、MP3、R2 和 Pages 的新鲜度由后续确定性检查
 ```
 
 TTS 使用内容与配置指纹缓存，而不是文件时间。`tts_manifest.json` 绑定实际朗读文本、音色、模型、语速、章节设置、每节音频 SHA-256 和最终 MP3 SHA-256。
+
+通过 AI review 后，TTS 和 HTML 阶段只做只读校验，不再自动修改
+`讲书稿.md` 或 `summary_map.json`。如果最终化仍会产生任何变化，流水线会阻断并
+要求回到内容最终化和独立复审阶段，避免 TOCTOU。
 
 - 任一章节失败会立即阻断。
 - 失败时不会合并，也不会覆盖已有最终 MP3。
@@ -277,6 +316,11 @@ TTS 使用内容与配置指纹缓存，而不是文件时间。`tts_manifest.js
   "播客一" "播客二" "播客三"
 ```
 
+`finish-batch` 只提供完整发布事务，不支持脱离 Pages 的单独 R2 上传。R2 上传
+默认并发三路，可用 `--upload-concurrency` 调整；上传完成后必须继续生成站点、
+部署 Pages，并逐期通过页面、R2 HEAD、`Content-Type`、文件大小、
+`Accept-Ranges` 和 Range 响应验收，才算发布成功。
+
 `finish` 会依次：
 
 1. 验证 MP3、HTML、严格质量报告和 TTS manifest。
@@ -288,8 +332,17 @@ TTS 使用内容与配置指纹缓存，而不是文件时间。`tts_manifest.js
 7. 验证首页、单集最终 URL、标题、播放器、R2 `Content-Type`、文件大小、`Accept-Ranges` 和 `206` Range 响应。
 8. 写入 `publish_report.json`；任何远端检查失败都会令命令失败。
 
-每期的 `release.json` 记录 release ID、讲稿/音频哈希、内容哈希音频 key
-和发布阶段。旧期没有该文件时继续使用旧的稳定音频 key。
+每期的 `release.json` 记录 release ID、讲稿/音频哈希、内容哈希音频 key、
+发布阶段、`git_commit`、`git_dirty`、pipeline 代码差异指纹和
+`pipeline_version`。默认只记录脏工作区而不阻断；需要可复现 clean release 时：
+
+```bash
+.venv/bin/python scripts/release.py \
+  "content/播客名" "content/播客名/播客名.mp3" \
+  "content/播客名/讲书稿.md" --require-clean
+```
+
+旧期没有该文件时继续使用旧的稳定音频 key。
 
 分步命令：
 
@@ -366,6 +419,16 @@ HF_TOKEN=hf_xxx               # 可选；缺失时自动跳过 diarization 并�
 `TTS_MAX_RETRIES`/`TTS_TIMEOUT` 可覆盖通用网络参数。subagent 使用独立的
 长时超时，避免把内容审查错误限制为普通 HTTP 请求时长。
 
+subagent 默认创建隔离的临时 `CODEX_HOME`：复制 `auth.json`，并从用户
+`config.toml` 生成最小安全配置，只保留 model、自定义 model provider、认证相关
+字段和 `model_catalog_json`。hooks、plugins、remote plugins、workspace
+dependencies、MCP servers、project trust、hook state 和 notice 不会复制。
+这样既保留 custom provider 认证路径，也不会启动用户级 hook/MCP。
+可用 `SUBAGENT_CODEX_HOME` 指定由调用方维护的专用目录；只有显式设置
+`SUBAGENT_INHERIT_CODEX_HOME=true` 才完整继承当前配置。所有 object
+structured-output schema 会递归补齐 `required` 和
+`additionalProperties=false`；`SUBAGENT_DISABLE_OUTPUT_SCHEMA` 仅用于调试。
+
 Cloudflare 认证可使用 `wrangler login` 的 OAuth 凭据或环境中的 API Token；发布前以
 `npx wrangler whoami` 确认当前账号和权限。
 
@@ -393,5 +456,7 @@ Cloudflare 认证可使用 `wrangler login` 的 OAuth 凭据或环境中的 API 
 - 强制重抓创建新 evidence revision，旧 revision 必须保留。
 - 新单集默认严格门禁，兼容模式必须显式开启。
 - TTS 只读 `讲书稿.md`，lexicon 只改变读音，不改变 HTML。
+- strict claim evidence 不静默降级；任何降级必须显式、可审计且默认禁止发布。
+- AI repair 后必须重新独立审查，不能人工或脚本直接翻转审查结果。
 - 移动端目录按钮和播放器必须在同一行，正文区域不得被固定控件浪费。
 - 发布成功的定义是远端 Pages 与 R2 验收通过，不是 Wrangler 命令返回零。

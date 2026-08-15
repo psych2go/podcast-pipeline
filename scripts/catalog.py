@@ -1249,11 +1249,30 @@ def _batch_publish_item(name):
     }
 
 
-def finish_batch(names, dry_run=False):
-    """Publish multiple prepared episodes with one site deployment."""
+def _upload_r2_item(item, dry_run=False):
+    print(f"[R2] 上传 {item['mp3'].name} 到 R2 ...")
+    return _run(
+        [
+            "npx", "wrangler", "r2", "object", "put",
+            f"{R2_BUCKET}/{item['key']}",
+            "--file", str(item["mp3"]),
+            "--content-type", "audio/mpeg", "--remote",
+        ],
+        cwd=BASE_DIR,
+        dry_run=dry_run,
+    )
+
+
+def finish_batch(names, dry_run=False, *, upload_concurrency=3):
+    """Fully publish multiple episodes with parallel R2 upload and one Pages deploy."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     names = list(dict.fromkeys(str(name) for name in names if str(name)))
     if not names:
         raise ValueError("finish-batch 至少需要一个单集名称")
+    upload_concurrency = int(upload_concurrency)
+    if upload_concurrency < 1:
+        raise ValueError("upload_concurrency 必须大于等于 1")
 
     validate_for_stage("publish", dry_run=dry_run)
     for name in names:
@@ -1267,7 +1286,15 @@ def finish_batch(names, dry_run=False):
                     name, "publish_preflight", "publish preflight failed")
             return False
 
-    candidate_errors = _candidate_catalog_errors(names[0])
+    candidate_errors_by_name = {
+        name: _candidate_catalog_errors(name)
+        for name in names
+    }
+    candidate_errors = [
+        f"{name}: {error}"
+        for name, errors in candidate_errors_by_name.items()
+        for error in errors
+    ]
     if candidate_errors:
         for error in candidate_errors:
             print(f"[finish-batch][阻断] {error}")
@@ -1292,19 +1319,7 @@ def finish_batch(names, dry_run=False):
 
     if dry_run:
         for item in items:
-            print(
-                f"[R2] 上传 {item['mp3'].name} 到 "
-                f"{R2_BUCKET}/{item['key']} ...")
-            _run(
-                [
-                    "npx", "wrangler", "r2", "object", "put",
-                    f"{R2_BUCKET}/{item['key']}",
-                    "--file", str(item["mp3"]),
-                    "--content-type", "audio/mpeg", "--remote",
-                ],
-                cwd=BASE_DIR,
-                dry_run=True,
-            )
+            _upload_r2_item(item, dry_run=True)
         _run_with_output(
             [
                 "npx", "wrangler", "pages", "deploy", ".",
@@ -1314,7 +1329,7 @@ def finish_batch(names, dry_run=False):
             dry_run=True,
         )
         print(
-            f"[完成] finish-batch dry-run：{len(items)} 期，"
+            f"[完成] finish-batch dry-run：{len(items)} 期完整发布；"
             "未修改 site、台账、首页或 release 状态")
         return True
 
@@ -1323,29 +1338,38 @@ def finish_batch(names, dry_run=False):
             item["release"] = update_release_state(
                 item["folder"], "prepared")
 
+    upload_results = {}
+    workers = max(1, min(upload_concurrency, len(items)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_upload_r2_item, item, False): item
+            for item in items
+        }
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                upload_results[item["name"]] = bool(future.result())
+            except Exception as exc:
+                print(f"[R2][错误] {item['name']}: {exc}")
+                upload_results[item["name"]] = False
+
+    failed_uploads = [
+        item for item in items
+        if not upload_results.get(item["name"], False)
+    ]
     for item in items:
-        print(f"[R2] 上传 {item['mp3'].name} 到 R2 ...")
-        uploaded = _run(
-            [
-                "npx", "wrangler", "r2", "object", "put",
-                f"{R2_BUCKET}/{item['key']}",
-                "--file", str(item["mp3"]),
-                "--content-type", "audio/mpeg", "--remote",
-            ],
-            cwd=BASE_DIR,
-            dry_run=False,
-        )
-        if not uploaded:
+        if item in failed_uploads:
             error = "R2 upload failed"
             if item["release"]:
                 update_release_state(item["folder"], "failed", error=error)
             _write_publish_failure(
                 item["name"], "upload_r2", error,
                 audio_key=item["key"])
-            return False
-        if item["release"]:
+        elif item["release"]:
             item["release"] = update_release_state(
                 item["folder"], "uploaded")
+    if failed_uploads:
+        return False
 
     try:
         sync_site()
@@ -1457,20 +1481,17 @@ def finish_batch(names, dry_run=False):
         )
         if item["release"]:
             update_release_state(item["folder"], "failed", error=error)
-        _write_publish_failure(
-            item["name"],
-            "verify_publish",
-            error,
-            report=report,
-            audio_key=item["key"],
-        )
+            report["release"] = _release_report(
+                item["folder"], item["key"])
+        report["failed_stage"] = "verify_publish"
+        report["error"] = error
+        write_publish_report(
+            item["folder"] / "publish_report.json", report)
+
     if all_passed:
         print(
             f"[完成] {len(items)} 期音频上传、一次 Pages 部署和逐期验收已完成")
     return all_passed
-
-
-# ── CLI ───────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1513,6 +1534,12 @@ def main():
         action="store_true",
         help="只打印命令，不修改 site 或 release 状态",
     )
+    p_finish_batch.add_argument(
+        "--upload-concurrency",
+        type=int,
+        default=3,
+        help="R2 并行上传数（默认 3）",
+    )
 
     args = parser.parse_args()
 
@@ -1545,7 +1572,10 @@ def main():
         return 0 if finish(args.name, dry_run=args.dry_run) else 1
     elif args.cmd == "finish-batch":
         return 0 if finish_batch(
-            args.names, dry_run=args.dry_run) else 1
+            args.names,
+            dry_run=args.dry_run,
+            upload_concurrency=args.upload_concurrency,
+        ) else 1
     return 0
 
 

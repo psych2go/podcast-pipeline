@@ -1,5 +1,5 @@
 """
-播客处理流水线 v7 · 抓取、subagent 内容编排、质量门、TTS 与 HTML
+播客处理流水线 v8 · 抓取、subagent 内容编排、质量门、TTS 与 HTML
 
 架构:
   抓取转录 (fetcher.py, 自动)
@@ -58,12 +58,18 @@ from fetcher import (
     chunk_plain_transcript,
 )
 from tts import run_tts
+from tts import load_tts_lexicon
 from html_gen import md_to_html
 from preflight import quality_gate as shared_quality_gate
 from agent_pipeline import content_pipeline_needed, run_content_pipeline
 from release import prepare_release
 from run_report import RunReport
 from tts import build_tts_plan
+from content_finalizer import (
+    ContentFinalizationError,
+    finalize_content_artifacts,
+    validate_tts_readiness,
+)
 from validator import (
     normalize_briefing_artifacts,
     structure_report,
@@ -494,7 +500,7 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
             if _is_audio_file(source):
                 lines.append("- 转录方式：本地 ASR（Whisper）")
         lines += ["", "## 处理信息", f"- 处理日期：{today}",
-                  "- pipeline 版本：v7", f"- ASR 质量：{quality}"]
+                  "- pipeline 版本：v8", f"- ASR 质量：{quality}"]
         if metadata and metadata.get("meta", {}).get("diarization"):
             lines.append("- 说话人分离：已启用")
         atomic_write_text(source_path, "\n".join(lines))
@@ -575,6 +581,39 @@ def _prepare_briefing_files(folder, briefing_path):
     return text, fixed, issues, validation, normalization_changes
 
 
+def _validate_finalized_briefing_files(folder, briefing_path):
+    """Validate canonical content without mutating review-bound artifacts."""
+    folder = Path(folder)
+    text = briefing_path.read_text(encoding="utf-8")
+    summary_path = folder / "summary_map.json"
+    if not summary_path.exists():
+        return ["缺少 summary_map.json，不能验证审查后的只读内容"], {}
+    try:
+        summary_map = json.loads(summary_path.read_text(encoding="utf-8"))
+        finalized, aligned, changes = finalize_content_artifacts(
+            text, summary_map)
+    except (json.JSONDecodeError, ContentFinalizationError, ValueError) as exc:
+        return [f"内容最终化校验失败: {exc}"], {}
+    errors = []
+    if finalized != text:
+        errors.append(
+            "讲书稿.md 尚未最终化；TTS/HTML 阶段禁止自动修改审查输入")
+    if aligned != summary_map:
+        errors.append(
+            "summary_map.json 尚未最终化或哈希已过期；"
+            "TTS/HTML 阶段禁止自动修改审查输入")
+    tts_issues = validate_tts_readiness(
+        text, load_tts_lexicon(folder))
+    errors.extend(tts_issues)
+    return errors, {
+        "normalization_changes_required": changes,
+        "briefing_sha256": _text_sha256(text),
+        "summary_sha256": _text_sha256(
+            summary_path.read_text(encoding="utf-8")),
+        "tts_readiness_issue_count": len(tts_issues),
+    }
+
+
 def _run_quality_gate(
         folder, auto_ai_review=True, allow_legacy=False, run_report=None):
     """Compatibility wrapper around the shared preflight implementation."""
@@ -590,39 +629,23 @@ def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
                  auto_ai_review=True, allow_legacy=False, run_report=None):
     with _stage(run_report, "tts_config_preflight"):
         validate_for_stage("tts")
-    # 所有可能修改讲稿的操作必须发生在 AI 审查/哈希质量门之前。
-    # 否则会出现“审查通过后讲稿又被修改，仍继续生成音频”的 TOCTOU 问题。
-    with _stage(run_report, "prepare_briefing") as stage:
+    # 内容最终化必须由上游内容阶段显式完成。TTS 及 HTML 只读验证，
+    # 避免审查通过后再修改讲稿/summary_map 的 TOCTOU 问题。
+    with _stage(run_report, "validate_finalized_content") as stage:
         briefing_path = folder / briefing_file
         if briefing_path.exists():
             text = briefing_path.read_text(encoding="utf-8")
             _run_structure_check(text)
-            (
-                text,
-                fixed,
-                issues,
-                validation,
-                normalization_changes,
-            ) = _prepare_briefing_files(folder, briefing_path)
+            errors, metrics = _validate_finalized_briefing_files(
+                folder, briefing_path)
             if stage is not None:
-                stage.metrics.update({
-                    "validator_issue_count": len(issues),
-                    "automatic_fix_count": len(
-                        validation["auto_fixes"]),
-                    "automatic_fixes": validation["auto_fixes"],
-                    "validator_warnings": validation["warnings"],
-                    "normalization_changes": normalization_changes,
-                    "briefing_modified": fixed != text,
-                    "briefing_sha256_before": _text_sha256(text),
-                    "briefing_sha256_after": _text_sha256(fixed),
-                })
-            if fixed != text:
-                atomic_write_text(briefing_path, fixed)
-                print(
-                    f"[校验] 讲稿已自动修复；校验共发现 {len(issues)} 个问题；"
-                    "现有 AI 审查将因哈希变化而失效",
-                    flush=True,
-                )
+                stage.metrics.update(metrics)
+                if errors:
+                    stage.fail("; ".join(errors[:5]))
+            if errors:
+                for error in errors:
+                    print(f"[内容只读校验][阻断] {error}", flush=True)
+                return False
 
     with _stage(run_report, "quality_gate") as stage:
         quality_ok = _run_quality_gate(
@@ -677,7 +700,7 @@ def _display_title(name):
 def run_html_step(
         folder, name, briefing_file, auto_ai_review=True,
         allow_legacy=False, run_report=None):
-    """生成 HTML 阅读页面；任何自动修复后都必须重新通过质量门。"""
+    """生成 HTML 阅读页面；质量门之后不修改内容源文件。"""
     md_path = folder / briefing_file
     if not md_path.exists():
         print(f"[HTML] 跳过：找不到 {md_path}", flush=True)
@@ -685,26 +708,15 @@ def run_html_step(
     with _stage(run_report, "html_quality_gate") as stage:
         text = md_path.read_text(encoding="utf-8")
         _run_structure_check(text)
-        (
-            text,
-            fixed,
-            issues,
-            validation,
-            normalization_changes,
-        ) = _prepare_briefing_files(folder, md_path)
+        errors, metrics = _validate_finalized_briefing_files(folder, md_path)
         if stage is not None:
-            stage.metrics.update({
-                "validator_issue_count": len(issues),
-                "automatic_fix_count": len(validation["auto_fixes"]),
-                "automatic_fixes": validation["auto_fixes"],
-                "validator_warnings": validation["warnings"],
-                "normalization_changes": normalization_changes,
-                "briefing_modified": fixed != text,
-                "briefing_sha256_before": _text_sha256(text),
-                "briefing_sha256_after": _text_sha256(fixed),
-            })
-        if fixed != text:
-            atomic_write_text(md_path, fixed)
+            stage.metrics.update(metrics)
+            if errors:
+                stage.fail("; ".join(errors[:5]))
+        if errors:
+            for error in errors:
+                print(f"[内容只读校验][阻断] {error}", flush=True)
+            return False
         quality_ok = _run_quality_gate(
             folder,
             auto_ai_review=auto_ai_review,
@@ -952,7 +964,7 @@ def process(source, name, asr_model=None, tts_speed=1.0,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="播客处理流水线 v7（抓取、严格质量门、TTS 与 HTML）"
+        description="播客处理流水线 v8（抓取、严格质量门、TTS 与 HTML）"
     )
     parser.add_argument("source", nargs="?",
                         help="URL / mp3 / 转录文件路径（--tts-only 时可省略）")

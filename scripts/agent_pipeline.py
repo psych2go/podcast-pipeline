@@ -17,6 +17,7 @@ try:
         validate_content_map,
         validate_summary_map,
     )
+    from content_finalizer import finalize_content_package
     from episode import (
         quality_metadata,
         sync_episode_state,
@@ -24,7 +25,6 @@ try:
     )
     from evidence import ASR_SOURCE_KINDS, effective_source_kind
     from subagent import run_edit_task
-    from validator import normalize_briefing_artifacts
 except ImportError:
     from scripts.atomic_io import atomic_write_text
     from scripts.claim_evidence import refine_claim_evidence
@@ -39,6 +39,7 @@ except ImportError:
         validate_content_map,
         validate_summary_map,
     )
+    from scripts.content_finalizer import finalize_content_package
     from scripts.episode import (
         quality_metadata,
         sync_episode_state,
@@ -46,7 +47,6 @@ except ImportError:
     )
     from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
     from scripts.subagent import run_edit_task
-    from scripts.validator import normalize_briefing_artifacts
 
 
 def _stage(report, name, metrics=None):
@@ -290,6 +290,9 @@ content_map、讲稿归因和最终 fact check 处理。
 - 不得编造转录之外的观点；
 - 不得遗漏 high/medium claims；
 - 不要修改 content_map.json 或任何证据文件；
+- 第一个 ## 前写 50–100 字全局导览；
+- 每章正文建议 400–900 个中文字符，禁止超过 1000；
+- 讲稿每个 ## 标题必须与 summary_map.chapters[].title 逐字一致；
 - summary_map 先写结构，正文哈希由主脚本补齐。""",
             task_name="content_writing",
             allowed_files=[notes_path, briefing_path, summary_path],
@@ -318,12 +321,10 @@ content_map、讲稿归因和最终 fact check 处理。
         content_map = load_json(content_map_path)
         summary_path = folder / "summary_map.json"
         notes_text = (folder / "中文完整笔记.md").read_text(encoding="utf-8")
-        briefing_text = (folder / "讲书稿.md").read_text(encoding="utf-8")
-        summary_map = load_json(summary_path)
-        briefing_text, summary_map, normalization_changes = (
-            normalize_briefing_artifacts(briefing_text, summary_map)
-        )
-        atomic_write_text(folder / "讲书稿.md", briefing_text)
+        finalized = finalize_content_package(folder)
+        briefing_text = finalized["briefing"]
+        summary_map = finalized["summary_map"]
+        normalization_changes = finalized["normalization_changes"]
         content_map, transcript = enrich_content_map_evidence(
             content_map, transcript)
         summary_map = enrich_summary_map_evidence(
@@ -352,6 +353,8 @@ content_map、讲稿归因和最终 fact check 处理。
                 "unit_count": len(content_map.get("units", [])),
                 "warning_count": len(warnings),
                 "normalization_changes": normalization_changes,
+                "tts_lexicon_entries": finalized[
+                    "tts_lexicon_entries"],
             })
 
     sync_episode_state(folder)

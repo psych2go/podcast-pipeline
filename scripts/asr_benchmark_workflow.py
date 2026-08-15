@@ -210,9 +210,16 @@ def check_policy_contract(contract_path=DEFAULT_CONTRACT, preset_models=None):
         warnings.append(
             f"prepared audio 未安装，跳过二进制校验: {audio_path}")
 
+    # The public repository intentionally commits the small RTTM/UEM
+    # references but not the large upstream audio/archive. Treat only those
+    # two large artifacts as the optional all-or-none installation set.
+    optional_upstream = (
+        "audio/ES2004a.Mix-Headset.wav",
+        "source/ami_public_manual_1.6.2.zip",
+    )
     source_presence = [
         (reference_root / relative).is_file()
-        for relative in EXPECTED_HASHES
+        for relative in optional_upstream
     ]
     if any(source_presence) and not all(source_presence):
         errors.append("AMI 上游 source artifacts 不完整")

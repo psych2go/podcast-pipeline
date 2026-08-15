@@ -220,7 +220,8 @@ def _run_batch(folder, batch, model, effort, batch_index):
 def refine_claim_evidence(
         folder, model="sonnet", effort="high",
         max_batch_chars=DEFAULT_BATCH_CHARS,
-        concurrency=DEFAULT_CONCURRENCY, unit_ids=None):
+        concurrency=DEFAULT_CONCURRENCY, unit_ids=None,
+        allow_fallback=False):
     folder = Path(folder).resolve()
     transcript_path = folder / "transcript.raw.json"
     content_map_path = folder / "content_map.json"
@@ -263,15 +264,17 @@ def refine_claim_evidence(
     wrappers = []
     failures = []
     fallback_claim_count = 0
+    recovered_unit_count = 0
     with ThreadPoolExecutor(
             max_workers=max(1, min(concurrency, len(batches)))) as pool:
         futures = {
             pool.submit(
-                _run_batch, folder, batch, model, effort, index): batch
+                _run_batch, folder, batch, model, effort, index):
+                (index, batch)
             for index, batch in enumerate(batches, start=1)
         }
         for future in as_completed(futures):
-            batch = futures[future]
+            batch_index, batch = futures[future]
             try:
                 payload, wrapper = future.result()
                 batch_mappings = payload.get("claims", [])
@@ -288,6 +291,42 @@ def refine_claim_evidence(
                 mappings.extend(batch_mappings)
                 wrappers.append(wrapper)
             except Exception as exc:
+                if not allow_fallback:
+                    if len(batch) > 1:
+                        for unit_index, item in enumerate(batch, start=1):
+                            try:
+                                payload, wrapper = _run_batch(
+                                    folder,
+                                    [item],
+                                    model,
+                                    effort,
+                                    f"{batch_index}_{unit_index}",
+                                )
+                                batch_mappings = payload.get("claims", [])
+                                content_map, transcript = (
+                                    apply_claim_evidence_mapping(
+                                        content_map,
+                                        transcript,
+                                        batch_mappings,
+                                        unit_ids={item["unit_id"]},
+                                    )
+                                )
+                                save_json(content_map_path, content_map)
+                                mappings.extend(batch_mappings)
+                                wrappers.append(wrapper)
+                                recovered_unit_count += 1
+                            except Exception as unit_exc:
+                                failures.append(RuntimeError(
+                                    "strict mode forbids fallback claim "
+                                    f"evidence for {item['unit_id']}: "
+                                    f"{unit_exc}"
+                                ))
+                    else:
+                        failures.append(RuntimeError(
+                            "strict mode forbids fallback claim evidence: "
+                            f"{exc}"
+                        ))
+                    continue
                 try:
                     batch_mappings = deterministic_fallback_mappings(batch)
                     batch_unit_ids = {
@@ -362,6 +401,7 @@ def refine_claim_evidence(
         "duration_ms": sum(
             wrapper.get("duration_ms") or 0 for wrapper in wrappers),
         "fallback_claim_count": fallback_claim_count,
+        "recovered_unit_count": recovered_unit_count,
     }
     save_json(content_map_path, content_map)
     return {
@@ -377,6 +417,7 @@ def refine_claim_evidence(
         "duration_ms": content_map[
             "claim_evidence_refiner"]["duration_ms"],
         "fallback_claim_count": fallback_claim_count,
+        "recovered_unit_count": recovered_unit_count,
     }
 
 
@@ -406,6 +447,14 @@ def main():
         default=[],
         help="只精炼指定 unit，可重复传入；默认处理全部 unit",
     )
+    parser.add_argument(
+        "--allow-degraded-evidence",
+        action="store_true",
+        help=(
+            "显式允许 subagent 不可用时写入低保证的确定性映射；"
+            "严格新单集默认禁止"
+        ),
+    )
     args = parser.parse_args()
 
     folder = Path(args.folder)
@@ -422,6 +471,7 @@ def main():
                 max_batch_chars=args.batch_chars,
                 concurrency=args.concurrency,
                 unit_ids=args.unit,
+                allow_fallback=args.allow_degraded_evidence,
             )
             stage.metrics.update(metrics)
     except BaseException as exc:

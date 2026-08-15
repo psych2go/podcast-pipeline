@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import ssl
 import tempfile
@@ -27,7 +28,11 @@ from content_map import (
 )
 from diarize import merge_segments_with_speakers
 from benchmark import asr_metrics
-from quality_report import _ai_fact_check_consistency, build_quality_report
+from quality_report import (
+    _ai_entity_accuracy_consistency,
+    _ai_fact_check_consistency,
+    build_quality_report,
+)
 from tts import apply_tts_lexicon, run_tts, validate_tts_manifest
 import process as pipeline_process
 from ai_review import rebind_provenance_review, reviewed_hashes
@@ -811,23 +816,96 @@ class QualityReportTests(unittest.TestCase):
 
     def test_ai_fact_checks_distinguish_excluded_from_used_unsupported_claims(self):
         errors, warnings = _ai_fact_check_consistency({
+            "schema_version": 2,
             "fact_checks": [{
                 "claim": "not published",
+                "claim_type": "public_fact",
+                "verification_mode": "web_required",
                 "verdict": "unsupported",
                 "publication_status": "excluded",
+                "evidence_segment_ids": [],
+                "source_urls": [],
             }],
         })
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
 
         errors, _warnings = _ai_fact_check_consistency({
+            "schema_version": 2,
             "fact_checks": [{
                 "claim": "published as fact",
+                "claim_type": "public_fact",
+                "verification_mode": "web_required",
                 "verdict": "unsupported",
                 "publication_status": "used_as_fact",
+                "evidence_segment_ids": [],
+                "source_urls": [],
             }],
         })
         self.assertTrue(any("published as fact" in error for error in errors))
+
+    def test_guest_firsthand_claim_passes_without_public_url_when_attributed(self):
+        errors, warnings = _ai_fact_check_consistency({
+            "schema_version": 2,
+            "fact_checks": [{
+                "claim": "嘉宾称内部项目转化率提高百分之二十",
+                "claim_type": "guest_firsthand",
+                "verification_mode": "transcript_attribution",
+                "verdict": "faithfully_attributed",
+                "publication_status": "attributed_or_qualified",
+                "evidence_segment_ids": ["S0123"],
+                "source_urls": [],
+            }],
+        })
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+
+    def test_guest_firsthand_claim_cannot_be_promoted_to_objective_fact(self):
+        errors, _warnings = _ai_fact_check_consistency({
+            "schema_version": 2,
+            "fact_checks": [{
+                "claim": "内部项目转化率提高百分之二十",
+                "claim_type": "guest_firsthand",
+                "verification_mode": "transcript_attribution",
+                "verdict": "faithfully_attributed",
+                "publication_status": "used_as_fact",
+                "evidence_segment_ids": ["S0123"],
+                "source_urls": [],
+            }],
+        })
+        self.assertTrue(any("必须明确归因" in error for error in errors))
+
+    def test_public_fact_requires_web_source_when_used_as_fact(self):
+        errors, _warnings = _ai_fact_check_consistency({
+            "schema_version": 2,
+            "fact_checks": [{
+                "claim": "公司正式名称为 Example Incorporated",
+                "claim_type": "public_fact",
+                "verification_mode": "web_required",
+                "verdict": "supported",
+                "publication_status": "used_as_fact",
+                "evidence_segment_ids": ["S0001"],
+                "source_urls": [],
+            }],
+        })
+        self.assertTrue(any("缺少网页来源" in error for error in errors))
+
+    def test_entity_accuracy_incorrect_name_is_a_hard_error(self):
+        errors, warnings = _ai_entity_accuracy_consistency({
+            "schema_version": 2,
+            "entity_accuracy": {
+                "passed": False,
+                "issues": ["公司名称写错"],
+                "checked_entities": [{
+                    "observed": "Wrong Corp",
+                    "canonical": "Right Corp",
+                    "verdict": "incorrect",
+                }],
+            },
+        })
+        self.assertTrue(any("实体准确性" in error for error in errors))
+        self.assertTrue(any("Wrong Corp" in error for error in errors))
+        self.assertEqual(warnings, [])
 
 
 class BenchmarkTests(unittest.TestCase):
@@ -1720,13 +1798,22 @@ class ProcessTests(unittest.TestCase):
             self.assertTrue(pipeline_process._run_quality_gate(
                 folder, auto_ai_review=False, allow_legacy=True))
 
-    def test_automatic_fixes_record_actions_and_hashes(self):
+    def test_html_stage_blocks_instead_of_mutating_review_bound_content(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td) / "Episode"
             folder.mkdir()
             briefing = folder / "讲书稿.md"
             briefing.write_text(
                 "开场。\n\n## 第一章\n**正文**", encoding="utf-8")
+            (folder / "summary_map.json").write_text(json.dumps({
+                "schema_version": 2,
+                "chapters": [{
+                    "title": "第一章",
+                    "unit_ids": ["U0001"],
+                    "claim_ids": ["U0001-C01"],
+                }],
+            }), encoding="utf-8")
+            before = briefing.read_bytes()
             report = RunReport(folder, "test-auto-fix")
             with patch("process._run_structure_check"), \
                     patch("process._run_quality_gate", return_value=False):
@@ -1740,12 +1827,14 @@ class ProcessTests(unittest.TestCase):
             payload = json.loads(
                 (folder / "run_report.json").read_text(encoding="utf-8"))
             metrics = payload["runs"][-1]["stages"][0]["metrics"]
-        self.assertEqual(metrics["automatic_fix_count"], 1)
-        self.assertIn("清除了 ** 加粗", metrics["automatic_fixes"])
-        self.assertNotEqual(
-            metrics["briefing_sha256_before"],
-            metrics["briefing_sha256_after"],
+            after = briefing.read_bytes()
+        self.assertEqual(before, after)
+        self.assertIn(
+            "normalized_formatting",
+            metrics["normalization_changes_required"],
         )
+        self.assertEqual(
+            metrics["briefing_sha256"], hashlib.sha256(before).hexdigest())
 
 
 class CatalogTests(unittest.TestCase):
@@ -1841,14 +1930,6 @@ class CatalogTests(unittest.TestCase):
                             "passed": False,
                             "errors": ["episode unavailable"],
                         },
-                    ), \
-                    patch.object(
-                        catalog, "R2_PUBLIC_URL",
-                        "https://audio.example.com",
-                    ), \
-                    patch.object(
-                        catalog, "PAGES_BASE_URL",
-                        "https://podcast.example.com",
                     ), \
                     patch.object(catalog, "validate_for_stage"), \
                     patch.object(catalog, "write_publish_report") as write:
@@ -2177,23 +2258,20 @@ class HtmlTests(unittest.TestCase):
     def test_homepage_source_link_is_not_behind_a_card_overlay(self):
         with tempfile.TemporaryDirectory() as td:
             site = Path(td)
-            (site / "site.json").write_text(
-                json.dumps([{
-                    "folder": "episode",
-                    "path": "episode",
-                    "title": "Episode",
-                    "source_name": "Source",
-                    "source_url": "https://example.com",
-                    "duration": 10,
-                    "words": 1000,
-                }]),
-                encoding="utf-8",
-            )
             (site / "index.html").write_text(
-                "<!-- STATS:START --><!-- STATS:END -->"
+                "<!-- STATS:START --><!-- STATS:END -->\n"
                 "<!-- CARDS:START --><!-- CARDS:END -->",
                 encoding="utf-8",
             )
+            (site / "site.json").write_text(json.dumps([{
+                "folder": "Episode",
+                "path": "episode-12345678",
+                "title": "Episode",
+                "source_name": "Official source",
+                "source_url": "https://example.com/source",
+                "duration": 10,
+                "words": 1000,
+            }]), encoding="utf-8")
             with patch.object(catalog, "SITE_DIR", site):
                 catalog.gen_index()
             html = (site / "index.html").read_text(encoding="utf-8")
