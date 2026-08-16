@@ -221,7 +221,11 @@ def enrich_summary_map_evidence(
     normalize_summary_claim_ids(summary_map)
     summary_map["schema_version"] = SUMMARY_MAP_SCHEMA_VERSION
     summary_map["notes_sha256"] = body_sha256(notes_text)
-    summary_map["notes_claim_ids"] = unit_claim_ids(content_map)
+    # Coverage is authored by the summarizer/reviewer. Never manufacture the
+    # complete claim set here: doing so would let summary_map self-certify that
+    # the prose actually contains every claim.
+    summary_map.setdefault("notes_claim_ids", [])
+    normalize_summary_claim_ids(summary_map)
     if briefing_text is not None:
         chapters = briefing_chapters(briefing_text)
         for chapter in summary_map.get("chapters", []):

@@ -40,6 +40,7 @@ def configure_paths(paths):
 
 
 MAX_DURATION_MB_PER_MIN = 1.2
+_AUDIO_DURATION_CACHE = {}
 CATALOG_HEADER = (
     "# 播客处理台账\n\n"
     "| # | 播客 | 转录来源 | 讲稿字数 | 音频时长 |\n"
@@ -67,7 +68,19 @@ def _gen_mp3(folder):
     return None
 
 def _audio_duration_minutes(mp3):
-    """优先用 ffprobe 读取真实时长；不可用时再回退文件大小估算。"""
+    """Read duration once per file revision, then reuse the ffprobe result."""
+    mp3 = Path(mp3)
+    cache_key = None
+    try:
+        stat = mp3.stat()
+        cache_key = (str(mp3.resolve()), stat.st_mtime_ns, stat.st_size)
+        cached = _AUDIO_DURATION_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+    except OSError:
+        stat = None
+
+    duration = None
     try:
         result = subprocess.run(
             [
@@ -81,10 +94,15 @@ def _audio_duration_minutes(mp3):
         if result.returncode == 0 and result.stdout.strip():
             seconds = float(result.stdout.strip())
             if seconds > 0:
-                return max(1, round(seconds / 60))
+                duration = max(1, round(seconds / 60))
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
-    return round(mp3.stat().st_size / (1024 * 1024) / MAX_DURATION_MB_PER_MIN)
+    if duration is None:
+        size = stat.st_size if stat is not None else mp3.stat().st_size
+        duration = round(size / (1024 * 1024) / MAX_DURATION_MB_PER_MIN)
+    if cache_key is not None:
+        _AUDIO_DURATION_CACHE[cache_key] = duration
+    return duration
 
 def episode_stats(name):
     """返回 {chars, duration}。讲稿或 mp3 缺失时字段为 0。"""
@@ -127,6 +145,16 @@ def _display_title(name):
         return episode_display_title(CONTENT_DIR / name)
     except Exception:
         return name
+
+
+def add_to_catalog(name):
+    """Validate one episode and rebuild the complete catalog."""
+    folder = CONTENT_DIR / name
+    if not folder.is_dir():
+        raise SystemExit(f"[错误] 找不到播客目录: {folder}")
+    if not _find_briefing(folder):
+        raise SystemExit(f"[错误] 找不到讲稿: {folder}")
+    return rebuild_catalog()
 
 def _load_site_entries():
     path = SITE_DIR / "site.json"

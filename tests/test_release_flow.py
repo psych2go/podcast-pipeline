@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import catalog
+import catalog_publish as catalog
 import release as release_module
 from release import load_release, prepare_release, update_release_state
 
@@ -255,10 +255,11 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             stack.enter_context(patch.object(
                 catalog, "_site_readiness_errors", return_value=[]))
             stack.enter_context(patch.object(
-                catalog,
-                "episode_stats",
-                return_value={"chars": 1000, "duration": 10},
-            ))
+                catalog, "_build_entry", return_value={
+                    "folder": "Episode", "path": "episode-12345678",
+                }))
+            stack.enter_context(patch.object(
+                catalog, "_catalog_text", return_value="candidate"))
             consistency = stack.enter_context(patch.object(
                 catalog,
                 "catalog_consistency_errors",

@@ -33,8 +33,10 @@ try:
     from publish import (
         PUBLISH_REPORT_SCHEMA_VERSION, verify_publish, write_publish_report,
     )
+    from publish_errors import RETRYABLE_PAGE_CODES, publish_error_codes
     from quality_report import build_quality_report
     from release import active_audio_key, load_release, update_release_state
+    from run_report import RunReport
     from tts import validate_tts_manifest
 except ImportError:
     from scripts.atomic_io import atomic_write_json
@@ -59,8 +61,12 @@ except ImportError:
     from scripts.publish import (
         PUBLISH_REPORT_SCHEMA_VERSION, verify_publish, write_publish_report,
     )
+    from scripts.publish_errors import (
+        RETRYABLE_PAGE_CODES, publish_error_codes,
+    )
     from scripts.quality_report import build_quality_report
     from scripts.release import active_audio_key, load_release, update_release_state
+    from scripts.run_report import RunReport
     from scripts.tts import validate_tts_manifest
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -103,7 +109,6 @@ def _live_tts_manifest_validator():
     return module.validate_tts_manifest
 
 
-# The catalog facade may replace these default collaborators for compatibility.
 def _is_wrangler_command(cmd):
     return any(Path(str(part)).name == "wrangler" for part in cmd)
 
@@ -179,21 +184,14 @@ def _run_wrangler(cmd, dry_run=False):
 
 def _verify_publish_with_retry(*args, attempts=4, delay=3):
     """Retry only transient Pages propagation failures after a deployment."""
-    page_error_prefixes = (
-        "首页状态异常",
-        "首页未找到",
-        "单期页面状态异常",
-        "单期页面未找到",
-        "单期页面缺少",
-    )
     report = None
     for attempt in range(1, attempts + 1):
         report = verify_publish(*args)
         if report.get("passed", False):
             return report
-        errors = report.get("errors", [])
-        page_only = errors and all(
-            error.startswith(page_error_prefixes) for error in errors)
+        codes = publish_error_codes(report)
+        page_only = bool(codes) and all(
+            code in RETRYABLE_PAGE_CODES for code in codes)
         if not page_only or attempt == attempts:
             return report
         print(
@@ -404,6 +402,14 @@ def _finish_impl(name, dry_run, run_report):
         episode_audio_key(folder),
     )
 
+    upload_item = {
+        "name": name,
+        "folder": folder,
+        "mp3": mp3,
+        "release": release,
+        "key": key,
+    }
+
     if dry_run:
         with run_report.stage("dry_run_catalog") as stage:
             candidate_errors = _candidate_catalog_errors(name)
@@ -420,14 +426,7 @@ def _finish_impl(name, dry_run, run_report):
                 "size_bytes": mp3.stat().st_size,
                 "release_id": release.get("release_id") if release else "",
         }) as stage:
-            print(f"[R2] 上传 {mp3.name} 到 R2 ...")
-            _run(
-                ["npx", "wrangler", "r2", "object", "put",
-                 f"{R2_BUCKET}/{key}",
-                 "--file", str(mp3), "--content-type", "audio/mpeg",
-                 "--remote"],
-                cwd=BASE_DIR, dry_run=True,
-            )
+            _upload_r2_item(upload_item, dry_run=True)
             stage.metrics["object_key"] = key
         with run_report.stage("deploy_pages", {
                 "dry_run": True,
@@ -446,14 +445,7 @@ def _finish_impl(name, dry_run, run_report):
             "size_bytes": mp3.stat().st_size,
             "release_id": release.get("release_id") if release else "",
     }) as stage:
-        print(f"[R2] 上传 {mp3.name} 到 R2 ...")
-        uploaded = _run(
-            ["npx", "wrangler", "r2", "object", "put",
-             f"{R2_BUCKET}/{key}",
-             "--file", str(mp3), "--content-type", "audio/mpeg",
-             "--remote"],
-            cwd=BASE_DIR, dry_run=False,
-        )
+        uploaded = _upload_r2_item(upload_item, dry_run=False)
         stage.metrics["object_key"] = key
         if not uploaded:
             print("[发布] R2 上传失败，停止 Pages 部署")
@@ -816,3 +808,67 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
         print(
             f"[完成] {len(items)} 期音频上传、一次 Pages 部署和逐期验收已完成")
     return all_passed
+
+def finish(name, dry_run=False):
+    """Fully publish one episode and append an auditable run record."""
+    folder = CONTENT_DIR / name
+    folder.mkdir(parents=True, exist_ok=True)
+    run_report = RunReport(folder, "catalog.finish", {
+        "dry_run": dry_run,
+        "pages_project": PAGES_PROJECT,
+        "r2_bucket": R2_BUCKET,
+    })
+    try:
+        ok = _finish_impl(name, dry_run, run_report)
+    except _PublishFailure as exc:
+        if not dry_run:
+            if load_release(folder):
+                update_release_state(folder, "failed", error=exc.error)
+            _write_publish_failure(
+                name, exc.stage, exc.error, report=exc.report,
+                run_id=run_report.run["id"])
+        run_report.finish(False, exc.error)
+        return False
+    except BaseException as exc:
+        if not dry_run:
+            if load_release(folder):
+                update_release_state(folder, "failed", error=exc)
+            failed = [
+                stage for stage in run_report.run.get("stages", [])
+                if stage.get("status") == "failed"
+            ]
+            stage = failed[-1].get("name") if failed else "publish"
+            _write_publish_failure(
+                name, stage, exc, run_id=run_report.run["id"])
+        run_report.finish(False, exc)
+        raise
+    run_report.finish(ok, None if ok else "publish transaction failed")
+    return ok
+
+
+def finish_batch(names, dry_run=False, *, upload_concurrency=3):
+    """Fully publish a batch and append a run record for every episode."""
+    normalized = list(dict.fromkeys(str(name) for name in names if str(name)))
+    reports = {}
+    for name in normalized:
+        folder = CONTENT_DIR / name
+        folder.mkdir(parents=True, exist_ok=True)
+        reports[name] = RunReport(folder, "catalog.finish-batch", {
+            "dry_run": dry_run,
+            "batch_size": len(normalized),
+            "upload_concurrency": int(upload_concurrency),
+            "pages_project": PAGES_PROJECT,
+            "r2_bucket": R2_BUCKET,
+        })
+    try:
+        ok = _finish_batch_impl(
+            normalized, dry_run=dry_run,
+            upload_concurrency=upload_concurrency)
+    except BaseException as exc:
+        for report in reports.values():
+            report.finish(False, exc)
+        raise
+    error = None if ok else "batch publish transaction failed"
+    for report in reports.values():
+        report.finish(ok, error)
+    return ok

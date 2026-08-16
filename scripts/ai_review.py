@@ -19,7 +19,8 @@ try:
     from evidence import ASR_SOURCE_KINDS, effective_source_kind
     from run_report import RunReport
     from subagent import run_json_task
-    from fact_check_cache import CACHE_FILENAME, update_cache_from_review
+    from fact_check_cache import (
+        CACHE_FILENAME, build_cache_context, update_cache_from_review)
     from claim_taxonomy import (
         AI_REVIEW_SCHEMA_VERSION,
         ASSERTION_TYPES,
@@ -36,7 +37,8 @@ except ImportError:
     from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
     from scripts.run_report import RunReport
     from scripts.subagent import run_json_task
-    from scripts.fact_check_cache import CACHE_FILENAME, update_cache_from_review
+    from scripts.fact_check_cache import (
+        CACHE_FILENAME, build_cache_context, update_cache_from_review)
     from scripts.claim_taxonomy import (
         AI_REVIEW_SCHEMA_VERSION,
         ASSERTION_TYPES,
@@ -451,6 +453,38 @@ def rebind_provenance_review(folder, output=None):
     return review
 
 
+
+def _current_claim_texts(folder):
+    try:
+        payload = json.loads(
+            (Path(folder) / "content_map.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    claims = []
+    for unit in payload.get("units", []) or []:
+        if not isinstance(unit, dict):
+            continue
+        for claim in unit.get("claims", []) or []:
+            if isinstance(claim, dict):
+                text = claim.get("text") or claim.get("claim")
+            else:
+                text = claim
+            text = str(text or "").strip()
+            if text:
+                claims.append(text)
+    return claims
+
+
+def _write_cache_review_context(folder):
+    folder = Path(folder)
+    cache_path = folder / CACHE_FILENAME
+    if not cache_path.exists():
+        return None
+    context = build_cache_context(folder, _current_claim_texts(folder))
+    path = folder / "fact_check_cache_context.json"
+    atomic_write_json(path, context)
+    return path
+
 def _prompt(folder, scope=None):
     folder = Path(folder).resolve()
     scope = scope or review_scope(folder)
@@ -467,10 +501,11 @@ def _prompt(folder, scope=None):
     if (folder / CACHE_FILENAME).exists():
         cache_instruction = f"""
 
-目录中存在 {CACHE_FILENAME}。它只能作为事实核查线索：
-- 动态事实超过 TTL 或来源日期过旧时必须重新联网核查；
-- 缓存命中不能替代对当前 claim 表述、source URL 和发布日期的核对；
-- 最终采用的新网页证据仍必须写入本次 fact_checks.source_urls。
+目录中存在 fact_check_cache_context.json。它是从 {CACHE_FILENAME} 读取并按当前 claim 精确匹配得到的非权威线索：
+- 只能使用 matched_entries；expired_dynamic_entries 已被排除；
+- 必须确认当前 fact_check 的 claim 和 source URL 都与缓存条目一致；
+- 缓存 verdict 不能直接决定本次 verdict，仍需独立检查当前表述和发布日期；
+- 最终采用的网页证据仍必须写入本次 fact_checks.source_urls。
 """
     return f"""你是播客流水线的最终发布审查员。请以 max effort 审查目录：
 {folder}
@@ -574,6 +609,7 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
         schema_file.close()
         with isolated_review_workspace(
                 folder, input_snapshot, context_snapshot) as workspace:
+            _write_cache_review_context(workspace)
             result = run_json_task(
                 workspace,
                 _prompt(workspace, scope) + (

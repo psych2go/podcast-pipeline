@@ -461,6 +461,39 @@ def _runner_environment(tmp, command):
     return env
 
 
+def _workspace_snapshot(folder):
+    """Capture a write staging tree so every runner attempt starts clean."""
+    folder = Path(folder)
+    snapshot = {}
+    for path in folder.rglob("*"):
+        if path.is_symlink():
+            raise SubagentError(
+                f"staging 不允许符号链接: {path.relative_to(folder)}")
+        if path.is_file():
+            snapshot[path.relative_to(folder)] = path.read_bytes()
+        elif not path.is_dir():
+            raise SubagentError(
+                f"staging 包含非普通文件: {path.relative_to(folder)}")
+    return snapshot
+
+
+def _restore_workspace(folder, snapshot):
+    folder = Path(folder)
+    for path in sorted(
+            folder.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if path.is_dir() and not path.is_symlink():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+        else:
+            path.unlink(missing_ok=True)
+    for relative, data in snapshot.items():
+        target = folder / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(target, data)
+
+
 def _run(
         folder,
         task,
@@ -477,6 +510,7 @@ def _run(
     timeout = timeout or int(os.environ.get("SUBAGENT_TIMEOUT", "1800"))
     max_retries = int(os.environ.get("SUBAGENT_MAX_RETRIES", "2"))
     output_path = None
+    workspace_snapshot = _workspace_snapshot(folder) if write_files else None
     try:
         with tempfile.TemporaryDirectory(
                 prefix=f"podcast-subagent-{task_name}-") as tmp:
@@ -518,6 +552,8 @@ def _run(
                 cmd.append(_base_prompt(task))
 
                 for attempt in range(max_retries + 1):
+                    if workspace_snapshot is not None:
+                        _restore_workspace(folder, workspace_snapshot)
                     output_path.unlink(missing_ok=True)
                     started = time.monotonic()
                     try:

@@ -230,7 +230,8 @@ evidence v3 的约束：
   `evidence_mode=text_anchor`，通过 segment ID 和源文本哈希定位，不伪造时间。
 - 多 claim 单元禁止所有 claim 全量复用整个 unit 证据。
 - `summary_map.json` 绑定章节正文 SHA-256。
-- 笔记通过 `notes_claim_ids` 和 `notes_sha256` 绑定。
+- 笔记通过显式生成并经 AI 逐条复核的 `notes_claim_ids` 与 `notes_sha256` 绑定；
+  deterministic enrich 只刷新哈希，不会自动填入全集来自我认证。
 - `summary_map.transcript_basis` 绑定实际用于写稿的原始稿或纠错稿 hash。
 
 ```bash
@@ -337,7 +338,9 @@ AI review 之后，`process.py` 的 TTS/HTML 路径只读验证讲稿和 summary
 任何仍需规范化、拆章或刷新哈希的情况都会阻断，必须回到
 `content_finalizer.py`，再重新生成证据绑定并独立复审。
 
-已有音频可一次性补清单：
+已有音频只能用 `--backfill-manifest` 登记文件清单，结果会标记为
+`legacy_unverified`，不会被严格发布接受，因为仅凭 MP3 无法证明它与当前文本对应。
+要重新发布必须执行一次受 manifest 记录的完整 TTS 合成。
 
 ```bash
 .venv/bin/python scripts/tts.py "content/播客名/讲书稿.md" \
@@ -403,7 +406,9 @@ AI review 之后，`process.py` 的 TTS/HTML 路径只读验证讲稿和 summary
 - 每次修复后重新独立 review，旧 review 只提供变化范围线索，最终阈值不变。
 - `fact_check_cache.json` 只缓存 external_source/editorial_added 的 objective fact，key 绑定规范化
   claim hash、source URL 和 source date；一手信息、观点、建议、解释和 allegation 不进入外部事实缓存。
-  动态事实按 TTL 失效，历史事实可长期复用为核查线索。
+  动态事实按 TTL 失效，历史事实可长期复用为核查线索。AI review 会读取缓存，
+  按当前 claim hash 生成非权威 `fact_check_cache_context.json`；只有 claim 与 source URL
+  都一致且仍在 TTL 内时才能作为线索，缓存 verdict 不能替代独立复审。
 
 ## 3. 严格模式与旧期
 

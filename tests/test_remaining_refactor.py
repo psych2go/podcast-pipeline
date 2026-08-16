@@ -57,10 +57,11 @@ with tempfile.TemporaryDirectory() as td:
     root = Path(td)
     folder = root / "content" / "Episode"
     folder.mkdir(parents=True)
-    catalog.BASE_DIR = root
-    catalog.CONTENT_DIR = root / "content"
-    catalog.SITE_DIR = root / "site"
-    catalog.CATALOG = root / "content" / "播客目录.md"
+    paths = publish.CatalogPaths(
+        root, root / "content", root / "site",
+        root / "content" / "播客目录.md",
+    )
+    catalog.configure_paths(paths)
     publish.build_quality_report = lambda _folder: {
         "passed": False, "errors": ["blocked"],
     }

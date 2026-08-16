@@ -243,7 +243,9 @@ subclaim，并用 `parent_claim_id` / `subclaim_id` 绑定 content_map；每个�
 
 只有 external_source/editorial_added 的客观 fact 可以写入
 `fact_check_cache.json`。一手信息、观点、建议、解释和 allegation 不进入外部事实
-缓存。动态公开事实有 TTL，缓存只能作为线索，不能替代本次来源和日期核对。
+缓存。动态公开事实有 TTL。AI review 会把精确 claim 命中的新鲜条目读取为
+`fact_check_cache_context.json`，但只有 source URL 也一致时才能作为线索；缓存 verdict
+不能替代本次独立判断、来源和日期核对。
 
 以下任一情况都会阻断 TTS：
 

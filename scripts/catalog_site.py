@@ -22,16 +22,16 @@ CATALOG = CONTENT_DIR / "播客目录.md"
 try:
     import catalog_core as _core_module
     from catalog_core import (
-        CatalogPaths, _catalog_text, _display_title, _find_briefing,
-        _gen_mp3, _load_site_entries, _ordered_episode_names, _read_source,
-        episode_stats,
+        CatalogPaths, _catalog_text, _display_title, _episode_dirs,
+        _find_briefing, _gen_mp3, _load_site_entries,
+        _ordered_episode_names, _read_source, episode_stats,
     )
 except ImportError:
     from scripts import catalog_core as _core_module
     from scripts.catalog_core import (
-        CatalogPaths, _catalog_text, _display_title, _find_briefing,
-        _gen_mp3, _load_site_entries, _ordered_episode_names, _read_source,
-        episode_stats,
+        CatalogPaths, _catalog_text, _display_title, _episode_dirs,
+        _find_briefing, _gen_mp3, _load_site_entries,
+        _ordered_episode_names, _read_source, episode_stats,
     )
 
 
@@ -42,17 +42,6 @@ def configure_paths(paths):
     CONTENT_DIR = Path(paths.content_dir)
     SITE_DIR = Path(paths.site_dir)
     CATALOG = Path(paths.catalog)
-def _episode_dirs():
-    names = []
-    for d in sorted(os.listdir(CONTENT_DIR), reverse=True):
-        folder = CONTENT_DIR / d
-        if not folder.is_dir() or d == ".claude":
-            continue
-        if not _find_briefing(folder):
-            continue
-        names.append(d)
-    return names
-
 def _build_entry(name, prev):
     folder = CONTENT_DIR / name
     stats = episode_stats(name)

@@ -44,6 +44,11 @@ def _timestamp_seconds(text):
 class _PodscriptsParser(HTMLParser):
     """提取 Podscripts 的 transcript-text spans，过滤站点 CSS/JS/广告。"""
 
+    VOID_TAGS = frozenset({
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    })
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.group = None
@@ -55,11 +60,13 @@ class _PodscriptsParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
         classes = attributes.get("class", "") or ""
+        if tag == "br" and self.capture is not None:
+            self.capture.append(" ")
         if tag == "div" and "single-sentence" in classes and self.group is None:
             self.group = {"timestamp": None, "texts": []}
             self.group_depth = 1
             return
-        if self.group is not None:
+        if self.group is not None and tag not in self.VOID_TAGS:
             self.group_depth += 1
         if tag == "span" and self.group is not None:
             if "pod_timestamp_indicator" in classes:
@@ -69,11 +76,18 @@ class _PodscriptsParser(HTMLParser):
                 self.capture = []
                 self.capture_kind = "text"
 
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in self.VOID_TAGS:
+            self.handle_endtag(tag)
+
     def handle_data(self, data):
         if self.capture is not None:
             self.capture.append(data)
 
     def handle_endtag(self, tag):
+        if tag in self.VOID_TAGS:
+            return
         if self.capture is not None and tag == "span":
             text = " ".join("".join(self.capture).split())
             if self.capture_kind == "timestamp":

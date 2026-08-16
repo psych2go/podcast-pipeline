@@ -300,6 +300,61 @@ class SubagentIsolationTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertEqual(result["removed_files"], ["optional.txt"])
 
+    def test_retry_restores_staging_before_next_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            (workspace / "input.txt").write_text(
+                "original", encoding="utf-8")
+            (workspace / "output.md").write_text(
+                "baseline", encoding="utf-8")
+            observed = []
+
+            def fake_process(cmd, *, cwd, env, timeout):
+                cwd = Path(cwd)
+                observed.append((
+                    (cwd / "input.txt").read_text(encoding="utf-8"),
+                    (cwd / "output.md").read_text(encoding="utf-8"),
+                ))
+                output_path = Path(cmd[cmd.index("-o") + 1])
+                if len(observed) == 1:
+                    (cwd / "input.txt").write_text(
+                        "tampered", encoding="utf-8")
+                    (cwd / "output.md").write_text(
+                        "dirty failed output", encoding="utf-8")
+                    return type("Result", (), {
+                        "returncode": 1, "stdout": "", "stderr": "failed",
+                    })()
+                (cwd / "output.md").write_text(
+                    "clean success", encoding="utf-8")
+                output_path.write_text("done", encoding="utf-8")
+                return type("Result", (), {
+                    "returncode": 0, "stdout": "", "stderr": "",
+                })()
+
+            with patch.dict(os.environ, {
+                    "SUBAGENT_COMMAND": "codex",
+                    "SUBAGENT_MAX_RETRIES": "1",
+            }, clear=False), patch(
+                    "subagent.shutil.which", return_value="/bin/codex"), patch(
+                    "subagent._run_process", side_effect=fake_process), patch(
+                    "subagent.time.sleep"):
+                result = subagent._run(
+                    workspace, "edit output", task_name="retry_restore",
+                    write_files=True)
+
+            self.assertEqual(observed, [
+                ("original", "baseline"),
+                ("original", "baseline"),
+            ])
+            self.assertEqual(
+                (workspace / "input.txt").read_text(encoding="utf-8"),
+                "original")
+            self.assertEqual(
+                (workspace / "output.md").read_text(encoding="utf-8"),
+                "clean success")
+            self.assertEqual(result["retry_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

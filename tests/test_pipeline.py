@@ -36,7 +36,10 @@ from quality_report import (
 from tts import apply_tts_lexicon, run_tts, validate_tts_manifest
 import process as pipeline_process
 from ai_review import rebind_provenance_review, reviewed_hashes
-import catalog
+import catalog_core
+import catalog_health
+import catalog_publish
+import catalog_site
 from html_gen import _build_html, md_to_html
 from publish import verify_publish
 from episode import (
@@ -62,6 +65,23 @@ from sources import source_label
 
 
 class FetcherTests(unittest.TestCase):
+
+    def test_podscripts_void_tags_do_not_leak_group_depth(self):
+        html = """
+        <div class="single-sentence">
+          <span class="pod_timestamp_indicator">00:01</span>
+          <span class="transcript-text">First<br>line<img src="x">.</span>
+        </div>
+        <div class="single-sentence">
+          <span class="pod_timestamp_indicator">00:02</span>
+          <span class="transcript-text">Second.</span>
+        </div>
+        """
+        segments = _extract_podscripts_segments(html)
+        self.assertEqual([item["text"] for item in segments], [
+            "First line.", "Second.",
+        ])
+
     def test_podscripts_fixture_extracts_only_timestamped_transcript(self):
         fixture = (
             Path(__file__).resolve().parent
@@ -1343,6 +1363,7 @@ class ContentMapTests(unittest.TestCase):
         }
         briefing = "导览。\n\n## A\n正文。"
         summary_map = {
+            "notes_claim_ids": ["U0001-C01"],
             "chapters": [{
                 "title": "A",
                 "unit_ids": ["U0001"],
@@ -1682,7 +1703,7 @@ class ProcessTests(unittest.TestCase):
             name, path = pipeline_process.detect_briefing(folder)
             self.assertEqual(name, "讲书稿.md")
             self.assertEqual(path, current)
-            self.assertEqual(catalog._find_briefing(folder), current)
+            self.assertEqual(catalog_core._find_briefing(folder), current)
             self.assertEqual(quality_report._find_briefing(folder), current)
 
     @staticmethod
@@ -1912,9 +1933,9 @@ class ProcessTests(unittest.TestCase):
 class CatalogTests(unittest.TestCase):
     def test_audio_duration_prefers_ffprobe(self):
         result = SimpleNamespace(returncode=0, stdout="1186.5\n")
-        with patch("catalog.subprocess.run", return_value=result):
+        with patch("catalog_core.subprocess.run", return_value=result):
             self.assertEqual(
-                catalog._audio_duration_minutes(Path("episode.mp3")), 20)
+                catalog_core._audio_duration_minutes(Path("episode.mp3")), 20)
 
     def test_new_site_entry_requires_strict_quality_artifacts(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1925,10 +1946,10 @@ class CatalogTests(unittest.TestCase):
             (folder / "Episode.mp3").write_bytes(b"x" * 2048)
             (folder / "Episode - content.html").write_text(
                 "<html></html>", encoding="utf-8")
-            with patch.object(catalog, "CONTENT_DIR", content):
-                errors = catalog._site_readiness_errors(
+            with patch.object(catalog_site, "CONTENT_DIR", content):
+                errors = catalog_site._site_readiness_errors(
                     ["Episode"], existing={})
-                legacy_errors = catalog._site_readiness_errors(
+                legacy_errors = catalog_site._site_readiness_errors(
                     ["Episode"], existing={"Episode": {}})
             self.assertTrue(any(
                 "content_map.json" in error for error in errors))
@@ -1957,19 +1978,25 @@ class CatalogTests(unittest.TestCase):
                 "First": {"chars": 2100, "duration": 20},
                 "Second": {"chars": 3200, "duration": 30},
             }
-            with patch.object(catalog, "CONTENT_DIR", content), \
-                    patch.object(catalog, "SITE_DIR", site), \
-                    patch.object(catalog, "CATALOG", catalog_path), \
+            with patch.object(catalog_core, "CONTENT_DIR", content), \
+                    patch.object(catalog_core, "SITE_DIR", site), \
+                    patch.object(catalog_site, "CONTENT_DIR", content), \
+                    patch.object(catalog_site, "SITE_DIR", site), \
+                    patch.object(catalog_core, "CATALOG", catalog_path), \
+                    patch.object(catalog_site, "CATALOG", catalog_path), \
                     patch.object(
-                        catalog, "episode_stats",
+                        catalog_core, "episode_stats",
+                        side_effect=lambda name: stats[name]), \
+                    patch.object(
+                        catalog_site, "episode_stats",
                         side_effect=lambda name: stats[name]):
-                catalog.rebuild_catalog()
+                catalog_core.rebuild_catalog()
                 self.assertIn("20min", catalog_path.read_text(
                     encoding="utf-8"))
-                self.assertTrue(catalog.catalog_consistency_errors())
-                catalog.sync_site()
-                catalog.rebuild_catalog()
-                self.assertEqual(catalog.catalog_consistency_errors(), [])
+                self.assertTrue(catalog_site.catalog_consistency_errors())
+                catalog_site.sync_site()
+                catalog_core.rebuild_catalog()
+                self.assertEqual(catalog_site.catalog_consistency_errors(), [])
 
     def test_finish_fails_when_remote_verification_fails(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1980,45 +2007,49 @@ class CatalogTests(unittest.TestCase):
             site.mkdir()
             mp3 = folder / "Episode.mp3"
             mp3.write_bytes(b"x" * 4096)
-            with patch.object(catalog, "CONTENT_DIR", content), \
-                    patch.object(catalog, "SITE_DIR", site), \
-                    patch.object(catalog, "BASE_DIR", Path(td)), \
-                    patch.object(catalog, "_publish_preflight", return_value=True), \
-                    patch.object(catalog, "sync_site"), \
-                    patch.object(catalog, "rebuild_catalog", return_value=["Episode"]), \
+            with patch.object(catalog_publish, "CONTENT_DIR", content), \
+                    patch.object(catalog_publish, "SITE_DIR", site), \
+                    patch.object(catalog_publish, "BASE_DIR", Path(td)), \
+                    patch.object(catalog_publish, "_publish_preflight", return_value=True), \
+                    patch.object(catalog_publish, "sync_site"), \
+                    patch.object(catalog_publish, "rebuild_catalog", return_value=["Episode"]), \
                     patch.object(
-                        catalog, "catalog_consistency_errors",
+                        catalog_publish, "catalog_consistency_errors",
                         return_value=[]), \
-                    patch.object(catalog, "gen_index"), \
-                    patch.object(catalog, "_gen_mp3", return_value=mp3), \
-                    patch.object(catalog, "_run", return_value=True), \
+                    patch.object(catalog_publish, "gen_index"), \
+                    patch.object(catalog_publish, "_gen_mp3", return_value=mp3), \
+                    patch.object(catalog_publish, "_run", return_value=True), \
                     patch.object(
-                        catalog, "_run_with_output",
+                        catalog_publish, "_run_with_output",
                         return_value=(True, "https://abc.podcast-scripts.pages.dev"),
                     ), \
                     patch.object(
-                        catalog, "verify_publish",
+                        catalog_publish, "verify_publish",
                         return_value={
                             "passed": False,
                             "errors": ["episode unavailable"],
                         },
                     ), \
-                    patch.object(catalog, "validate_for_stage"), \
-                    patch.object(catalog, "write_publish_report") as write:
-                self.assertFalse(catalog.finish("Episode"))
+                    patch.object(catalog_publish, "validate_for_stage"), \
+                    patch.object(catalog_publish, "write_publish_report") as write:
+                self.assertFalse(catalog_publish.finish("Episode"))
                 write.assert_called_once()
 
     def test_publish_retry_handles_pages_propagation(self):
         failed = {
             "passed": False,
             "errors": ["单期页面缺少音频播放器"],
+            "error_details": [{
+                "code": "publish_episode_player_missing",
+                "message": "单期页面缺少音频播放器",
+            }],
         }
         passed = {"passed": True, "errors": []}
         with patch.object(
-                catalog, "verify_publish",
+                catalog_publish, "verify_publish",
                 side_effect=[failed, passed]) as verify, \
-                patch.object(catalog.time, "sleep") as sleep:
-            report = catalog._verify_publish_with_retry(
+                patch.object(catalog_publish.time, "sleep") as sleep:
+            report = catalog_publish._verify_publish_with_retry(
                 "home", "episode", "audio", "title", Path("audio.mp3"),
                 attempts=3, delay=1,
             )
@@ -2099,7 +2130,7 @@ class CatalogTests(unittest.TestCase):
             (ignored / "run_report.json").write_text(
                 '{"schema_version":999,"runs":[]}', encoding="utf-8")
 
-            report = catalog.build_health_report(
+            report = catalog_health.build_health_report(
                 content, since="7d", now=now)
 
         self.assertIn("| fetch | 2 | 1 | 50.0% | 3.0s |", report)
@@ -2344,8 +2375,8 @@ class HtmlTests(unittest.TestCase):
                 "duration": 10,
                 "words": 1000,
             }]), encoding="utf-8")
-            with patch.object(catalog, "SITE_DIR", site):
-                catalog.gen_index()
+            with patch.object(catalog_site, "SITE_DIR", site):
+                catalog_site.gen_index()
             html = (site / "index.html").read_text(encoding="utf-8")
         self.assertIn('class="episode-card-main"', html)
         self.assertIn('class="episode-source"', html)

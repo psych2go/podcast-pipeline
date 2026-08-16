@@ -175,6 +175,8 @@ def validate_tts_manifest(folder, briefing_file, merged_name):
         return ["缺少或无法读取 tts_manifest.json"]
     if not manifest.get("completed"):
         errors.append("TTS manifest 未完成")
+    if manifest.get("verification_status") == "legacy_unverified":
+        errors.append("历史 TTS 音频未证明与当前讲稿文本对应，必须重新合成")
     if manifest.get("failed_sections"):
         errors.append(
             f"TTS manifest 存在失败章节: {manifest['failed_sections']}")
@@ -223,7 +225,12 @@ def validate_tts_manifest(folder, briefing_file, merged_name):
 def backfill_tts_manifest(
         folder, briefing_file, merged_name,
         speed=1.0, read_titles=True):
-    """Create a manifest for verified existing section and final MP3 files."""
+    """Inventory legacy audio without certifying text/audio equivalence.
+
+    Existing MP3 bytes cannot prove which text was synthesized. The backfill is
+    therefore intentionally non-publishable; a fresh TTS run is required to
+    produce section fingerprints with trusted generation provenance.
+    """
     folder = Path(folder)
     plan = build_tts_plan(
         folder, briefing_file, speed=speed, read_titles=read_titles)
@@ -244,15 +251,19 @@ def backfill_tts_manifest(
         path = audio_dir / item["filename"]
         sections.append({
             "filename": item["filename"],
-            "fingerprint": item["fingerprint"],
+            "expected_fingerprint": item["fingerprint"],
             "output_sha256": _sha256_file(path),
             "size": path.stat().st_size,
-            "status": "complete",
+            "status": "legacy_unverified",
             "cached": True,
         })
     manifest = {
         "schema_version": TTS_MANIFEST_SCHEMA_VERSION,
-        "completed": True,
+        "completed": False,
+        "verification_status": "legacy_unverified",
+        "verification_error": (
+            "existing audio has no trusted synthesis record binding it to "
+            "the current section text"),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "briefing_file": briefing_file,
         "final_file": final_path.name,
@@ -264,9 +275,9 @@ def backfill_tts_manifest(
             "max_chunk_chars": MAX_CHUNK_CHARS,
         },
         "expected_sections": len(plan),
-        "completed_sections": len(plan),
+        "completed_sections": 0,
         "sections": sections,
-        "failed_sections": [],
+        "failed_sections": [item["filename"] for item in plan],
         "final": {
             "filename": final_path.name,
             "size": final_path.stat().st_size,
@@ -276,7 +287,14 @@ def backfill_tts_manifest(
     }
     manifest_path = folder / "tts_manifest.json"
     _write_manifest(manifest_path, manifest)
-    return manifest_path
+    return TTSResult(
+        False,
+        "历史音频已登记但未验证文本对应关系；请重新运行 TTS 合成",
+        expected_sections=len(plan),
+        completed_sections=0,
+        failed_sections=[item["filename"] for item in plan],
+        manifest_path=str(manifest_path),
+    )
 
 
 # ── 朗读前轻量归一 ─────────────────────────────────────────────────

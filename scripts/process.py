@@ -321,10 +321,11 @@ def _source_identity(source):
         return ""
     if source.startswith(("http://", "https://")):
         parsed = urlsplit(source)
+        path = parsed.path.rstrip("/") or "/"
         return urlunsplit((
             "https",
             parsed.netloc.lower(),
-            parsed.path or "/",
+            path,
             parsed.query,
             "",
         ))

@@ -69,3 +69,5 @@ Thumbs.db
 benchmarks/**/audio/
 benchmarks/**/source/
 benchmarks/**/results/
+.vscode
+.idea

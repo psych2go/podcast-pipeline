@@ -7,8 +7,22 @@ import httpx
 
 try:
     from atomic_io import atomic_write_json
+    from publish_errors import (
+        AUDIO_CONTENT_RANGE, AUDIO_CONTENT_TYPE, AUDIO_HEAD_STATUS,
+        AUDIO_RANGE_HEADER, AUDIO_RANGE_LENGTH, AUDIO_RANGE_STATUS,
+        AUDIO_SIZE_MISMATCH, EPISODE_PLAYER_MISSING, EPISODE_STATUS,
+        EPISODE_TITLE_MISSING, HOMEPAGE_EPISODE_MISSING, HOMEPAGE_STATUS,
+        LOCAL_AUDIO_MISSING, REQUEST_FAILED, add_publish_error,
+    )
 except ImportError:
     from scripts.atomic_io import atomic_write_json
+    from scripts.publish_errors import (
+        AUDIO_CONTENT_RANGE, AUDIO_CONTENT_TYPE, AUDIO_HEAD_STATUS,
+        AUDIO_RANGE_HEADER, AUDIO_RANGE_LENGTH, AUDIO_RANGE_STATUS,
+        AUDIO_SIZE_MISMATCH, EPISODE_PLAYER_MISSING, EPISODE_STATUS,
+        EPISODE_TITLE_MISSING, HOMEPAGE_EPISODE_MISSING, HOMEPAGE_STATUS,
+        LOCAL_AUDIO_MISSING, REQUEST_FAILED, add_publish_error,
+    )
 
 
 PUBLISH_REPORT_SCHEMA_VERSION = 1
@@ -36,11 +50,12 @@ def verify_publish(
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "passed": True,
         "errors": [],
+        "error_details": [],
         "checks": {},
     }
     local_mp3 = Path(local_mp3)
     if not local_mp3.exists():
-        report["errors"].append(f"本地音频不存在: {local_mp3}")
+        add_publish_error(report, LOCAL_AUDIO_MISSING, f"本地音频不存在: {local_mp3}")
         report["passed"] = False
         return report
 
@@ -59,10 +74,11 @@ def verify_publish(
         homepage_check["title_present"] = display_title in homepage_text
         report["checks"]["homepage"] = homepage_check
         if homepage.status_code != 200:
-            report["errors"].append(
+            add_publish_error(
+                report, HOMEPAGE_STATUS,
                 f"首页状态异常: {homepage.status_code}")
         if not homepage_check["title_present"]:
-            report["errors"].append("首页未找到目标单集标题")
+            add_publish_error(report, HOMEPAGE_EPISODE_MISSING, "首页未找到目标单集标题")
 
         episode = client.get(episode_url)
         episode_check = _response_summary(episode)
@@ -71,12 +87,13 @@ def verify_publish(
         episode_check["player_present"] = 'id="podcastAudio"' in episode.text
         report["checks"]["episode"] = episode_check
         if episode.status_code != 200:
-            report["errors"].append(
+            add_publish_error(
+                report, EPISODE_STATUS,
                 f"单期页面状态异常: {episode.status_code}")
         if not episode_check["title_present"]:
-            report["errors"].append("单期页面未找到展示标题")
+            add_publish_error(report, EPISODE_TITLE_MISSING, "单期页面未找到展示标题")
         if not episode_check["player_present"]:
-            report["errors"].append("单期页面缺少音频播放器")
+            add_publish_error(report, EPISODE_PLAYER_MISSING, "单期页面缺少音频播放器")
 
         audio_head = client.head(audio_url)
         head_check = _response_summary(audio_head)
@@ -87,18 +104,20 @@ def verify_publish(
         head_check["local_size"] = local_mp3.stat().st_size
         report["checks"]["audio_head"] = head_check
         if audio_head.status_code != 200:
-            report["errors"].append(
+            add_publish_error(
+                report, AUDIO_HEAD_STATUS,
                 f"R2 音频 HEAD 状态异常: {audio_head.status_code}")
         if "audio/mpeg" not in head_check["content_type"].lower():
-            report["errors"].append(
+            add_publish_error(
+                report, AUDIO_CONTENT_TYPE,
                 f"R2 音频类型异常: {head_check['content_type']}")
         if head_check["content_length"] != head_check["local_size"]:
-            report["errors"].append(
+            add_publish_error(
+                report, AUDIO_SIZE_MISMATCH,
                 "R2 音频大小与本地文件不一致: "
-                f"{head_check['content_length']} != {head_check['local_size']}"
-            )
+                f"{head_check['content_length']} != {head_check['local_size']}")
         if head_check["accept_ranges"].lower() != "bytes":
-            report["errors"].append("R2 音频未声明 Accept-Ranges: bytes")
+            add_publish_error(report, AUDIO_RANGE_HEADER, "R2 音频未声明 Accept-Ranges: bytes")
 
         audio_range = client.get(
             audio_url, headers={"Range": "bytes=0-1023"})
@@ -108,19 +127,21 @@ def verify_publish(
             "content-range", "")
         report["checks"]["audio_range"] = range_check
         if audio_range.status_code != 206:
-            report["errors"].append(
+            add_publish_error(
+                report, AUDIO_RANGE_STATUS,
                 f"R2 Range 状态异常: {audio_range.status_code}")
         if len(audio_range.content) != 1024:
-            report["errors"].append(
+            add_publish_error(
+                report, AUDIO_RANGE_LENGTH,
                 f"R2 Range 返回长度异常: {len(audio_range.content)}")
         expected_range = f"bytes 0-1023/{local_mp3.stat().st_size}"
         if range_check["content_range"] != expected_range:
-            report["errors"].append(
+            add_publish_error(
+                report, AUDIO_CONTENT_RANGE,
                 "R2 Content-Range 异常: "
-                f"{range_check['content_range']!r} != {expected_range!r}"
-            )
+                f"{range_check['content_range']!r} != {expected_range!r}")
     except httpx.HTTPError as exc:
-        report["errors"].append(f"线上验证请求失败: {exc}")
+        add_publish_error(report, REQUEST_FAILED, f"线上验证请求失败: {exc}")
     finally:
         if owns_client:
             client.close()

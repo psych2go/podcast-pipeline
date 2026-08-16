@@ -117,6 +117,50 @@ def store_fact_check(
     return entry
 
 
+
+def build_cache_context(
+        folder, claims, *, ttl_days=DEFAULT_DYNAMIC_TTL_DAYS, now=None):
+    """Return fresh exact-claim cache leads for an independent reviewer.
+
+    The result is deliberately non-authoritative: callers must still match the
+    current source URL and independently decide the verdict.
+    """
+    now = now or datetime.now(timezone.utc)
+    wanted = {claim_sha256(claim) for claim in claims if str(claim).strip()}
+    matches = []
+    expired = 0
+    for entry in load_cache(folder).get("entries", {}).values():
+        if not isinstance(entry, dict) or entry.get("claim_sha256") not in wanted:
+            continue
+        if entry.get("dynamic"):
+            checked_at = _parse_time(entry.get("checked_at"))
+            if checked_at is None or now - checked_at > timedelta(days=ttl_days):
+                expired += 1
+                continue
+        matches.append({
+            key: entry.get(key)
+            for key in (
+                "claim", "claim_sha256", "parent_claim_id", "subclaim_id",
+                "claim_type", "assertion_type", "verification_mode",
+                "risk_domain", "source_url", "source_date", "checked_at",
+                "dynamic", "verdict", "publication_status", "notes",
+            )
+        })
+    matches.sort(key=lambda item: (
+        str(item.get("claim_sha256", "")),
+        str(item.get("source_url", "")),
+        str(item.get("checked_at", "")),
+    ))
+    return {
+        "schema_version": 1,
+        "generated_at": now.isoformat(),
+        "authoritative": False,
+        "matching_rule": "exact normalized claim hash; source URL must also match",
+        "ttl_days": ttl_days,
+        "matched_entries": matches,
+        "expired_dynamic_entries": expired,
+    }
+
 def _looks_dynamic(claim):
     text = str(claim or "").casefold()
     markers = (

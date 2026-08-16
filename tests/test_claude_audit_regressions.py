@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import agent_pipeline
-import catalog
+import catalog_publish as catalog
+import catalog_site
 import fetcher
 import process as pipeline_process
 import setup_alignment_env
@@ -59,8 +60,8 @@ class HtmlInjectionRegressionTests(unittest.TestCase):
                 "<!-- CARDS:START --><!-- CARDS:END -->",
                 encoding="utf-8",
             )
-            with patch.object(catalog, "SITE_DIR", site):
-                catalog.gen_index()
+            with patch.object(catalog_site, "SITE_DIR", site):
+                catalog_site.gen_index()
             rendered = (site / "index.html").read_text(encoding="utf-8")
         self.assertIn("&quot;", rendered)
         self.assertNotIn('data-search="bad" onmouseover="', rendered.lower())

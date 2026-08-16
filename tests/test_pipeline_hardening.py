@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import catalog
+import catalog_publish as catalog
 import claim_evidence
 import process
 import subagent
@@ -508,6 +508,7 @@ class ArtifactNormalizationTests(unittest.TestCase):
         notes = "完整笔记"
         briefing = "导览内容足够完整。\n\n## 章节\n正文内容。"
         summary = {
+            "notes_claim_ids": ["U0001.C01"],
             "chapters": [{
                 "title": "章节",
                 "unit_ids": ["U0001"],
