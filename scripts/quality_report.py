@@ -20,7 +20,7 @@ try:
         CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
         EVIDENCE_PROVENANCE_FAILED, SOURCE_REVIEW_STATUS,
         SUMMARY_MAP_VALIDATION, TTS_READINESS_FAILED, add_error, coded_errors,
-        extend_errors,
+        extend_errors, quality_error_alignment,
     )
 except ImportError:
     from scripts.atomic_io import atomic_write_json
@@ -37,7 +37,7 @@ except ImportError:
         CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
         EVIDENCE_PROVENANCE_FAILED, SOURCE_REVIEW_STATUS,
         SUMMARY_MAP_VALIDATION, TTS_READINESS_FAILED, add_error, coded_errors,
-        extend_errors,
+        extend_errors, quality_error_alignment,
     )
 
 try:
@@ -50,7 +50,7 @@ try:
     from validator import structure_report
     from episode import (
         LEGACY_EVIDENCE_READ_CUTOFF, inspect_episode_state,
-        legacy_evidence_read_allowed,
+        legacy_evidence_frozen_before_cutoff, legacy_evidence_read_allowed,
     )
     from evidence import (
         ASR_SOURCE_KINDS,
@@ -74,7 +74,7 @@ except ImportError:  # package import
     from scripts.validator import structure_report
     from scripts.episode import (
         LEGACY_EVIDENCE_READ_CUTOFF, inspect_episode_state,
-        legacy_evidence_read_allowed,
+        legacy_evidence_frozen_before_cutoff, legacy_evidence_read_allowed,
     )
     from scripts.evidence import (
         ASR_SOURCE_KINDS,
@@ -665,20 +665,32 @@ def build_quality_report(folder, strict=True, *, today=None):
                 content_map.get("schema_version", 1) >= 2
                 and evidence_mode == "legacy_broad"
             )
-            if legacy_v2 and legacy_evidence_read_allowed(today):
+            frozen_history = (
+                legacy_v2 and legacy_evidence_frozen_before_cutoff(folder)
+            )
+            if (
+                    legacy_v2
+                    and frozen_history
+                    and legacy_evidence_read_allowed(today)):
                 report["warnings"].append(
-                    "该历史单集仍使用只读 evidence v2；兼容将于 "
+                    "该冻结日前已发布单集仍使用只读 evidence v2；"
+                    "兼容将于 "
                     f"{LEGACY_EVIDENCE_READ_CUTOFF.isoformat()} 停止，"
                     "届时必须迁移到 v3 claim 级精确证据")
             else:
-                message = (
-                    "evidence v2 兼容已于 "
-                    f"{LEGACY_EVIDENCE_READ_CUTOFF.isoformat()} 停止；"
-                    "需生成 v3 claim 级精确证据"
-                    if legacy_v2 else
-                    "content_map.json 证据 schema 过旧，"
-                    "需生成 v3 claim 级精确证据"
-                )
+                if legacy_v2 and not frozen_history:
+                    message = (
+                        "evidence v2 缺少冻结日前成功发布证明；"
+                        "禁止通过 episode.json 手工标记启用兼容")
+                elif legacy_v2:
+                    message = (
+                        "evidence v2 兼容已于 "
+                        f"{LEGACY_EVIDENCE_READ_CUTOFF.isoformat()} 停止；"
+                        "需生成 v3 claim 级精确证据")
+                else:
+                    message = (
+                        "content_map.json 证据 schema 过旧，"
+                        "需生成 v3 claim 级精确证据")
                 add_error(report, CONTENT_MAP_SCHEMA, message)
         raw_for_validation = load_json(raw_path) if raw_path.exists() else None
         transcript_mode = (
@@ -936,6 +948,8 @@ def build_quality_report(folder, strict=True, *, today=None):
             for code, message in ai_error_details:
                 add_error(report, code, message)
 
+    if not quality_error_alignment(report):
+        raise RuntimeError("quality report errors/error_details 不一致")
     report["passed"] = not report["errors"]
     return report
 

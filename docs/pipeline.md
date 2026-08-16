@@ -407,20 +407,18 @@ AI review 之后，`process.py` 的 TTS/HTML 路径只读验证讲稿和 summary
 
 ## 3. 严格模式与旧期
 
-**Evidence v2 停止兼容时间：** 2026-08-15 起 legacy 模式只读，禁止新设或恢复；2026-09-01 起 strict 质量门不再接受 evidence v2，所有待重新发布单集必须先迁移到 evidence v3。
+**Evidence v2 停止兼容时间：** 2026-08-15 起 legacy 模式只读，禁止新设或恢复；
+2026-09-01 起 strict 质量门不再接受 evidence v2，所有待重新发布单集必须先迁移到
+evidence v3。
 
 新单集一律严格模式。缺少 `content_map.json` 时，`process.py` 默认失败。
-新单集还必须使用 evidence v3。历史 evidence v2 只有在
-`episode.json.quality.claim_evidence_mode=legacy_broad` 时可暂时兼容。设置该模式前
-命令会验证单集已有通过的 `publish_report.json` 或已部署的 `release.json`；新单集
-不能降级。一次性迁移使用：
+新单集还必须使用 evidence v3。历史 evidence v2 必须同时具备冻结前已有的
+`episode.json.quality.claim_evidence_mode=legacy_broad` 和通过的
+`publish_report.json`，且 `checked_at` 换算为 Asia/Shanghai 日期后早于
+2026-08-15。发布报告单独存在或手工新增 episode 标记都不能启用兼容。
 
-```bash
-.venv/bin/python scripts/episode.py set-evidence-mode \
-  "content/旧期" legacy_broad
-```
-
-episode manifest 属于 AI 审查输入，迁移后必须重新运行 AI 审查。
+2026-08-15 起 `set-evidence-mode legacy*` 已禁用；只能把旧期迁移回
+`precise_required`。episode manifest 属于 AI 审查输入，迁移后必须重新运行 AI 审查。
 
 `--allow-legacy-quality` 只允许维护已经存在于 `site.json` 的旧期。`catalog.py sync-site` 不允许一个新的无证据单集进入站点。
 

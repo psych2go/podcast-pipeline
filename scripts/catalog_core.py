@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 try:
@@ -19,6 +20,25 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CONTENT_DIR = BASE_DIR / "content"
 SITE_DIR = BASE_DIR / "site"
 CATALOG = CONTENT_DIR / "播客目录.md"
+
+
+@dataclass(frozen=True)
+class CatalogPaths:
+    base_dir: Path
+    content_dir: Path
+    site_dir: Path
+    catalog: Path
+
+
+def configure_paths(paths):
+    """Configure the direct module adapter with one immutable path set."""
+    global BASE_DIR, CONTENT_DIR, SITE_DIR, CATALOG
+    BASE_DIR = Path(paths.base_dir)
+    CONTENT_DIR = Path(paths.content_dir)
+    SITE_DIR = Path(paths.site_dir)
+    CATALOG = Path(paths.catalog)
+
+
 MAX_DURATION_MB_PER_MIN = 1.2
 CATALOG_HEADER = (
     "# 播客处理台账\n\n"
@@ -115,6 +135,20 @@ def _load_site_entries():
     except (OSError, json.JSONDecodeError):
         return []
     return entries if isinstance(entries, list) else []
+
+def _episode_dirs():
+    """Return publishable episode directories for direct core use."""
+    names = []
+    if not CONTENT_DIR.exists():
+        return names
+    for name in sorted(os.listdir(CONTENT_DIR), reverse=True):
+        folder = CONTENT_DIR / name
+        if not folder.is_dir() or name == ".claude":
+            continue
+        if _find_briefing(folder):
+            names.append(name)
+    return names
+
 
 def _ordered_episode_names():
     available = _episode_dirs()

@@ -7,18 +7,20 @@ try:
     from pipeline_metrics import quality_metrics as _quality_metrics
     from quality_errors import (
         AI_REVIEW_MISSING, AI_REVIEW_STALE, AUTO_REVIEW_CODES,
+        quality_error_alignment,
     )
 except ImportError:
     from scripts.atomic_io import atomic_write_json
     from scripts.pipeline_metrics import quality_metrics as _quality_metrics
     from scripts.quality_errors import (
         AI_REVIEW_MISSING, AI_REVIEW_STALE, AUTO_REVIEW_CODES,
+        quality_error_alignment,
     )
 
 
 def _review_recovery_decision(report):
     details = report.get("error_details")
-    if not isinstance(details, list):
+    if not quality_error_alignment(report):
         return False, False
     codes = [
         item.get("code") for item in details

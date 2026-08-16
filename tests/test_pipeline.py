@@ -811,12 +811,67 @@ class QualityReportTests(unittest.TestCase):
                 "schema_version": 1,
                 "quality": {"claim_evidence_mode": "legacy_broad"},
             }), encoding="utf-8")
+            (folder / "publish_report.json").write_text(json.dumps({
+                "passed": True,
+                "checked_at": "2026-08-14T12:00:00+00:00",
+            }), encoding="utf-8")
             report = build_quality_report(
                 folder, today=date(2026, 8, 31))
         self.assertFalse(any(
             "证据 schema 过旧" in error for error in report["errors"]))
         self.assertTrue(any(
             "evidence v2" in warning for warning in report["warnings"]))
+
+    def test_episode_marker_without_prefreeze_publication_cannot_enable_v2(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "transcript.raw.json").write_text(json.dumps({
+                "source_kind": "web_transcript",
+                "segments": [{
+                    "id": "S0001", "start": 0, "end": 1, "text": "source",
+                }],
+                "meta": {},
+            }), encoding="utf-8")
+            (folder / "content_map.json").write_text(json.dumps({
+                "schema_version": 2,
+                "units": [{
+                    "id": "U0001", "topic": "topic",
+                    "claims": ["claim"], "importance": "high",
+                    "status": "included", "timestamps": [[0, 1]],
+                }],
+            }), encoding="utf-8")
+            (folder / "episode.json").write_text(json.dumps({
+                "schema_version": 1,
+                "quality": {"claim_evidence_mode": "legacy_broad"},
+            }), encoding="utf-8")
+            report = build_quality_report(
+                folder, today=date(2026, 8, 31))
+        self.assertTrue(any(
+            "缺少冻结日前成功发布证明" in error
+            for error in report["errors"]))
+
+    def test_postfreeze_publish_report_cannot_backdate_v2_compatibility(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "transcript.raw.json").write_text(json.dumps({
+                "source_kind": "web_transcript", "segments": [], "meta": {},
+            }), encoding="utf-8")
+            (folder / "content_map.json").write_text(json.dumps({
+                "schema_version": 2, "units": [],
+            }), encoding="utf-8")
+            (folder / "episode.json").write_text(json.dumps({
+                "schema_version": 1,
+                "quality": {"claim_evidence_mode": "legacy_broad"},
+            }), encoding="utf-8")
+            (folder / "publish_report.json").write_text(json.dumps({
+                "passed": True,
+                "checked_at": "2026-08-15T00:00:00+08:00",
+            }), encoding="utf-8")
+            report = build_quality_report(
+                folder, today=date(2026, 8, 31))
+        self.assertTrue(any(
+            "缺少冻结日前成功发布证明" in error
+            for error in report["errors"]))
 
     def test_ai_fact_checks_distinguish_excluded_from_used_unsupported_claims(self):
         errors, warnings = _ai_fact_check_consistency({

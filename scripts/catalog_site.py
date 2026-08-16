@@ -20,9 +20,28 @@ CATALOG = CONTENT_DIR / "播客目录.md"
 
 # Injected by the catalog facade; defaults keep direct module imports usable.
 try:
-    from catalog_core import (_find_briefing, _gen_mp3, _read_source, _display_title, episode_stats, _load_site_entries, _ordered_episode_names, _catalog_text)
+    import catalog_core as _core_module
+    from catalog_core import (
+        CatalogPaths, _catalog_text, _display_title, _find_briefing,
+        _gen_mp3, _load_site_entries, _ordered_episode_names, _read_source,
+        episode_stats,
+    )
 except ImportError:
-    from scripts.catalog_core import (_find_briefing, _gen_mp3, _read_source, _display_title, episode_stats, _load_site_entries, _ordered_episode_names, _catalog_text)
+    from scripts import catalog_core as _core_module
+    from scripts.catalog_core import (
+        CatalogPaths, _catalog_text, _display_title, _find_briefing,
+        _gen_mp3, _load_site_entries, _ordered_episode_names, _read_source,
+        episode_stats,
+    )
+
+
+def configure_paths(paths):
+    global BASE_DIR, CONTENT_DIR, SITE_DIR, CATALOG
+    _core_module.configure_paths(paths)
+    BASE_DIR = Path(paths.base_dir)
+    CONTENT_DIR = Path(paths.content_dir)
+    SITE_DIR = Path(paths.site_dir)
+    CATALOG = Path(paths.catalog)
 def _episode_dirs():
     names = []
     for d in sorted(os.listdir(CONTENT_DIR), reverse=True):

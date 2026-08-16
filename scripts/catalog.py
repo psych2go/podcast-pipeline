@@ -6,6 +6,7 @@ module deliberately keeps the historical names patchable for callers and tests.
 """
 import argparse
 import sys
+import threading
 from pathlib import Path
 
 try:
@@ -96,6 +97,13 @@ _PUBLISH_IMPLS = {
     )
 }
 _FACADE_DEFAULTS = {}
+_RUNTIME_LOCK = threading.RLock()
+
+
+def _current_paths():
+    return _core.CatalogPaths(
+        base_dir=BASE_DIR, content_dir=CONTENT_DIR,
+        site_dir=SITE_DIR, catalog=CATALOG)
 
 
 def _configured(name, implementation):
@@ -104,38 +112,30 @@ def _configured(name, implementation):
 
 
 def _sync_core():
-    _core.BASE_DIR = BASE_DIR
-    _core.CONTENT_DIR = CONTENT_DIR
-    _core.SITE_DIR = SITE_DIR
-    _core.CATALOG = CATALOG
+    _core.configure_paths(_current_paths())
     _core.MAX_DURATION_MB_PER_MIN = MAX_DURATION_MB_PER_MIN
-    _core.episode_stats = globals()["episode_stats"] if globals()["episode_stats"] is not _FACADE_DEFAULTS.get("episode_stats") else _CORE_IMPLS["episode_stats"]
-    _core._episode_dirs = globals()["_episode_dirs"]
-    _core._ordered_episode_names = _CORE_IMPLS["_ordered_episode_names"]
+    _core.episode_stats = (
+        globals()["episode_stats"]
+        if globals()["episode_stats"] is not _FACADE_DEFAULTS.get(
+            "episode_stats")
+        else _CORE_IMPLS["episode_stats"]
+    )
 
 
 def _sync_site():
     _sync_core()
-    _site.BASE_DIR = BASE_DIR
-    _site.CONTENT_DIR = CONTENT_DIR
-    _site.SITE_DIR = SITE_DIR
-    _site.CATALOG = CATALOG
+    _site.configure_paths(_current_paths())
     for name in (
         "_find_briefing", "_gen_mp3", "_read_source", "_display_title",
         "episode_stats", "_load_site_entries", "_ordered_episode_names",
         "_catalog_text", "_episode_dirs", "_build_entry",
         "_site_readiness_errors",
     ):
-        implementation = _SITE_IMPLS.get(name, _CORE_IMPLS.get(name))
-        value = globals()[name]
-        setattr(_site, name, value if value is not _FACADE_DEFAULTS.get(name) else globals()[name])
+        setattr(_site, name, globals()[name])
 
 
 def _sync_publish():
-    _publish.BASE_DIR = BASE_DIR
-    _publish.CONTENT_DIR = CONTENT_DIR
-    _publish.SITE_DIR = SITE_DIR
-    _publish.CATALOG = CATALOG
+    _publish.configure_paths(_current_paths())
     for name in (
         "PAGES_BASE_URL", "PAGES_PROJECT", "R2_BUCKET", "R2_PUBLIC_URL",
         "validate_for_stage", "episode_audio_key", "episode_page_path",
@@ -160,56 +160,31 @@ def _sync_publish():
             setattr(_publish, name, globals()[name])
 
 
-def _zh_chars(value):
-    _sync_core(); return _CORE_IMPLS["_zh_chars"](value)
+def _core_call(name, *args, **kwargs):
+    with _RUNTIME_LOCK:
+        _sync_core()
+        return _CORE_IMPLS[name](*args, **kwargs)
 
 
-def _find_briefing(folder):
-    _sync_core(); return _CORE_IMPLS["_find_briefing"](folder)
+def _site_call(name, *args, **kwargs):
+    with _RUNTIME_LOCK:
+        _sync_site()
+        return _SITE_IMPLS[name](*args, **kwargs)
 
 
-def _gen_mp3(folder):
-    _sync_core(); return _CORE_IMPLS["_gen_mp3"](folder)
-
-
-def _audio_duration_minutes(mp3):
-    _sync_core(); return _CORE_IMPLS["_audio_duration_minutes"](mp3)
-
-
-def episode_stats(name):
-    _sync_core(); return _CORE_IMPLS["episode_stats"](name)
-
-
-def _read_source(name):
-    _sync_core(); return _CORE_IMPLS["_read_source"](name)
-
-
-def _source_cell(name):
-    _sync_core(); return _CORE_IMPLS["_source_cell"](name)
-
-
-def _display_title(name):
-    _sync_core(); return _CORE_IMPLS["_display_title"](name)
-
-
-def _load_site_entries():
-    _sync_core(); return _CORE_IMPLS["_load_site_entries"]()
-
-
-def _episode_dirs():
-    _sync_site(); return _SITE_IMPLS["_episode_dirs"]()
-
-
-def _ordered_episode_names():
-    _sync_site(); return _CORE_IMPLS["_ordered_episode_names"]()
-
-
-def _catalog_text(names):
-    _sync_core(); return _CORE_IMPLS["_catalog_text"](names)
-
-
-def rebuild_catalog():
-    _sync_core(); return _CORE_IMPLS["rebuild_catalog"]()
+def _zh_chars(value): return _core_call("_zh_chars", value)
+def _find_briefing(folder): return _core_call("_find_briefing", folder)
+def _gen_mp3(folder): return _core_call("_gen_mp3", folder)
+def _audio_duration_minutes(mp3): return _core_call("_audio_duration_minutes", mp3)
+def episode_stats(name): return _core_call("episode_stats", name)
+def _read_source(name): return _core_call("_read_source", name)
+def _source_cell(name): return _core_call("_source_cell", name)
+def _display_title(name): return _core_call("_display_title", name)
+def _load_site_entries(): return _core_call("_load_site_entries")
+def _episode_dirs(): return _site_call("_episode_dirs")
+def _ordered_episode_names(): return _core_call("_ordered_episode_names")
+def _catalog_text(names): return _core_call("_catalog_text", names)
+def rebuild_catalog(): return _core_call("rebuild_catalog")
 
 
 def add_to_catalog(name):
@@ -222,27 +197,27 @@ def add_to_catalog(name):
 
 
 def _build_entry(name, previous):
-    _sync_site(); return _SITE_IMPLS["_build_entry"](name, previous)
+    return _site_call("_build_entry", name, previous)
 
 
 def _site_readiness_errors(names, existing):
-    _sync_site(); return _SITE_IMPLS["_site_readiness_errors"](names, existing)
+    return _site_call("_site_readiness_errors", names, existing)
 
 
 def sync_site(only=None):
-    _sync_site(); return _SITE_IMPLS["sync_site"](only)
+    return _site_call("sync_site", only)
 
 
 def catalog_consistency_errors():
-    _sync_site(); return _SITE_IMPLS["catalog_consistency_errors"]()
+    return _site_call("catalog_consistency_errors")
 
 
 def gen_index():
-    _sync_site(); return _SITE_IMPLS["gen_index"]()
+    return _site_call("gen_index")
 
 
 def backfill_sources():
-    _sync_site(); return _SITE_IMPLS["backfill_sources"]()
+    return _site_call("backfill_sources")
 
 
 def build_health_report(content_dir=None, since="7d", now=None):
@@ -259,8 +234,9 @@ def health(since="7d", output=None):
 
 
 def _publish_call(name, *args, **kwargs):
-    _sync_publish()
-    return _PUBLISH_IMPLS[name](*args, **kwargs)
+    with _RUNTIME_LOCK:
+        _sync_publish()
+        return _PUBLISH_IMPLS[name](*args, **kwargs)
 
 
 def _is_wrangler_command(cmd): return _publish_call("_is_wrangler_command", cmd)

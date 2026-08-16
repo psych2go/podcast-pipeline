@@ -1,1 +1,2 @@
 playwright>=1.54,<2
+tinycss2>=1.4,<2

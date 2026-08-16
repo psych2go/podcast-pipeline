@@ -201,19 +201,17 @@ strict 模式下 claim evidence runner 失败会按单 unit 重试，仍失败�
 质量门会识别 `deterministic-fallback` 并阻断发布，不能用它降低 evidence v3
 或逐 claim 证据要求。
 
-已经发布的 evidence v2 单集只有在 `episode.json` 显式标记后才能暂时兼容，
-`publish_report.json` 不再具备放行能力：
+已经发布的 evidence v2 单集只有同时满足以下条件才能暂时兼容：
 
-**Evidence v2 停止兼容时间：** 2026-08-15 起 legacy 模式只读，禁止新设或恢复；2026-09-01 起 strict 质量门不再接受 evidence v2，所有待重新发布单集必须先迁移到 evidence v3。
+- `episode.json.quality.claim_evidence_mode=legacy_broad` 是冻结前已有标记；
+- `publish_report.json.passed=true`；
+- `publish_report.json.checked_at` 换算为 Asia/Shanghai 日期后早于 2026-08-15。
 
-```bash
-.venv/bin/python scripts/episode.py set-evidence-mode \
-  "content/旧期" legacy_broad
-```
+`publish_report.json` 单独存在不能放行，手工新增 episode 标记也不能放行。
 
-该命令会先验证 `publish_report.json` 或 `release.json` 中存在历史发布记录；
-全新单集会被拒绝。命令会修改受审文件，因此已有 `ai_review.json` 会按哈希规则
-失效，需要重审。新单集不能使用 v2。
+**Evidence v2 停止兼容时间：** 2026-08-15 起 legacy 模式只读，
+`set-evidence-mode legacy*` 已禁用；2026-09-01 起 strict 质量门不再接受
+evidence v2，所有待重新发布单集必须先迁移到 evidence v3。
 
 ### 4. AI 审查和确定性质量门
 

@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -37,6 +37,34 @@ LEGACY_EVIDENCE_READ_CUTOFF = date(2026, 9, 1)
 
 def legacy_evidence_read_allowed(today=None):
     return (today or date.today()) < LEGACY_EVIDENCE_READ_CUTOFF
+
+LEGACY_EVIDENCE_TIMEZONE = timezone(timedelta(hours=8))
+
+
+def _parsed_timestamp(value):
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def legacy_evidence_frozen_before_cutoff(folder):
+    """Require a successful publication whose timestamp predates the freeze."""
+    path = Path(folder) / "publish_report.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if payload.get("passed") is not True:
+        return False
+    checked_at = _parsed_timestamp(payload.get("checked_at"))
+    if checked_at is None:
+        return False
+    local_date = checked_at.astimezone(LEGACY_EVIDENCE_TIMEZONE).date()
+    return local_date < LEGACY_EVIDENCE_WRITE_CUTOFF
 
 
 def _legacy_source(folder):
@@ -479,18 +507,32 @@ def public_audio_url(folder, base_url):
     return f"{base_url.rstrip('/')}/{quote(key, safe='/')}"
 
 
-def update_review_status(folder, passed):
+def build_review_status_update(folder, passed):
+    """Build the exact metadata-only state transition without writing files."""
     folder = Path(folder)
-    payload = load_episode(folder, create=True)
-    payload.setdefault("quality", {})["content_review_status"] = (
-        "passed" if passed else "failed")
-    save_episode(folder, payload)
+    payload = dict(load_episode(folder, create=True))
+    payload["schema_version"] = EPISODE_SCHEMA_VERSION
+    payload["storage_name"] = folder.name
+    status = "passed" if passed else "failed"
+    payload.setdefault("quality", {})["content_review_status"] = status
     state = inspect_episode_state(folder, payload)
-    state["content_review_status"] = "passed" if passed else "failed"
-    atomic_write_text(
-        folder / "来源.md",
-        render_source_markdown(folder, payload=payload, state=state),
-    )
+    state["content_review_status"] = status
+    source_text = render_source_markdown(
+        folder, payload=payload, state=state)
+    return payload, source_text
+
+
+def apply_review_status_update(folder, payload, source_text):
+    """Atomically write a previously computed review-status transition."""
+    folder = Path(folder)
+    save_episode(folder, payload)
+    atomic_write_text(folder / "来源.md", source_text)
+    return {"episode": payload, "source_text": source_text}
+
+
+def update_review_status(folder, passed):
+    payload, source_text = build_review_status_update(folder, passed)
+    return apply_review_status_update(folder, payload, source_text)
 
 
 def update_transcript_status(folder, transcript_status, correction_status):
@@ -512,33 +554,20 @@ def update_transcript_status(folder, transcript_status, correction_status):
     )
 
 
-def _has_historical_publication(folder):
-    folder = Path(folder)
-    for filename in ("publish_report.json", "release.json"):
-        path = folder / filename
-        if not path.exists():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if filename == "publish_report.json" and payload.get("passed") is True:
-            return True
-        if filename == "release.json" and payload.get("state") in {
-                "deployed", "published"}:
-            return True
-    return False
-
-
-def set_claim_evidence_mode(folder, mode):
+def set_claim_evidence_mode(folder, mode, *, today=None):
     allowed = {"precise_required", "legacy_broad", "legacy"}
     if mode not in allowed:
         raise ValueError(f"无效 claim evidence mode: {mode}")
     folder = Path(folder)
+    policy_date = today or date.today()
     if mode != "precise_required":
-        raise ValueError(
-            "legacy evidence 已于 2026-08-15 冻结为只读；"
-            "不能再新设或恢复兼容模式，请迁移到 precise_required")
+        if policy_date >= LEGACY_EVIDENCE_WRITE_CUTOFF:
+            raise ValueError(
+                "legacy evidence 已于 2026-08-15 冻结为只读；"
+                "不能再新设或恢复兼容模式，请迁移到 precise_required")
+        if not legacy_evidence_frozen_before_cutoff(folder):
+            raise ValueError(
+                "只有冻结日前已有成功发布记录的单集可以使用 legacy evidence")
     payload = load_episode(folder, create=True)
     payload.setdefault("quality", {})["claim_evidence_mode"] = mode
     save_episode(folder, payload)

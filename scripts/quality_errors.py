@@ -58,12 +58,26 @@ class CodedErrors(list):
 
 
 def coded_errors(report):
-    details = report.setdefault("error_details", [])
+    existing = list(report.get("errors", []))
+    details = []
+    report["error_details"] = details
     errors = CodedErrors(details)
-    for message in report.get("errors", []):
+    for message in existing:
         errors.append(message)
     report["errors"] = errors
     return errors
+
+
+def quality_error_alignment(report):
+    errors = [str(message) for message in report.get("errors", [])]
+    details = report.get("error_details")
+    if not isinstance(details, list):
+        return False
+    messages = [
+        str(item.get("message"))
+        for item in details if isinstance(item, dict)
+    ]
+    return len(messages) == len(details) and messages == errors
 
 
 def add_error(report, code, message):

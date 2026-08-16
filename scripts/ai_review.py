@@ -299,6 +299,13 @@ def reviewed_hashes(folder):
     }
 
 
+def review_context_hashes(folder):
+    """Hash non-authoritative context that may still influence the reviewer."""
+    folder = Path(folder)
+    cache = folder / CACHE_FILENAME
+    return {CACHE_FILENAME: sha256(cache)} if cache.exists() else {}
+
+
 def review_scope(folder):
     """Describe changed review inputs without trusting the previous verdict."""
     folder = Path(folder)
@@ -336,10 +343,23 @@ def changed_review_inputs(before, after):
     )
 
 
+def assert_review_snapshot(folder, input_snapshot, context_snapshot=None):
+    changed = changed_review_inputs(input_snapshot, reviewed_hashes(folder))
+    context_changed = changed_review_inputs(
+        context_snapshot or {}, review_context_hashes(folder))
+    if changed or context_changed:
+        affected = changed + [f"context:{name}" for name in context_changed]
+        raise RuntimeError(
+            "AI 审查期间输入发生变化，已丢弃结果: "
+            + ", ".join(affected))
+
+
 @contextmanager
-def isolated_review_workspace(folder, snapshot):
-    """Expose only current review inputs, never a prior verdict or score."""
+def isolated_review_workspace(folder, snapshot, context_snapshot=None):
+    """Expose current inputs without a prior verdict and bind all context hashes."""
     folder = Path(folder)
+    context_snapshot = dict(context_snapshot or {})
+    assert_review_snapshot(folder, snapshot, context_snapshot)
     with tempfile.TemporaryDirectory(prefix="podcast-ai-review-") as td:
         workspace = Path(td)
         for name in snapshot:
@@ -347,13 +367,20 @@ def isolated_review_workspace(folder, snapshot):
             destination = workspace / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
-        cache = folder / CACHE_FILENAME
-        if cache.exists():
-            shutil.copy2(cache, workspace / CACHE_FILENAME)
+        for name in context_snapshot:
+            source = folder / name
+            destination = workspace / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
         staged = reviewed_hashes(workspace)
+        staged_context = review_context_hashes(workspace)
         changed = changed_review_inputs(snapshot, staged)
-        if changed:
-            raise RuntimeError(f"AI 审查 staging 哈希不一致: {changed}")
+        context_changed = changed_review_inputs(context_snapshot, staged_context)
+        if changed or context_changed:
+            affected = changed + [
+                f"context:{name}" for name in context_changed]
+            raise RuntimeError(
+                "AI 审查 staging 哈希不一致: " + ", ".join(affected))
         yield workspace
 
 
@@ -537,6 +564,7 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
         f"effort={effort} folder={folder.name}",
         file=sys.stderr, flush=True)
     input_snapshot = reviewed_hashes(folder)
+    context_snapshot = review_context_hashes(folder)
     scope = review_scope(folder)
     schema_file = tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", encoding="utf-8", delete=False)
@@ -544,7 +572,8 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
     try:
         json.dump(REVIEW_SCHEMA, schema_file, ensure_ascii=False)
         schema_file.close()
-        with isolated_review_workspace(folder, input_snapshot) as workspace:
+        with isolated_review_workspace(
+                folder, input_snapshot, context_snapshot) as workspace:
             result = run_json_task(
                 workspace,
                 _prompt(workspace, scope) + (
@@ -559,11 +588,7 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
         finally:
             schema_path.unlink(missing_ok=True)
 
-    current_snapshot = reviewed_hashes(folder)
-    changed = changed_review_inputs(input_snapshot, current_snapshot)
-    if changed:
-        raise RuntimeError(
-            "AI 审查期间输入发生变化，已丢弃结果: " + ", ".join(changed))
+    assert_review_snapshot(folder, input_snapshot, context_snapshot)
 
     review["schema_version"] = AI_REVIEW_SCHEMA_VERSION
     review["reviewed_at"] = datetime.now(timezone.utc).isoformat()
@@ -579,21 +604,31 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
     }
     review["review_scope"] = scope
     review["reviewed_files"] = input_snapshot
+    review["review_context"] = context_snapshot
     review["input_snapshot_verified"] = True
-    review["fact_check_cache_entries_written"] = update_cache_from_review(
-        folder, review)
     if persist:
         output = Path(output) if output else folder / "ai_review.json"
+        assert_review_snapshot(folder, input_snapshot, context_snapshot)
         atomic_write_json(output, review)
+        review["fact_check_cache_entries_written"] = (
+            update_cache_from_review(folder, review))
     return review
 
 
-def update_source_status(folder, passed):
+def review_status_transition(folder, passed):
     try:
-        from episode import update_review_status
+        from episode import (
+            apply_review_status_update, build_review_status_update)
     except ImportError:
-        from scripts.episode import update_review_status
-    update_review_status(folder, passed)
+        from scripts.episode import (
+            apply_review_status_update, build_review_status_update)
+    payload, source_text = build_review_status_update(folder, passed)
+    return payload, source_text, apply_review_status_update
+
+
+def update_source_status(folder, passed):
+    payload, source_text, apply_update = review_status_transition(folder, passed)
+    return apply_update(folder, payload, source_text)
 
 
 def review_episode(
@@ -611,20 +646,48 @@ def review_episode(
             review = run_ai_review(
                 folder, output, model, effort, persist=False)
             before_status = dict(review["reviewed_files"])
-            update_source_status(folder, review.get("passed", False))
+            context_snapshot = dict(review.get("review_context", {}))
+            expected_episode, expected_source, apply_update = (
+                review_status_transition(
+                    folder, review.get("passed", False)))
+            # The expected transition is built from the reviewed files. Recheck
+            # before applying it so a concurrent edit is never folded into trust.
+            assert_review_snapshot(
+                folder, before_status, context_snapshot)
+            apply_update(
+                folder, expected_episode, expected_source)
+            actual_episode = json.loads(
+                (folder / "episode.json").read_text(encoding="utf-8"))
+            actual_source = (folder / "来源.md").read_text(encoding="utf-8")
+            if (
+                    actual_episode != expected_episode
+                    or actual_source != expected_source):
+                raise RuntimeError(
+                    "AI 审查后状态绑定内容超出预期 metadata transition")
             after_status = reviewed_hashes(folder)
             status_changes = changed_review_inputs(before_status, after_status)
-            unexpected = sorted(set(status_changes) - {"episode.json", "来源.md"})
-            if unexpected:
+            expected_changes = {"episode.json", "来源.md"}
+            if set(status_changes) - expected_changes:
                 raise RuntimeError(
                     "AI 审查后状态绑定出现非预期输入变化: "
-                    + ", ".join(unexpected))
+                    + ", ".join(status_changes))
             review["status_binding"] = {
                 "trusted_metadata_files": status_changes,
-                "reason": "pipeline_review_status_only",
+                "reason": "exact_pipeline_review_status_transition",
             }
             review["reviewed_files"] = after_status
+            # Last check is immediately adjacent to the authoritative write.
+            assert_review_snapshot(
+                folder, after_status, context_snapshot)
             atomic_write_json(output, review)
+            try:
+                review["fact_check_cache_entries_written"] = (
+                    update_cache_from_review(folder, review))
+            except Exception as exc:
+                review["fact_check_cache_update_error"] = str(exc)
+                print(
+                    f"[AI审查][警告] fact-check cache 更新失败: {exc}",
+                    file=sys.stderr, flush=True)
             reviewer = review.get("reviewer", {})
             stage.metrics.update({
                 "passed": bool(review.get("passed")),
