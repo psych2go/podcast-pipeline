@@ -7,7 +7,10 @@ try:
     from atomic_io import atomic_write_json, atomic_write_text
     from content_map import normalize_summary_claim_ids
     from tts import apply_tts_lexicon, load_tts_lexicon, normalize_for_tts
-    from validator import MAX_CHAPTER_CHARS, MIN_CHAPTER_CHARS, normalize_briefing_artifacts
+    from validator import (
+        MAX_CHAPTER_CHARS, MIN_CHAPTER_CHARS, audit_narration_issues,
+        normalize_briefing_artifacts,
+    )
 except ImportError:
     from scripts.atomic_io import atomic_write_json, atomic_write_text
     from scripts.content_map import normalize_summary_claim_ids
@@ -15,6 +18,7 @@ except ImportError:
     from scripts.validator import (
         MAX_CHAPTER_CHARS,
         MIN_CHAPTER_CHARS,
+        audit_narration_issues,
         normalize_briefing_artifacts,
     )
 
@@ -334,6 +338,19 @@ def finalize_content_package(folder):
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     briefing, summary, changes = finalize_content_artifacts(
         briefing, summary)
+    audit_issues = audit_narration_issues(briefing)
+    if audit_issues:
+        raise ContentFinalizationError(
+            "讲稿包含面向内部的审查过程语言: "
+            + "; ".join(audit_issues[:5]))
+    notes_path = folder / "中文完整笔记.md"
+    if notes_path.exists():
+        notes_audit_issues = audit_narration_issues(
+            notes_path.read_text(encoding="utf-8"))
+        if notes_audit_issues:
+            raise ContentFinalizationError(
+                "完整笔记包含面向内部的审查过程语言: "
+                + "; ".join(notes_audit_issues[:5]))
     atomic_write_text(briefing_path, briefing)
     atomic_write_json(summary_path, summary)
 

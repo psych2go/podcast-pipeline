@@ -309,6 +309,35 @@ def normalize_briefing_artifacts(text, summary_map):
     return text, summary_map, changes
 
 
+
+_AUDIT_NARRATION_PATTERNS = (
+    re.compile(r"本稿|本文|本次审查|审查过程|审查结论|核查过程"),
+    re.compile(r"这里(?:不采用|不保留|不把|不将|只按|仅按|必须保留|材料说的是)"),
+    re.compile(r"因此(?:不采用|不保留|不把|不将)"),
+    re.compile(r"由于[^。；\n]{0,60}(?:不采用|不保留|不把|不将)"),
+    re.compile(r"未独立核实(?:底层引语|原始说法|相关数字)?"),
+    re.compile(r"不可合并，因此"),
+    re.compile(r"纠错稿(?:已|将|把)"),
+)
+
+
+def audit_narration_issues(text):
+    """Find audit-decision narration that should not appear in public prose."""
+    issues = []
+    for line_no, line in enumerate((text or "").splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        matches = []
+        for pattern in _AUDIT_NARRATION_PATTERNS:
+            matches.extend(match.group(0) for match in pattern.finditer(stripped))
+        if matches:
+            markers = "、".join(dict.fromkeys(matches))
+            excerpt = stripped if len(stripped) <= 100 else stripped[:97] + "..."
+            issues.append(
+                f"第{line_no}行包含审查过程语言（{markers}）：{excerpt}")
+    return issues
+
 def structure_report(text):
     """讲稿内容结构体检。返回 warning 列表，只报告、不修改内容。
 

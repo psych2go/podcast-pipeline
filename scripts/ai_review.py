@@ -26,6 +26,7 @@ try:
         ASSERTION_TYPES,
         CLAIM_ORIGINS,
         LEGACY_CLAIM_TYPES,
+        normalize_review_fact_checks,
         PUBLICATION_STATUSES,
         RISK_DOMAINS,
         SPEAKER_ROLES,
@@ -44,6 +45,7 @@ except ImportError:
         ASSERTION_TYPES,
         CLAIM_ORIGINS,
         LEGACY_CLAIM_TYPES,
+        normalize_review_fact_checks,
         PUBLICATION_STATUSES,
         RISK_DOMAINS,
         SPEAKER_ROLES,
@@ -552,15 +554,20 @@ def _prompt(folder, scope=None):
    转录纠错只能修复听写、断句、专名和说话人识别错误。节目嘉宾本身说错的事实必须
    保留原话，并在 fact_checks 或稿件归因中纠正，不能把原始发言改写成编辑部事实。
 10. 检查中文完整笔记是否确实比精编讲稿更完整；若更短或漏掉重要细节，不能通过。
-11. 检查讲稿是否适合中文 TTS：阿拉伯数字、英文缩写、专有名词、难读符号和可能误读的混合表达。
+11. 检查中文完整笔记和公开讲稿是否把“事实状态限定”与“审查决策过程”分开：
+   - 应保留“节目称”“报道称”“仍在洽谈”“这是预测而非已发生结果”等影响理解的限定；
+   - 禁止出现“这里不采用”“这里不保留”“本稿未独立核实”“由于口径不同因此删除”等后台审查叙述；
+   - 若精确数字被舍弃，讲稿应直接自然概括并保留来源归因，不得向听众解释流水线为何删数。
+   发现审查过程语言时，publish.passed=false，并创建 briefing_style high issue。
+12. 检查讲稿是否适合中文 TTS：阿拉伯数字、英文缩写、专有名词、难读符号和可能误读的混合表达。
    如果存在 tts_lexicon.json，还要检查替换是否会改变原意、误替换子串或引入错误读音。
-12. 检查 summary_map 是否真实反映讲稿，而不是只自报 unit IDs。
+13. 检查 summary_map 是否真实反映讲稿，而不是只自报 unit IDs。
    同时检查 notes_claim_ids 与中文完整笔记正文是否真实对应。
    哈希规范化规则与 scripts/content_map.py 一致：讲稿按换行后紧跟“## ”切章，
    body_sha256 只计算标题行之后的章节正文，正文先 strip 再做 UTF-8 SHA-256；
    notes_sha256 对中文完整笔记全文先 strip 再做 UTF-8 SHA-256。请按此规则复核，
    不要使用原始文件字节、标题行或其他自行推测的切章方式。
-13. publish 只评价上述必读内容文件本身是否已达到发布标准。
+14. publish 只评价上述必读内容文件本身是否已达到发布标准。
    不要读取、检查或评价 HTML、MP3、tts_manifest.json、quality_report.json、publish_report.json、
    文件修改时间、R2、Cloudflare Pages 或线上页面；这些机械产物的新鲜度和可用性由流水线的
    确定性预检负责。不得因为这些产物尚未生成、较旧或未上传而令 publish.passed=false，
@@ -585,6 +592,17 @@ def _prompt(folder, scope=None):
 - recommendation/explanation/definition 根据 risk_domain 选择归因、抽查或安全交叉核查；高风险建议不能以“只是嘉宾观点”为由放行。
 - allegation 只验证来源是否准确报告；把未裁判指控写成既定事实必须失败。
 - 对动态数字注明“节目播出时/节目称”，不能把不断变化的数值写成永久事实。
+
+返回前必须逐条执行以下机械一致性检查；这些规则优先于自然语言直觉：
+- speaker_firsthand：verification_mode 必须是 transcript_attribution；非 excluded 时 verdict 只能是 faithfully_attributed 或 qualified，publication_status 不能是 used_as_fact。
+- speaker_reported + fact：必须保留明确归因；非 excluded 时 verdict 只能是 accurately_reported、qualified 或 uncertain，publication_status 不能是 used_as_fact。
+- opinion/prediction：verification_mode 只能是 transcript_attribution、transcript_only 或 not_applicable，且不能 used_as_fact。
+- recommendation：普通、非 medical/legal/financial/safety 的建议使用 transcript_attribution；只有真正高风险建议才使用 safety_cross_check 并提供 URL。不要把一般商业或劳工政策意见误标为 financial 风险建议。
+- explanation/definition：verification_mode 只能是 transcript_attribution、transcript_only、web_spot_check 或 safety_cross_check；若 verdict 是 faithfully_attributed/accurately_reported/not_applicable，publication_status 必须是 attributed_or_qualified 或 excluded。
+- allegation：verification_mode 必须是 source_document_required，必须提供来源 URL，不能 used_as_fact。
+- external_source/editorial_added + fact + used_as_fact：verification_mode 必须是 web_required，verdict 必须是 supported 或 qualified。
+- 任何 verdict=unsupported/contradicted/faithfully_attributed/accurately_reported/not_applicable 的条目都不得 used_as_fact。
+- 最后模拟 quality_report._ai_fact_check_consistency_v3 的上述规则；若任一条不满足，必须先修正 fact_check 再返回。review.passed=true 时 fact_checks 也必须机械一致，不能只让分项文字通过。
 - 不要修改任何文件，只返回符合 schema 的 JSON。
 """
 
@@ -618,6 +636,9 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
                 schema_path, task_name="ai_review", enable_search=True,
                 model=model or None, timeout=1800)
             review = result["payload"]
+            taxonomy_changes = normalize_review_fact_checks(review)
+            if taxonomy_changes:
+                review["taxonomy_normalization"] = taxonomy_changes
     finally:
         try:
             schema_file.close()

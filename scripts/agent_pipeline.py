@@ -286,17 +286,23 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
 如果存在则读取 转录_纠错.txt，并读取已经完成的 content_map.json。
 
 按顺序完成：
-1. 先写 中文完整笔记.md，覆盖所有 high/medium claims，保留必要的数字、
-人物归属、限定条件和推理链。
+1. 先写 中文完整笔记.md，逐项覆盖所有 included high/medium unit 的
+claims、numbers 和 examples，保留人物归属、限定条件、时间顺序和推理链。
 2. 再写 讲书稿.md，将完整笔记整理为适合中文收听的讲书稿。
-3. 最后写 summary_map.json，映射章节标题、unit_ids 和 claim_ids。
+3. 最后写 summary_map.json，映射章节标题、unit_ids 和 claim_ids；并显式填写
+notes_claim_ids，只能列入中文完整笔记正文实际覆盖的 claim。若仍有 high/medium claim
+未覆盖，先补写笔记，再将其加入 notes_claim_ids。
 
 要求：
 - 不得编造转录之外的观点；
-- 不得遗漏 high/medium claims；
+- 不得遗漏 included high/medium 的 claims、numbers 或 examples；
 - 不要修改 content_map.json 或任何证据文件；
 - 第一个 ## 前写 50–100 字全局导览；
-- 每章正文建议 400–900 个中文字符，禁止超过 1000；
+- 每章正文必须包含 420–900 个中文汉字（按汉字计数，不是总字符），禁止超过 1000；
+- 章节标题必须准确概括该章 unit，不得用一个话题标题承载无关的后续主题；
+- 讲稿必须保留影响理解的事实状态，例如“节目称”“报道称”“仍在洽谈”“这是预测而非已发生结果”；
+- 中文完整笔记和讲稿都禁止出现面向内部的审查决策语言，例如“这里不采用”“这里不保留”“本稿未独立核实”“由于口径不同因此删除”；审查理由只写入 JSON 审查产物，不写给听众；
+- 若删除无法核实的精确数字，直接用自然、带归因的概括表达核心观点，不向听众解释后台为什么删数；
 - 讲稿每个 ## 标题必须与 summary_map.chapters[].title 逐字一致；
 - summary_map 先写结构，正文哈希由主脚本补齐。""",
             task_name="content_writing",

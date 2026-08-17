@@ -116,3 +116,61 @@ def is_cacheable_fact_check(item):
             "external_source", "editorial_added"}
     # AI review v2 compatibility during gradual re-review migration.
     return item.get("claim_type") in {"public_fact", "editorial_fact"}
+
+def normalize_review_fact_checks(review):
+    """Mechanically align compatibility fields with orthogonal v3 semantics.
+
+    For speaker_reported facts, ``verdict`` evaluates whether the program's
+    report is faithfully represented. Any external disagreement remains in
+    notes/source_urls rather than turning the attributed speech report itself
+    into an unsupported editorial fact.
+    """
+    changes = []
+    for item in review.get("fact_checks", []) or []:
+        if not isinstance(item, dict):
+            continue
+        subclaim = item.get("subclaim_id", "")
+        expected_type = derive_legacy_claim_type(item)
+        if item.get("claim_type") != expected_type:
+            changes.append({
+                "subclaim_id": subclaim,
+                "field": "claim_type",
+                "before": item.get("claim_type"),
+                "after": expected_type,
+            })
+            item["claim_type"] = expected_type
+
+        origin = item.get("claim_origin")
+        assertion = item.get("assertion_type")
+        status = item.get("publication_status")
+        verdict = item.get("verdict")
+        segments = item.get("evidence_segment_ids") or []
+        if (
+                origin == "speaker_reported"
+                and assertion == "fact"
+                and status == "attributed_or_qualified"
+                and segments
+                and verdict in {
+                    "supported", "unsupported", "contradicted",
+                    "faithfully_attributed", "not_applicable",
+                }):
+            changes.append({
+                "subclaim_id": subclaim,
+                "field": "verdict",
+                "before": verdict,
+                "after": "accurately_reported",
+            })
+            item["verdict"] = "accurately_reported"
+        elif (
+                origin == "speaker_firsthand"
+                and status == "attributed_or_qualified"
+                and segments
+                and verdict == "supported"):
+            changes.append({
+                "subclaim_id": subclaim,
+                "field": "verdict",
+                "before": verdict,
+                "after": "faithfully_attributed",
+            })
+            item["verdict"] = "faithfully_attributed"
+    return changes

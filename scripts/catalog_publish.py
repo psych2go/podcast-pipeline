@@ -280,7 +280,8 @@ def _candidate_catalog_errors(name):
         errors.append(f"{name}: 候选目录中找不到目标单集")
         return errors
 
-    errors.extend(_site_readiness_errors(names, existing))
+    errors.extend(_site_readiness_errors(
+        names, existing, strict_names={name}))
     candidate_entries = [
         _build_entry(episode_name, existing.get(episode_name, {}))
         for episode_name in names
@@ -688,7 +689,7 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
         return False
 
     try:
-        sync_site()
+        sync_site(strict_names={item["name"] for item in items})
         rebuild_catalog()
         gen_index()
     except SystemExit as exc:

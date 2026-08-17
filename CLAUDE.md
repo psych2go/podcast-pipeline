@@ -183,6 +183,8 @@ SHA-256。多 claim 单元不得给所有 claim 复制整个 unit 的 segment �
 3. 写 `summary_map.json`，绑定章节正文哈希、unit/claim ID、笔记 claim ID 和笔记正文哈希。
 4. 专有名词需要控制读音时添加 `tts_lexicon.json`，格式为 `{"原词": "朗读文本"}`。
 
+中文完整笔记和讲书稿面向读者时只保留影响理解的事实状态限定，例如“节目称”“报道称”“仍在洽谈”“这是预测”；不得出现“这里不采用”“这里不保留”“本稿未独立核实”“纠错稿已将”等后台审查决策。无法核实的精确数字应直接改成自然、带归因的概括，审查理由只留在 JSON 产物中。严格质量门分别以 `notes_audit_narration` 和 `briefing_audit_narration` 阻断泄漏。
+
 内容 subagent 完成后，`content_finalizer.py` 是唯一允许写回讲稿和
 `summary_map.json` 的最终化阶段：它同步逐字标题、刷新正文哈希、只在自然段和
 连续 unit 边界都明确时拆分超过一千字的章节，并只为全大写缩写生成确定性读音。

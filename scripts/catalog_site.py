@@ -62,8 +62,9 @@ def _build_entry(name, prev):
         ),
     }
 
-def _site_readiness_errors(names, existing):
+def _site_readiness_errors(names, existing, strict_names=None):
     errors = []
+    strict_names = set(names if strict_names is None else strict_names)
     try:
         from quality_report import build_quality_report
     except ImportError:
@@ -79,7 +80,8 @@ def _site_readiness_errors(names, existing):
             errors.append(f"{name}: 缺少 content.html")
 
         content_map = folder / "content_map.json"
-        if content_map.exists():
+        if content_map.exists() and (
+                name in strict_names or name not in existing):
             report = build_quality_report(folder, strict=True)
             if not report.get("passed", False):
                 detail = "; ".join(report.get("errors", [])[:3])
@@ -89,7 +91,7 @@ def _site_readiness_errors(names, existing):
                 f"{name}: 新期缺少 content_map.json，不能进入站点")
     return errors
 
-def sync_site(only=None):
+def sync_site(only=None, *, strict_names=None):
     """重建 site.json（全部期），并按需拷贝 content.html 到 site/{name}/。
 
     保留已有 site.json 里手工精修的 title / source 字段与出现顺序，
@@ -108,7 +110,10 @@ def sync_site(only=None):
     names = _ordered_episode_names()
     if only and only not in names:
         sys.exit(f"[错误] 找不到播客目录（或没有讲稿）: {only}")
-    readiness_errors = _site_readiness_errors(names, existing)
+    if strict_names is None:
+        strict_names = {only} if only else set(names)
+    readiness_errors = _site_readiness_errors(
+        names, existing, strict_names=strict_names)
     if readiness_errors:
         for error in readiness_errors:
             print(f"[站点][阻断] {error}")

@@ -17,8 +17,11 @@ import catalog_core
 import catalog_site
 import catalog_publish
 import fact_check_cache
+from claim_taxonomy import normalize_review_fact_checks
 import process as pipeline_process
 import tts
+import validator
+from content_finalizer import ContentFinalizationError, finalize_content_package
 from content_map import enrich_summary_map_evidence
 
 
@@ -120,6 +123,77 @@ class EvidenceIntegrityTests(unittest.TestCase):
             payload = json.loads(context_path.read_text(encoding="utf-8"))
             self.assertEqual(len(payload["matched_entries"]), 1)
             self.assertFalse(payload["authoritative"])
+
+
+class PublicBriefingBoundaryTests(unittest.TestCase):
+    def test_audit_decisions_are_blocked_but_epistemic_qualifiers_are_allowed(self):
+        blocked = (
+            "节目称法案得到支持，但由于人数会变化，这里不采用精确人数。\n"
+            "本稿未独立核实底层引语。"
+        )
+        issues = validator.audit_narration_issues(blocked)
+        self.assertEqual(len(issues), 2)
+
+        natural = (
+            "节目播出时，嘉宾称法案已经具备一定的跨党派基础。"
+            "这项判断来自嘉宾对一篇专栏的二手转述。"
+        )
+        self.assertEqual(validator.audit_narration_issues(natural), [])
+
+    def test_review_taxonomy_normalizes_attributed_speaker_reports(self):
+        review = {"fact_checks": [{
+            "subclaim_id": "U0001-C01-F01",
+            "claim_origin": "speaker_reported",
+            "speaker_role": "host",
+            "assertion_type": "fact",
+            "publication_status": "attributed_or_qualified",
+            "evidence_segment_ids": ["S0001"],
+            "verdict": "contradicted",
+            "claim_type": "public_fact",
+        }]}
+        changes = normalize_review_fact_checks(review)
+        item = review["fact_checks"][0]
+        self.assertEqual(item["verdict"], "accurately_reported")
+        self.assertEqual(item["claim_type"], "not_applicable")
+        self.assertEqual(len(changes), 2)
+
+    def test_content_finalizer_rejects_public_audit_narration(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            title = "第一章"
+            body = "这里不保留无法核实的精确数字。" + "甲" * 420
+            (folder / "讲书稿.md").write_text(
+                "这是一段足够长的全局导览，用于说明本期讨论的主题和边界。"
+                f"\n\n## {title}\n\n{body}\n",
+                encoding="utf-8",
+            )
+            (folder / "summary_map.json").write_text(json.dumps({
+                "schema_version": 2,
+                "chapters": [{
+                    "title": title,
+                    "unit_ids": ["U0001"],
+                    "claim_ids": ["U0001-C01"],
+                }],
+                "notes_claim_ids": ["U0001-C01"],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(
+                    ContentFinalizationError, "审查过程语言"):
+                finalize_content_package(folder)
+
+            # A clean briefing must still be blocked when the complete notes
+            # leak the internal audit decision process.
+            (folder / "讲书稿.md").write_text(
+                "这是一段足够长的全局导览，用于说明本期讨论的主题和边界。"
+                f"\n\n## {title}\n\n" + "乙" * 420 + "\n",
+                encoding="utf-8",
+            )
+            (folder / "中文完整笔记.md").write_text(
+                "本稿未独立核实底层引语。" + "丙" * 500,
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                    ContentFinalizationError, "完整笔记.*审查过程语言"):
+                finalize_content_package(folder)
 
 
 class LegacyTtsTests(unittest.TestCase):

@@ -424,7 +424,8 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             ["Episode", "Episode Two"],
         )
         self.assertEqual(upload.call_count, 2)
-        sync_site.assert_called_once_with()
+        sync_site.assert_called_once_with(
+                strict_names={"Episode", "Episode Two"})
         deploy.assert_called_once()
         self.assertEqual(verify.call_count, 2)
         self.assertEqual(load_release(self.folder)["state"], "published")
@@ -537,7 +538,8 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             ))
 
         self.assertEqual(candidate.call_count, 2)
-        sync_site.assert_called_once_with()
+        sync_site.assert_called_once_with(
+                strict_names={"Episode", "Episode Two"})
         deploy.assert_called_once()
         self.assertEqual(verify.call_count, 2)
         self.assertGreaterEqual(len(thread_ids), 2)

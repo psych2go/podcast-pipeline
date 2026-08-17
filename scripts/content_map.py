@@ -238,7 +238,7 @@ def enrich_summary_map_evidence(
 def normalize_claim_id(value):
     """Return the canonical Uxxxx-Cxx claim identifier when recognizable."""
     text = str(value or "").strip()
-    match = re.fullmatch(r"(U\d{4,})[.\-](C\d{2,})", text, re.IGNORECASE)
+    match = re.fullmatch(r"(U\d{4,})[.:\-](C\d{2,})", text, re.IGNORECASE)
     if not match:
         return text
     return f"{match.group(1).upper()}-{match.group(2).upper()}"

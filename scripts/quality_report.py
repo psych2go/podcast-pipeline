@@ -8,9 +8,9 @@ from pathlib import Path
 try:
     from atomic_io import atomic_write_json
     from quality_errors import (
-        ASR_QUALITY_FAILED, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
+        ASR_QUALITY_FAILED, BRIEFING_AUDIT_NARRATION, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
         CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
-        CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_MISSING,
+        CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_AUDIT_NARRATION, NOTES_MISSING,
         SOURCE_QUALITY_FAILED, SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
         TRANSCRIPT_CORRECTION_MISSING, TRANSCRIPT_INTEGRITY_FAILED,
         TRANSCRIPT_MISSING,
@@ -25,9 +25,9 @@ try:
 except ImportError:
     from scripts.atomic_io import atomic_write_json
     from scripts.quality_errors import (
-        ASR_QUALITY_FAILED, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
+        ASR_QUALITY_FAILED, BRIEFING_AUDIT_NARRATION, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
         CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
-        CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_MISSING,
+        CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_AUDIT_NARRATION, NOTES_MISSING,
         SOURCE_QUALITY_FAILED, SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
         TRANSCRIPT_CORRECTION_MISSING, TRANSCRIPT_INTEGRITY_FAILED,
         TRANSCRIPT_MISSING,
@@ -47,7 +47,7 @@ try:
         transcript_evidence_mode, unit_claim_ids, validate_content_map,
         validate_summary_map,
     )
-    from validator import structure_report
+    from validator import audit_narration_issues, structure_report
     from episode import (
         LEGACY_EVIDENCE_READ_CUTOFF, inspect_episode_state,
         legacy_evidence_frozen_before_cutoff, legacy_evidence_read_allowed,
@@ -71,7 +71,7 @@ except ImportError:  # package import
         transcript_evidence_mode, unit_claim_ids, validate_content_map,
         validate_summary_map,
     )
-    from scripts.validator import structure_report
+    from scripts.validator import audit_narration_issues, structure_report
     from scripts.episode import (
         LEGACY_EVIDENCE_READ_CUTOFF, inspect_episode_state,
         legacy_evidence_frozen_before_cutoff, legacy_evidence_read_allowed,
@@ -818,6 +818,15 @@ def build_quality_report(folder, strict=True, *, today=None):
                  for warning in structure_warnings))
         else:
             report["warnings"].extend(structure_warnings)
+        audit_issues = audit_narration_issues(briefing_text)
+        report["briefing"]["audit_narration_issues"] = audit_issues
+        if strict:
+            extend_errors(
+                report, BRIEFING_AUDIT_NARRATION,
+                (f"讲稿含面向内部的审查过程语言: {issue}"
+                 for issue in audit_issues))
+        else:
+            report["warnings"].extend(audit_issues)
         arabic_numbers = re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?%?", briefing_text)
         report["briefing"]["arabic_numbers"] = arabic_numbers
         tts_readiness_issues = validate_tts_readiness(
@@ -834,10 +843,19 @@ def build_quality_report(folder, strict=True, *, today=None):
             notes_chars = _zh_chars(notes_text)
             briefing_chars = _zh_chars(briefing_text) if briefing else 0
             ratio = round(notes_chars / briefing_chars, 4) if briefing_chars else None
+            notes_audit_issues = audit_narration_issues(notes_text)
             report["complete_notes"] = {
                 "zh_chars": notes_chars,
                 "briefing_ratio": ratio,
+                "audit_narration_issues": notes_audit_issues,
             }
+            if strict:
+                extend_errors(
+                    report, NOTES_AUDIT_NARRATION,
+                    (f"完整笔记含面向内部的审查过程语言: {issue}"
+                     for issue in notes_audit_issues))
+            else:
+                report["warnings"].extend(notes_audit_issues)
             if briefing and ratio < MIN_NOTES_TO_BRIEFING_RATIO:
                 report["warnings"].append(
                     "完整笔记与精编讲稿字数接近；"

@@ -398,6 +398,8 @@ AI review 之后，`process.py` 的 TTS/HTML 路径只读验证讲稿和 summary
 ### `content_finalizer.py`、`review_repair.py` 与 fact-check cache
 
 - 所有章节标题、summary map 和正文 hash 在 review 前一次性最终化。
+- 中文完整笔记和公开讲稿必须区分“事实状态限定”与“审查决策过程”：保留“节目称”“仍在洽谈”“这是预测”等影响理解的限定；禁止“这里不采用”“这里不保留”“本稿未独立核实”“纠错稿已将”等后台叙述。无法核实的精确数字应直接改成自然、带归因的概括，删除原因只留在 AI review、quality report 和 fact-check cache 中。
+- `content_finalizer.py` 与严格质量门会分别以 `briefing_audit_narration`、`notes_audit_narration` 阻断上述审查过程语言；AI review 还会独立复核读者文风边界。
 - 超过一千中文字的章节只在多个自然段、多个连续 unit、claim 前缀都可机械对齐，
   且拆分后两章均为四百至一千字时自动拆分；否则阻断。
 - TTS 自动词典只生成全大写缩写的确定性拼读，不猜混合大小写专名。
