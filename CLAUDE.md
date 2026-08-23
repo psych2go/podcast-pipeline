@@ -168,9 +168,12 @@ diarization 默认模型为
 
 `content_map.json` 的每个 unit/claim 必须绑定转录 segment ID 和源文本
 SHA-256。content-map 子进程只返回结构化 JSON，主流程在启动 claim-evidence
-之前校验 status 枚举、segment 存在性、完整源片段记账和 excluded 约束；结构错误
-不进入模型重试。多 claim 单元不得给所有 claim 复制整个 unit 的 segment 集合；
-每条 claim 还要记录证据置信度和选择理由。新映射可同时记录
+之前校验 status 枚举、segment 存在性、时间窗合法性、完整源片段记账和 excluded
+约束；结构错误不进入模型重试。evidence enrichment 不允许把有来源的 unit 静默刷新
+为空，`null`/倒序时间窗或未知 text anchor 会直接阻断且不覆盖原 evidence。多 claim
+单元不得给所有 claim 复制整个 unit 的 segment 集合；每条 claim 还要记录证据置信度、
+选择理由和 `claim_modalities`（actual_event、conditional、prediction、opinion、
+recommendation、general_claim），写稿不得把条件句、预测或观点升级为已发生事实。新映射可同时记录
 `primary_segment_ids` 与 `context_segment_ids`，并继续派生旧版扁平
 `claim_evidence` 供已有单集读取。
 
@@ -203,7 +206,9 @@ claim 单元的映射。历史数据需要按 unit 精炼：
 ```
 
 strict 模式下 claim evidence runner 失败会按单 unit 重试，仍失败则阻断。
-只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；确定性
+每次运行以 `claim_evidence_progress.json` 绑定 evidence revision，并原子记录 target、
+completed、pending 和 failed unit；中断后的 partial 状态可按 unit 恢复，不能把半成品
+误报为完整精炼。只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；确定性
 质量门会识别 `deterministic-fallback` 并阻断发布，不能用它降低 evidence v3
 或逐 claim 证据要求。
 

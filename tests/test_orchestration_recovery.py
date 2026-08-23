@@ -61,10 +61,16 @@ class OrchestrationRecoveryTests(unittest.TestCase):
             self.assertTrue(content_pipeline_needed(Path(td), force=True))
 
     def test_content_map_schema_restricts_completed_statuses(self):
-        status = CONTENT_MAP_GENERATION_SCHEMA["properties"]["units"][
-            "items"]["properties"]["status"]
+        unit_properties = CONTENT_MAP_GENERATION_SCHEMA["properties"]["units"][
+            "items"]["properties"]
         self.assertEqual(
-            status["enum"], ["included", "condensed", "excluded"])
+            unit_properties["status"]["enum"],
+            ["included", "condensed", "excluded"],
+        )
+        self.assertIn(
+            "conditional",
+            unit_properties["claim_modalities"]["items"]["enum"],
+        )
 
     def test_content_map_stage_rejects_unknown_status_and_segment(self):
         transcript = {
@@ -75,6 +81,7 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                 "id": "U0001",
                 "topic": "topic",
                 "claims": ["claim"],
+                "claim_modalities": ["general_claim"],
                 "importance": "high",
                 "status": "expanded",
                 "notes": "",
@@ -91,6 +98,7 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                 "id": "U0001",
                 "topic": "advertisement",
                 "claims": ["should not exist"],
+                "claim_modalities": ["general_claim"],
                 "importance": "low",
                 "status": "excluded",
                 "notes": "sponsor read",
@@ -120,6 +128,7 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                     "topic": "topic",
                     "speaker": "speaker",
                     "claims": ["claim"],
+                    "claim_modalities": ["general_claim"],
                     "reasoning": [],
                     "examples": [],
                     "numbers": [],

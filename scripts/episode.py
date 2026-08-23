@@ -353,6 +353,16 @@ def _source_method(kind):
     }.get(kind, kind or "未标注")
 
 
+def _source_heading(kind):
+    if kind in {"web_transcript", "third_party_transcript"}:
+        return "转录页面"
+    if kind == "local_transcript":
+        return "本地转录来源"
+    if kind in ASR_SOURCE_KINDS:
+        return "原始音频"
+    return "原始播客"
+
+
 def render_source_markdown(folder, payload=None, state=None, processing_date=""):
     """Render 来源.md from structured episode and evidence metadata."""
     folder = Path(folder)
@@ -377,7 +387,7 @@ def render_source_markdown(folder, payload=None, state=None, processing_date="")
     lines = [
         "# 来源信息",
         "",
-        "## 原始播客",
+        f"## {_source_heading(state['source_kind'])}",
         f"- 标题：{payload.get('display_title') or folder.name}",
     ]
     if source.get("url"):

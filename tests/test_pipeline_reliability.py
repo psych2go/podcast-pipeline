@@ -15,6 +15,8 @@ from content_map import (
     enrich_content_map_evidence,
     validate_content_map,
 )
+from episode import _source_heading
+import claim_evidence
 from rebuild_plan import build_rebuild_plan
 from tts import build_tts_plan
 
@@ -51,6 +53,128 @@ def review_payload():
             "notes": "节目中的治理建议。",
         }],
     }
+
+
+class EvidenceEnrichmentSafetyTests(unittest.TestCase):
+    def test_open_ended_unit_window_is_rejected_without_erasing_evidence(self):
+        transcript = {
+            "meta": {"timestamped": True, "evidence_mode": "timestamp"},
+            "segments": [{
+                "id": "S0001", "start": 12, "end": None,
+                "text": "final segment",
+            }],
+        }
+        content_map = {
+            "schema_version": 3,
+            "evidence_mode": "timestamp",
+            "units": [{
+                "id": "U0001",
+                "timestamps": [[12, None]],
+                "evidence": {
+                    "mode": "timestamp",
+                    "segment_ids": ["S0001"],
+                    "source_sha256": "existing",
+                },
+            }],
+        }
+        with self.assertRaisesRegex(ValueError, "timestamp 范围无效"):
+            enrich_content_map_evidence(content_map, transcript)
+        self.assertEqual(
+            content_map["units"][0]["evidence"]["segment_ids"],
+            ["S0001"],
+        )
+
+    def test_unknown_text_anchor_cannot_enrich_to_empty_evidence(self):
+        transcript = {
+            "meta": {"timestamped": False, "evidence_mode": "text_anchor"},
+            "segments": [{"id": "S0001", "text": "source"}],
+        }
+        content_map = {
+            "schema_version": 3,
+            "evidence_mode": "text_anchor",
+            "units": [{
+                "id": "U0001",
+                "evidence": {"segment_ids": ["S9999"]},
+            }],
+        }
+        with self.assertRaisesRegex(ValueError, "enrichment 结果为空"):
+            enrich_content_map_evidence(content_map, transcript)
+
+    def test_claim_payload_without_segments_fails_before_runner(self):
+        with self.assertRaisesRegex(RuntimeError, "不重试"):
+            claim_evidence._validate_payload_sources([{
+                "unit_id": "U0001",
+                "claims": [{"claim_id": "U0001-C01", "text": "claim"}],
+                "segments": [],
+            }])
+
+
+class ClaimEvidenceProgressTests(unittest.TestCase):
+    def test_failed_unit_writes_partial_progress_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            transcript = {
+                "evidence": {"revision_sha256": "revision"},
+                "meta": {"timestamped": True, "evidence_mode": "timestamp"},
+                "segments": [{
+                    "id": "S0001", "start": 0, "end": 5, "text": "source",
+                }],
+            }
+            content_map = {
+                "schema_version": 3,
+                "evidence_mode": "timestamp",
+                "units": [{
+                    "id": "U0001", "topic": "topic",
+                    "claims": ["claim one", "claim two"],
+                    "importance": "high", "status": "included",
+                    "timestamps": [[0, 5]],
+                }],
+            }
+            (folder / "transcript.raw.json").write_text(
+                json.dumps(transcript), encoding="utf-8")
+            (folder / "content_map.json").write_text(
+                json.dumps(content_map), encoding="utf-8")
+            with mock.patch.object(
+                    claim_evidence, "_run_batch",
+                    side_effect=RuntimeError("runner down")):
+                with self.assertRaises(RuntimeError):
+                    claim_evidence.refine_claim_evidence(
+                        folder, concurrency=1, max_batch_chars=100000)
+            progress = json.loads(
+                (folder / claim_evidence.PROGRESS_FILENAME).read_text(
+                    encoding="utf-8"))
+        self.assertEqual(progress["status"], "partial")
+        self.assertEqual(progress["evidence_revision"], "revision")
+        self.assertEqual(progress["failed_unit_ids"], ["U0001"])
+        self.assertEqual(progress["pending_unit_ids"], ["U0001"])
+        self.assertTrue(claim_evidence.validate_progress(progress, transcript))
+
+    def test_completed_progress_matches_revision(self):
+        transcript = {"evidence": {"revision_sha256": "revision"}}
+        payload = {
+            "schema_version": 1,
+            "status": "completed",
+            "evidence_revision": "revision",
+            "target_unit_ids": ["U0001"],
+            "completed_unit_ids": ["U0001"],
+            "pending_unit_ids": [],
+            "failed_unit_ids": [],
+        }
+        self.assertEqual(
+            claim_evidence.validate_progress(payload, transcript), [])
+        payload["evidence_revision"] = "stale"
+        self.assertTrue(any(
+            "revision" in error
+            for error in claim_evidence.validate_progress(payload, transcript)
+        ))
+
+
+class SourceLabelTests(unittest.TestCase):
+    def test_source_heading_matches_source_kind(self):
+        self.assertEqual(_source_heading("web_transcript"), "转录页面")
+        self.assertEqual(_source_heading("third_party_transcript"), "转录页面")
+        self.assertEqual(_source_heading("local_asr"), "原始音频")
+        self.assertEqual(_source_heading("local_transcript"), "本地转录来源")
 
 
 class ClaimEvidenceRoleTests(unittest.TestCase):

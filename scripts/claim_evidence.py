@@ -3,9 +3,11 @@ import argparse
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
+    from atomic_io import atomic_write_json
     from content_map import (
         apply_claim_evidence_mapping,
         enrich_content_map_evidence,
@@ -16,6 +18,7 @@ try:
     from run_report import RunReport
     from subagent import run_json_task
 except ImportError:
+    from scripts.atomic_io import atomic_write_json
     from scripts.content_map import (
         apply_claim_evidence_mapping,
         enrich_content_map_evidence,
@@ -64,6 +67,82 @@ CLAIM_EVIDENCE_SCHEMA = {
 
 DEFAULT_BATCH_CHARS = 35000
 DEFAULT_CONCURRENCY = 3
+PROGRESS_FILENAME = "claim_evidence_progress.json"
+
+
+def _evidence_revision(transcript):
+    evidence = transcript.get("evidence", {}) or {}
+    meta = transcript.get("meta", {}) or {}
+    return (
+        evidence.get("revision_sha256")
+        or evidence.get("transcript_sha256")
+        or meta.get("evidence_revision_sha256")
+        or meta.get("transcript_sha256")
+    )
+
+
+def _write_progress(
+        folder, transcript, *, target, completed, pending, failed, status):
+    atomic_write_json(Path(folder) / PROGRESS_FILENAME, {
+        "schema_version": 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "evidence_revision": _evidence_revision(transcript),
+        "target_unit_ids": sorted(target),
+        "completed_unit_ids": sorted(completed),
+        "pending_unit_ids": sorted(pending),
+        "failed_unit_ids": sorted(failed),
+    })
+
+
+def _validate_payload_sources(payloads):
+    errors = []
+    for payload in payloads:
+        unit_id = payload.get("unit_id") or "unknown-unit"
+        claims = payload.get("claims") or []
+        segments = payload.get("segments") or []
+        if claims and not segments:
+            errors.append(f"{unit_id}: 有 claims 但没有可用 source segments")
+        segment_ids = [
+            segment.get("id") for segment in segments
+            if isinstance(segment, dict) and segment.get("id")
+        ]
+        if len(segment_ids) != len(set(segment_ids)):
+            errors.append(f"{unit_id}: source segments 存在重复 ID")
+    if errors:
+        raise RuntimeError(
+            "claim evidence 输入结构错误（不重试）: "
+            + "; ".join(errors[:10]))
+
+
+def validate_progress(payload, transcript):
+    errors = []
+    if not isinstance(payload, dict):
+        return ["claim evidence progress 必须是对象"]
+    if payload.get("schema_version") != 1:
+        errors.append("claim evidence progress schema_version 必须是 1")
+    if payload.get("status") != "completed":
+        errors.append(
+            f"claim evidence progress 尚未完成: {payload.get('status')!r}")
+    target = set(payload.get("target_unit_ids") or [])
+    completed = set(payload.get("completed_unit_ids") or [])
+    pending = set(payload.get("pending_unit_ids") or [])
+    failed = set(payload.get("failed_unit_ids") or [])
+    if target - completed:
+        errors.append(
+            f"claim evidence progress 缺少完成 unit: {sorted(target - completed)}")
+    if pending:
+        errors.append(f"claim evidence progress 仍有 pending unit: {sorted(pending)}")
+    if failed:
+        errors.append(f"claim evidence progress 仍有 failed unit: {sorted(failed)}")
+    expected_revision = _evidence_revision(transcript)
+    recorded_revision = payload.get("evidence_revision")
+    if (
+            expected_revision
+            and recorded_revision
+            and recorded_revision != expected_revision):
+        errors.append("claim evidence progress evidence revision 已过期")
+    return errors
 
 
 def deterministic_fallback_mappings(payloads):
@@ -270,16 +349,69 @@ def refine_claim_evidence(
     transcript = load_json(transcript_path)
     content_map, transcript = enrich_content_map_evidence(
         content_map, transcript)
-    save_json(content_map_path, content_map)
+    selected_ids = set(unit_ids or [])
+    target_unit_ids = {
+        unit.get("id")
+        for unit in content_map.get("units", [])
+        if isinstance(unit, dict)
+        and unit.get("id")
+        and unit.get("status") != "excluded"
+        and unit.get("claims")
+        and (not selected_ids or unit.get("id") in selected_ids)
+    }
+    completed_unit_ids = {
+        unit.get("id")
+        for unit in content_map.get("units", [])
+        if isinstance(unit, dict)
+        and unit.get("id") in target_unit_ids
+        and _has_complete_claim_evidence(unit)
+    }
     payloads = _unit_payloads(
         content_map,
         transcript,
-        set(unit_ids or []),
+        selected_ids,
         skip_complete=True,
+    )
+    pending_unit_ids = {
+        payload.get("unit_id") for payload in payloads
+        if payload.get("unit_id")
+    }
+    failed_unit_ids = set()
+    try:
+        _validate_payload_sources(payloads)
+    except RuntimeError:
+        _write_progress(
+            folder,
+            transcript,
+            target=target_unit_ids,
+            completed=completed_unit_ids,
+            pending=pending_unit_ids,
+            failed=pending_unit_ids,
+            status="invalid_input",
+        )
+        raise
+    save_json(content_map_path, content_map)
+    _write_progress(
+        folder,
+        transcript,
+        target=target_unit_ids,
+        completed=completed_unit_ids,
+        pending=pending_unit_ids,
+        failed=failed_unit_ids,
+        status="running" if payloads else "completed",
     )
     if not payloads:
         errors, warnings = validate_content_map(content_map, transcript)
         if errors:
+            _write_progress(
+                folder,
+                transcript,
+                target=target_unit_ids,
+                completed=completed_unit_ids,
+                pending=set(),
+                failed=target_unit_ids - completed_unit_ids,
+                status="invalid_input",
+            )
             raise RuntimeError(
                 "没有待精炼 claim，但现有 content map 校验失败: "
                 + "; ".join(errors[:10]))
@@ -299,6 +431,21 @@ def refine_claim_evidence(
     failures = []
     fallback_claim_count = 0
     recovered_unit_count = 0
+
+    def checkpoint_completed(unit_ids):
+        completed_unit_ids.update(unit_ids)
+        pending_unit_ids.difference_update(unit_ids)
+        failed_unit_ids.difference_update(unit_ids)
+        _write_progress(
+            folder,
+            transcript,
+            target=target_unit_ids,
+            completed=completed_unit_ids,
+            pending=pending_unit_ids,
+            failed=failed_unit_ids,
+            status="running",
+        )
+
     with ThreadPoolExecutor(
             max_workers=max(1, min(concurrency, len(batches)))) as pool:
         futures = {
@@ -324,6 +471,7 @@ def refine_claim_evidence(
                 save_json(content_map_path, content_map)
                 mappings.extend(batch_mappings)
                 wrappers.append(wrapper)
+                checkpoint_completed(batch_unit_ids)
             except Exception as exc:
                 if not allow_fallback:
                     if len(batch) > 1:
@@ -348,14 +496,19 @@ def refine_claim_evidence(
                                 save_json(content_map_path, content_map)
                                 mappings.extend(batch_mappings)
                                 wrappers.append(wrapper)
+                                checkpoint_completed({item["unit_id"]})
                                 recovered_unit_count += 1
                             except Exception as unit_exc:
+                                failed_unit_ids.add(item["unit_id"])
                                 failures.append(RuntimeError(
                                     "strict mode forbids fallback claim "
                                     f"evidence for {item['unit_id']}: "
                                     f"{unit_exc}"
                                 ))
                     else:
+                        failed_unit_ids.update(
+                            item.get("unit_id") for item in batch
+                            if item.get("unit_id"))
                         failures.append(RuntimeError(
                             "strict mode forbids fallback claim evidence: "
                             f"{exc}"
@@ -375,6 +528,7 @@ def refine_claim_evidence(
                     save_json(content_map_path, content_map)
                     mappings.extend(batch_mappings)
                     fallback_claim_count += len(batch_mappings)
+                    checkpoint_completed(batch_unit_ids)
                     wrappers.append({
                         "retry_count": 0,
                         "duration_ms": 0,
@@ -387,8 +541,20 @@ def refine_claim_evidence(
                         flush=True,
                     )
                 except Exception as fallback_exc:
+                    failed_unit_ids.update(
+                        item.get("unit_id") for item in batch
+                        if item.get("unit_id"))
                     failures.append(fallback_exc)
     if failures:
+        _write_progress(
+            folder,
+            transcript,
+            target=target_unit_ids,
+            completed=completed_unit_ids,
+            pending=pending_unit_ids,
+            failed=failed_unit_ids,
+            status="partial",
+        )
         completed_units = sum(
             _has_complete_claim_evidence(unit)
             for unit in content_map.get("units", [])
@@ -438,6 +604,15 @@ def refine_claim_evidence(
         "recovered_unit_count": recovered_unit_count,
     }
     save_json(content_map_path, content_map)
+    _write_progress(
+        folder,
+        transcript,
+        target=target_unit_ids,
+        completed=target_unit_ids,
+        pending=set(),
+        failed=set(),
+        status="completed",
+    )
     return {
         "claim_count": len(mappings),
         "batch_count": len(batches),

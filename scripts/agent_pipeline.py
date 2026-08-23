@@ -15,6 +15,7 @@ try:
         normalize_summary_claim_ids,
         save_json,
         IMPORTANCE_VALUES,
+        CLAIM_MODALITIES,
         transcript_evidence_mode,
         validate_content_map,
         validate_summary_map,
@@ -43,6 +44,7 @@ except ImportError:
         normalize_summary_claim_ids,
         save_json,
         IMPORTANCE_VALUES,
+        CLAIM_MODALITIES,
         transcript_evidence_mode,
         validate_content_map,
         validate_summary_map,
@@ -101,6 +103,13 @@ CONTENT_MAP_GENERATION_SCHEMA = {
                     "topic": {"type": "string", "minLength": 1},
                     "speaker": {"type": "string"},
                     "claims": {"type": "array", "items": {"type": "string"}},
+                    "claim_modalities": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": sorted(CLAIM_MODALITIES),
+                        },
+                    },
                     "reasoning": {"type": "array", "items": {"type": "string"}},
                     "examples": {"type": "array", "items": {"type": "string"}},
                     "numbers": {"type": "array", "items": {"type": "string"}},
@@ -175,6 +184,12 @@ def _validate_content_map_stage(payload, transcript):
         if not isinstance(claims, list):
             errors.append(f"{unit_id}: claims 必须是数组")
             claims = []
+        modalities = unit.get("claim_modalities")
+        if not isinstance(modalities, list) or len(modalities) != len(claims):
+            errors.append(
+                f"{unit_id}: claim_modalities 必须与 claims 一一对应")
+        elif set(modalities) - CLAIM_MODALITIES:
+            errors.append(f"{unit_id}: claim_modalities 包含无效值")
         if status == "excluded" and claims:
             errors.append(f"{unit_id}: excluded 单元不得生成 claims")
         if status == "excluded" and not str(unit.get("notes", "")).strip():
@@ -380,7 +395,8 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
 - 完成后的 status 只能是 included、condensed、excluded；
 - 每个 unit 的 evidence.segment_ids 至少引用一个真实 Sxxxx；
 - transcript.raw.json 的每个非空 segment 必须至少被一个 unit 记账；
-- high/medium included 或 condensed 单元必须有 claims；
+- high/medium included 或 condensed 单元必须有 claims；每条 claim 必须在 claim_modalities 中按顺序标记 actual_event、conditional、prediction、opinion、recommendation 或 general_claim；
+- 条件句不得升级成已发生事件，预测和观点不得升级成客观事实；
 - excluded 仅用于广告、寒暄、节目操作或无实质内容，claims 必须为空并在 notes 写明原因；
 - timestamp evidence 使用真实 timestamps；text_anchor evidence 的 timestamps 为空；
 - 不要生成 claim_evidence、哈希或任何转录中不存在的 unit；
@@ -450,6 +466,7 @@ notes_claim_ids，只能列入中文完整笔记正文实际覆盖的 claim。�
 要求：
 - 不得编造转录之外的观点；
 - 不得遗漏 included high/medium 的 claims、numbers 或 examples；
+- 必须保持 content_map.claim_modalities：conditional 继续使用“如果/即使/可能”，prediction 继续标明预测，opinion/recommendation 保留说话人归因，禁止改写为已发生事实；
 - 完成前按中文汉字数自检：中文完整笔记必须至少比讲书稿多百分之十五；不足时只能从转录和 content_map 补充证据细节、数字范围、例子、限定条件与推理链，禁止用重复或空话凑字数；
 - 中文完整笔记必须逐项覆盖 content_map 的 examples，讲稿出现的证据例子不得只存在于讲稿；
 - 不要修改 content_map.json 或任何证据文件；

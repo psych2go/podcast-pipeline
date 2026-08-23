@@ -59,6 +59,7 @@ try:
         validate_provenance,
     )
     from content_finalizer import validate_tts_readiness
+    from claim_evidence import PROGRESS_FILENAME, validate_progress
     from editorial_corrections import (
         load_editorial_corrections,
         validate_editorial_corrections,
@@ -84,6 +85,7 @@ except ImportError:  # package import
         validate_provenance,
     )
     from scripts.content_finalizer import validate_tts_readiness
+    from scripts.claim_evidence import PROGRESS_FILENAME, validate_progress
     from scripts.editorial_corrections import (
         load_editorial_corrections,
         validate_editorial_corrections,
@@ -517,6 +519,17 @@ def build_quality_report(folder, strict=True, *, today=None):
             }
             extend_errors(
                 report, CONTENT_MAP_VALIDATION, correction_errors)
+        progress_path = folder / PROGRESS_FILENAME
+        if progress_path.exists():
+            progress_payload = load_json(progress_path)
+            progress_errors = validate_progress(
+                progress_payload, raw or {})
+            report["claim_evidence_progress"] = {
+                "status": progress_payload.get("status"),
+                "validation_errors": progress_errors,
+            }
+            extend_errors(
+                report, CONTENT_MAP_VALIDATION, progress_errors)
         if (
                 strict
                 and content_map.get(

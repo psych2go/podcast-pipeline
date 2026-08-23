@@ -231,9 +231,11 @@ Podscripts 只有在明确的证书校验异常时才允许 source-scoped TLS �
 
 `content_map.json` 生成使用只读 structured output；agent 只返回 unit 分组和语义字段，
 哈希由确定性代码补齐。claim-evidence 前的 stage validator 会拒绝未知 status、空或未知
-segment、无证据 unit、excluded claim 和未记账源片段，避免结构错误进入昂贵模型调用。
+segment、`null`/倒序时间窗、无证据 unit、excluded claim 和未记账源片段，避免结构错误
+进入昂贵模型调用。enrichment 若会把 unit 证据刷新为空则硬失败，并保留原 evidence。
 
-claim evidence 可记录直接支持的 `primary_segment_ids` 与仅提供归因/限定的
+每条 claim 可声明 `claim_modalities`，写稿必须保持 actual/conditional/prediction/opinion/
+recommendation 的事实状态。claim evidence 可记录直接支持的 `primary_segment_ids` 与仅提供归因/限定的
 `context_segment_ids`，同时派生旧版扁平数组保持已发布 v3 数据可读。
 
 evidence v3 的约束：
@@ -262,6 +264,10 @@ evidence v3 的约束：
 `enrich-evidence` 不再为多 claim 单元猜测证据。新内容应在生成
 `content_map.json` 时直接填写精确映射；`claim_evidence.py` 主要用于按 unit
 迁移历史数据。超过 60 个 segment 的 unit 会产生结构告警。
+
+`claim_evidence_progress.json` 是 evidence revision 绑定的批次 checkpoint，记录 target、
+completed、pending、failed unit 和 completed/partial/invalid_input 状态；每个成功 unit
+提交后原子刷新，runner 中断不会把部分结果伪装成完整精炼。
 
 ### `ai_review.py`
 
