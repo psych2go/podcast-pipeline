@@ -27,6 +27,7 @@ STATUS_VALUES = {"pending", "included", "condensed", "excluded", "needs_review",
 IMPORTANCE_VALUES = {"high", "medium", "low"}
 CONTENT_MAP_SCHEMA_VERSION = 3
 SUMMARY_MAP_SCHEMA_VERSION = 2
+DETAIL_ITEMS_VERSION = 1
 CLAIM_CONFIDENCE_VALUES = {"high", "medium", "low"}
 CLAIM_MODALITIES = {
     "actual_event", "conditional", "prediction", "opinion",
@@ -260,6 +261,9 @@ def enrich_summary_map_evidence(
     # complete claim set here: doing so would let summary_map self-certify that
     # the prose actually contains every claim.
     summary_map.setdefault("notes_claim_ids", [])
+    if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION:
+        summary_map.setdefault("notes_number_ids", [])
+        summary_map.setdefault("notes_example_ids", [])
     normalize_summary_claim_ids(summary_map)
     if briefing_text is not None:
         chapters = briefing_chapters(briefing_text)
@@ -472,6 +476,20 @@ def validate_content_map(payload, transcript=None):
                 if invalid_modalities:
                     errors.append(
                         f"{display_id}: claim modality 无效: {invalid_modalities}")
+        if payload.get("detail_items_version") == DETAIL_ITEMS_VERSION:
+            for text_field, item_field, item_prefix in (
+                    ("numbers", "number_items", "N"),
+                    ("examples", "example_items", "E")):
+                texts = [str(value) for value in unit.get(text_field, []) or []]
+                items = unit.get(item_field)
+                expected_items = [
+                    {"id": f"{item_prefix}{item_index:02d}", "text": text}
+                    for item_index, text in enumerate(texts, start=1)
+                ]
+                if items != expected_items:
+                    errors.append(
+                        f"{display_id}: {item_field} 必须与 {text_field} "
+                        "按顺序确定性对应")
         if evidence_mode == "timestamp":
             if not unit.get("timestamps"):
                 errors.append(f"{display_id}: 缺少 timestamps，无法回溯原音频")
@@ -644,6 +662,45 @@ def validate_content_map(payload, transcript=None):
     return errors, warnings
 
 
+def normalize_detail_items(content_map):
+    """Derive stable number/example IDs while retaining legacy text arrays."""
+    for unit in content_map.get("units", []) or []:
+        if not isinstance(unit, dict):
+            continue
+        unit["number_items"] = [
+            {"id": f"N{index:02d}", "text": str(text)}
+            for index, text in enumerate(unit.get("numbers", []) or [], start=1)
+        ]
+        unit["example_items"] = [
+            {"id": f"E{index:02d}", "text": str(text)}
+            for index, text in enumerate(unit.get("examples", []) or [], start=1)
+        ]
+    content_map["detail_items_version"] = DETAIL_ITEMS_VERSION
+    return content_map
+
+
+def unit_detail_ids(content_map, detail_type, purpose="notes"):
+    if detail_type not in {"number", "example"}:
+        raise ValueError(f"未知 detail type: {detail_type}")
+    if purpose != "notes":
+        raise ValueError(f"未知 detail coverage purpose: {purpose}")
+    field = "number_items" if detail_type == "number" else "example_items"
+    prefix = "N" if detail_type == "number" else "E"
+    result = []
+    for unit in content_map.get("units", []) or []:
+        if not isinstance(unit, dict):
+            continue
+        if unit.get("status") not in {"included", "condensed"}:
+            continue
+        if unit.get("importance") not in {"high", "medium"}:
+            continue
+        unit_id = unit.get("id")
+        for index, item in enumerate(unit.get(field, []) or [], start=1):
+            item_id = item.get("id") if isinstance(item, dict) else None
+            result.append(f"{unit_id}-{item_id or f'{prefix}{index:02d}'}")
+    return result
+
+
 def load_summary_map(path):
     payload = load_json(path)
     if isinstance(payload, list):
@@ -765,6 +822,23 @@ def validate_summary_map(
             errors.append("v2 summary_map 校验需要 中文完整笔记.md")
         elif payload.get("notes_sha256") != body_sha256(notes_text):
             errors.append("summary_map.notes_sha256 与当前完整笔记不一致")
+        if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION:
+            for field, detail_type, label in (
+                    ("notes_number_ids", "number", "数字"),
+                    ("notes_example_ids", "example", "例子")):
+                expected_details = set(unit_detail_ids(
+                    content_map, detail_type, purpose="notes"))
+                values = payload.get(field)
+                if not isinstance(values, list):
+                    errors.append(f"summary_map.{field} 必须是数组")
+                    continue
+                actual_details = set(values)
+                missing_details = sorted(expected_details - actual_details)
+                unknown_details = sorted(actual_details - expected_details)
+                if missing_details:
+                    errors.append(f"完整笔记缺少{label}映射: {missing_details}")
+                if unknown_details:
+                    errors.append(f"完整笔记包含未知{label}映射: {unknown_details}")
     return errors
 
 
@@ -817,6 +891,22 @@ def coverage_report(content_map, summary_map):
     notes_claims = set(summary_map.get("notes_claim_ids", []) or [])
     notes_missing_claims = sorted(expected_notes_claims - notes_claims)
     notes_unknown_claims = sorted(notes_claims - expected_notes_claims)
+    expected_number_ids = (
+        set(unit_detail_ids(content_map, "number", purpose="notes"))
+        if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
+        else set()
+    )
+    expected_example_ids = (
+        set(unit_detail_ids(content_map, "example", purpose="notes"))
+        if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
+        else set()
+    )
+    notes_number_ids = set(summary_map.get("notes_number_ids", []) or [])
+    notes_example_ids = set(summary_map.get("notes_example_ids", []) or [])
+    missing_number_ids = sorted(expected_number_ids - notes_number_ids)
+    unknown_number_ids = sorted(notes_number_ids - expected_number_ids)
+    missing_example_ids = sorted(expected_example_ids - notes_example_ids)
+    unknown_example_ids = sorted(notes_example_ids - expected_example_ids)
 
     return {
         "chapter_count": len(chapters),
@@ -852,6 +942,20 @@ def coverage_report(content_map, summary_map):
         ) if expected_notes_claims else 1.0,
         "notes_missing_claim_ids": notes_missing_claims,
         "notes_unknown_claim_ids": notes_unknown_claims,
+        "notes_number_total": len(expected_number_ids),
+        "notes_number_covered": len(expected_number_ids & notes_number_ids),
+        "notes_number_coverage": round(
+            len(expected_number_ids & notes_number_ids) / len(expected_number_ids), 4
+        ) if expected_number_ids else 1.0,
+        "notes_missing_number_ids": missing_number_ids,
+        "notes_unknown_number_ids": unknown_number_ids,
+        "notes_example_total": len(expected_example_ids),
+        "notes_example_covered": len(expected_example_ids & notes_example_ids),
+        "notes_example_coverage": round(
+            len(expected_example_ids & notes_example_ids) / len(expected_example_ids), 4
+        ) if expected_example_ids else 1.0,
+        "notes_missing_example_ids": missing_example_ids,
+        "notes_unknown_example_ids": unknown_example_ids,
         "unsupported_units": sorted(unsupported),
         "excluded_without_reason": explicit_exclusion_missing_reason,
         "passed": not (
@@ -860,7 +964,11 @@ def coverage_report(content_map, summary_map):
             or explicit_exclusion_missing_reason
             or (
                 summary_map.get("schema_version", 1) >= SUMMARY_MAP_SCHEMA_VERSION
-                and (notes_missing_claims or notes_unknown_claims)
+                and (
+                    notes_missing_claims or notes_unknown_claims
+                    or missing_number_ids or unknown_number_ids
+                    or missing_example_ids or unknown_example_ids
+                )
             )
         ),
     }

@@ -62,14 +62,17 @@ custom provider 的环境仍可认证，同时不会加载用户自动化扩展�
 
 ## 2. 核心模块
 
-### `rebuild_plan.py` 与 `editorial_corrections.py`
+### `rebuild_plan.py`、`editorial_corrections.py`、`canonical_entities.py` 与 `source_relevance.py`
 
 `rebuild_plan.py` 以只读 shadow mode 记录缺失产物、转录依据漂移、受影响阶段、
 unit 和章节；实际执行仍由 `process.py` 控制。完成真实长单集校准前，planner 不会
 绕过现有全量质量门。
 
-`editorial_corrections.py` 校验外部事实校正台账。校正必须绑定 content-map claim、
-公开处理文本、来源 URL、日期和风险域；该台账属于 review 输入，但绝不冒充转录证据。
+`editorial_corrections.py` 校验外部事实校正台账。`canonical_entities.py` 自动建立
+observed/canonical/public-alias/entity-source/segment 合同并阻断错误别名进入公开稿。
+`source_relevance.py` 为 correction/entity URL 缓存标题、摘录、HTTP 状态和内容哈希，
+供 reviewer 核查来源是否真的支持主张。所有这些台账属于 review 输入，但绝不冒充
+转录证据。
 
 ### `episode.py`
 
@@ -235,7 +238,9 @@ segment、`null`/倒序时间窗、无证据 unit、excluded claim 和未记账�
 进入昂贵模型调用。enrichment 若会把 unit 证据刷新为空则硬失败，并保留原 evidence。
 
 每条 claim 可声明 `claim_modalities`，写稿必须保持 actual/conditional/prediction/opinion/
-recommendation 的事实状态。claim evidence 可记录直接支持的 `primary_segment_ids` 与仅提供归因/限定的
+recommendation 的事实状态。新 map 还为 numbers/examples 确定性生成 Nxx/Exx detail ID；
+summary map 的 `notes_number_ids` 和 `notes_example_ids` 必须逐项证明完整笔记覆盖。
+claim evidence 可记录直接支持的 `primary_segment_ids` 与仅提供归因/限定的
 `context_segment_ids`，同时派生旧版扁平数组保持已发布 v3 数据可读。
 
 evidence v3 的约束：

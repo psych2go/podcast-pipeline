@@ -173,7 +173,9 @@ SHA-256。content-map 子进程只返回结构化 JSON，主流程在启动 clai
 为空，`null`/倒序时间窗或未知 text anchor 会直接阻断且不覆盖原 evidence。多 claim
 单元不得给所有 claim 复制整个 unit 的 segment 集合；每条 claim 还要记录证据置信度、
 选择理由和 `claim_modalities`（actual_event、conditional、prediction、opinion、
-recommendation、general_claim），写稿不得把条件句、预测或观点升级为已发生事实。新映射可同时记录
+recommendation、general_claim），写稿不得把条件句、预测或观点升级为已发生事实。
+新 map 同时声明 `detail_items_version=1`，为 numbers/examples 派生稳定的 `Nxx/Exx`；
+完整笔记必须在 summary map 的 `notes_number_ids` / `notes_example_ids` 逐项记账。新映射可同时记录
 `primary_segment_ids` 与 `context_segment_ids`，并继续派生旧版扁平
 `claim_evidence` 供已有单集读取。
 
@@ -184,6 +186,10 @@ recommendation、general_claim），写稿不得把条件句、预测或观点�
 ### 3. 写中文内容
 
 主脚本按 `scripts/讲稿提示词.md` 调用 subagent：
+
+写稿前会联网生成 `canonical_entities.json`：每个规范实体绑定 observed names、允许公开
+使用的 `public_aliases`、canonical name、类型、官方 URL 和 segment IDs。公开笔记与讲稿
+若仍出现未获允许的 ASR 别名会被确定性阻断。
 
 1. 先写 `中文完整笔记.md`。
 2. 再写适合收听的 `讲书稿.md`。
@@ -244,7 +250,9 @@ re-review`。AI review 输出在写入状态或 fact-check cache 前先执行与
 
 节目原话与外部校正必须分账。可选的 `editorial_corrections.json` 绑定原始
 claim ID、节目陈述、公开处理、来源 URL、日期和风险域；它不构成 transcript evidence，
-但存在时属于 AI review 输入并由严格质量门校验。
+但存在时属于 AI review 输入并由严格质量门校验。AI review 前会为 correction/entity
+URL 生成 `source_relevance_cache.json`，保存 HTTP 状态、最终 URL、标题、正文摘录和
+内容哈希；reviewer 必须检查来源语义相关性，不能把“URL 可访问”等同于“支持主张”。
 
 复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定。
 只要 reviewed input hash 已变化，旧 review 的 failed/score/issue 错误就被视为 stale 结论，
@@ -435,6 +443,10 @@ content/<storage_name>/
 ├── evidence_history/          # --force-refetch 时归档旧 revision
 ├── 转录_纠错.txt             # 需要时
 ├── content_map.json
+├── canonical_entities.json   # 规范实体、允许别名、官方来源与 segment 绑定
+├── editorial_corrections.json # 可选：节目原话与外部校正分账
+├── source_relevance_cache.json # 外部 URL 标题/摘录/内容哈希缓存
+├── claim_evidence_progress.json # claim evidence 批次恢复状态
 ├── 中文完整笔记.md
 ├── 讲书稿.md
 ├── summary_map.json

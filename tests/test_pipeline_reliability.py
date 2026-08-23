@@ -14,16 +14,27 @@ import catalog as catalog_cli
 import catalog_core
 import catalog_publish
 import catalog_site
+from canonical_entities import (
+    public_entity_alias_errors,
+    validate_canonical_entities,
+)
 from editorial_corrections import validate_editorial_corrections
 from content_map import (
     apply_claim_evidence_mapping,
     coverage_report,
     enrich_content_map_evidence,
+    normalize_detail_items,
+    unit_detail_ids,
     validate_content_map,
 )
 from episode import _source_heading
 import claim_evidence
 from rebuild_plan import build_rebuild_plan
+from source_relevance import (
+    expected_source_references,
+    refresh_source_relevance_cache,
+    validate_source_relevance_cache,
+)
 from tts import build_tts_plan
 
 
@@ -453,6 +464,115 @@ class RebuildPlanTests(unittest.TestCase):
         self.assertIn("stale:transcript_basis", plan["reasons"])
         self.assertEqual(plan["mode"], "shadow")
         self.assertIn("ai_review", plan["stages"])
+
+
+class CanonicalEntityTests(unittest.TestCase):
+    def test_entity_contract_rejects_alias_leak_in_public_text(self):
+        transcript = {"segments": [{"id": "S0001", "text": "Edward Lameh"}]}
+        payload = {
+            "schema_version": 1,
+            "entities": [{
+                "entity_id": "EN0001",
+                "canonical_name": "Edward Lemay",
+                "observed_names": ["Edward Lameh", "Edward LeMay"],
+                "public_aliases": [],
+                "entity_type": "person",
+                "source_urls": ["https://example.com/edward-lemay"],
+                "segment_ids": ["S0001"],
+                "confidence": "high",
+                "rationale": "Official faculty profile confirms the canonical spelling.",
+            }],
+        }
+        self.assertEqual(validate_canonical_entities(payload, transcript), [])
+        errors = public_entity_alias_errors(
+            payload, "Interview with Edward LeMay")
+        self.assertTrue(any("Edward LeMay" in error for error in errors))
+        self.assertEqual(
+            public_entity_alias_errors(payload, "Interview with Edward Lemay"), [])
+
+
+class DetailItemCoverageTests(unittest.TestCase):
+    def test_number_and_example_ids_are_stable_and_required_in_notes(self):
+        content_map = normalize_detail_items({
+            "units": [{
+                "id": "U0001", "status": "included", "importance": "high",
+                "claims": ["claim"],
+                "numbers": ["2009", "70%"],
+                "examples": ["example"],
+            }],
+        })
+        self.assertEqual(
+            unit_detail_ids(content_map, "number"),
+            ["U0001-N01", "U0001-N02"],
+        )
+        summary = {
+            "schema_version": 2,
+            "chapters": [{
+                "title": "chapter", "unit_ids": ["U0001"],
+                "claim_ids": ["U0001-C01"],
+            }],
+            "notes_claim_ids": ["U0001-C01"],
+            "notes_number_ids": ["U0001-N01", "U0001-N02"],
+            "notes_example_ids": ["U0001-E01"],
+        }
+        report = coverage_report(content_map, summary)
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["notes_number_coverage"], 1.0)
+        summary["notes_example_ids"] = []
+        report = coverage_report(content_map, summary)
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["notes_missing_example_ids"], ["U0001-E01"])
+
+
+class SourceRelevanceTests(unittest.TestCase):
+    def test_cache_materializes_title_excerpt_hash_and_references(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "editorial_corrections.json").write_text(json.dumps({
+                "schema_version": 1,
+                "corrections": [{
+                    "correction_id": "EC0001",
+                    "source_urls": ["https://example.com/study"],
+                }],
+            }), encoding="utf-8")
+
+            def fetcher(url):
+                return {
+                    "status": "fetched", "http_status": 200,
+                    "final_url": url, "content_type": "text/html",
+                    "title": "Relationship study",
+                    "excerpt": "This study examines relationship satisfaction.",
+                    "content_sha256": "a" * 64,
+                }
+
+            payload = refresh_source_relevance_cache(
+                folder, fetcher=fetcher)
+            refs = expected_source_references(folder)
+        self.assertEqual(validate_source_relevance_cache(payload, refs), [])
+        entry = payload["entries"]["https://example.com/study"]
+        self.assertEqual(entry["source_ids"], ["EC0001"])
+        self.assertEqual(entry["title"], "Relationship study")
+
+    def test_cache_rejects_failed_or_unreferenced_entries(self):
+        refs = {"https://example.com/study": ["EC0001"]}
+        payload = {
+            "schema_version": 1,
+            "entries": {
+                "https://example.com/study": {
+                    "status": "error", "error": "timeout",
+                    "source_ids": ["EC0001"], "content_sha256": "",
+                    "title": "", "excerpt": "",
+                },
+                "https://example.com/extra": {
+                    "status": "fetched", "source_ids": [],
+                    "content_sha256": "b" * 64, "title": "extra",
+                    "excerpt": "extra",
+                },
+            },
+        }
+        errors = validate_source_relevance_cache(payload, refs)
+        self.assertTrue(any("抓取失败" in error for error in errors))
+        self.assertTrue(any("未引用 URL" in error for error in errors))
 
 
 class EditorialCorrectionTests(unittest.TestCase):

@@ -59,10 +59,19 @@ try:
         validate_provenance,
     )
     from content_finalizer import validate_tts_readiness
+    from canonical_entities import (
+        public_entity_alias_errors,
+        validate_canonical_entities,
+    )
     from claim_evidence import PROGRESS_FILENAME, validate_progress
     from editorial_corrections import (
         load_editorial_corrections,
         validate_editorial_corrections,
+    )
+    from source_relevance import (
+        CACHE_FILENAME as SOURCE_RELEVANCE_CACHE,
+        expected_source_references,
+        validate_source_relevance_cache,
     )
     from tts import load_tts_lexicon
     from claim_taxonomy import validate_review_fact_checks
@@ -85,10 +94,19 @@ except ImportError:  # package import
         validate_provenance,
     )
     from scripts.content_finalizer import validate_tts_readiness
+    from scripts.canonical_entities import (
+        public_entity_alias_errors,
+        validate_canonical_entities,
+    )
     from scripts.claim_evidence import PROGRESS_FILENAME, validate_progress
     from scripts.editorial_corrections import (
         load_editorial_corrections,
         validate_editorial_corrections,
+    )
+    from scripts.source_relevance import (
+        CACHE_FILENAME as SOURCE_RELEVANCE_CACHE,
+        expected_source_references,
+        validate_source_relevance_cache,
     )
     from scripts.tts import load_tts_lexicon
     from scripts.claim_taxonomy import validate_review_fact_checks
@@ -507,6 +525,21 @@ def build_quality_report(folder, strict=True, *, today=None):
     summary_map_path = folder / "summary_map.json"
     if content_map_path.exists():
         content_map = load_json(content_map_path)
+        entities_path = folder / "canonical_entities.json"
+        if content_map.get("canonical_entities_contract_version") == 1:
+            if not entities_path.exists():
+                entity_errors = ["缺少 canonical_entities.json"]
+            else:
+                entity_payload = load_json(entities_path)
+                entity_errors = validate_canonical_entities(
+                    entity_payload, raw or {})
+                entity_errors.extend(public_entity_alias_errors(
+                    entity_payload, notes_text, briefing_text))
+            report["canonical_entities"] = {
+                "validation_errors": entity_errors,
+            }
+            extend_errors(
+                report, CONTENT_MAP_VALIDATION, entity_errors)
         corrections_path = folder / "editorial_corrections.json"
         if corrections_path.exists():
             correction_errors = validate_editorial_corrections(
@@ -519,6 +552,17 @@ def build_quality_report(folder, strict=True, *, today=None):
             }
             extend_errors(
                 report, CONTENT_MAP_VALIDATION, correction_errors)
+        relevance_path = folder / SOURCE_RELEVANCE_CACHE
+        if relevance_path.exists():
+            relevance_payload = load_json(relevance_path)
+            relevance_errors = validate_source_relevance_cache(
+                relevance_payload, expected_source_references(folder))
+            report["source_relevance_cache"] = {
+                "validation_errors": relevance_errors,
+                "entry_count": len(relevance_payload.get("entries", {})),
+            }
+            extend_errors(
+                report, CONTENT_MAP_VALIDATION, relevance_errors)
         progress_path = folder / PROGRESS_FILENAME
         if progress_path.exists():
             progress_payload = load_json(progress_path)
