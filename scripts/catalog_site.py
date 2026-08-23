@@ -17,6 +17,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CONTENT_DIR = BASE_DIR / "content"
 SITE_DIR = BASE_DIR / "site"
 CATALOG = CONTENT_DIR / "播客目录.md"
+PUBLIC_ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
+PUBLIC_ASSET_SUFFIXES = {".avif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 
 # Injected by the catalog facade; defaults keep direct module imports usable.
 try:
@@ -140,6 +142,13 @@ def sync_site(only=None, *, strict_names=None):
     eps = [_build_entry(name, existing.get(name, {})) for name in names]
 
     SITE_DIR.mkdir(parents=True, exist_ok=True)
+    asset_target = SITE_DIR / "assets"
+    if PUBLIC_ASSET_DIR.exists():
+        asset_target.mkdir(parents=True, exist_ok=True)
+        for asset in PUBLIC_ASSET_DIR.iterdir():
+            if asset.is_file() and asset.suffix.lower() in PUBLIC_ASSET_SUFFIXES:
+                atomic_write_bytes(
+                    asset_target / asset.name, asset.read_bytes())
     atomic_write_json(site_json_path, eps)
     copied = len(names) if only is None else (1 if only in names else 0)
     print(f"[站点] {len(eps)} 期 → {site_json_path.name}（content.html 已同步 {copied} 期）")
