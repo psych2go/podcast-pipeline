@@ -7,6 +7,12 @@ from pathlib import Path
 
 try:
     from atomic_io import atomic_write_text
+    from canonical_entities import (
+        GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
+        SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
+        public_entity_alias_errors,
+        validate_canonical_entities,
+    )
     from claim_evidence import refine_claim_evidence
     from content_map import (
         body_sha256,
@@ -14,6 +20,7 @@ try:
         enrich_summary_map_evidence,
         init_content_map,
         load_json,
+        normalize_detail_items,
         normalize_summary_claim_ids,
         save_json,
         IMPORTANCE_VALUES,
@@ -36,6 +43,12 @@ try:
     from tts import load_tts_lexicon
 except ImportError:
     from scripts.atomic_io import atomic_write_text
+    from scripts.canonical_entities import (
+        GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
+        SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
+        public_entity_alias_errors,
+        validate_canonical_entities,
+    )
     from scripts.claim_evidence import refine_claim_evidence
     from scripts.content_map import (
         body_sha256,
@@ -43,6 +56,7 @@ except ImportError:
         enrich_summary_map_evidence,
         init_content_map,
         load_json,
+        normalize_detail_items,
         normalize_summary_claim_ids,
         save_json,
         IMPORTANCE_VALUES,
@@ -259,6 +273,17 @@ def _content_map_is_valid(folder):
         return False
 
 
+def _canonical_entities_is_valid(folder, transcript):
+    path = Path(folder) / "canonical_entities.json"
+    if not path.exists():
+        return False
+    try:
+        payload = load_json(path)
+    except (OSError, ValueError, TypeError):
+        return False
+    return not validate_canonical_entities(payload, transcript)
+
+
 def content_pipeline_needed(folder, force=False):
     """Return whether semantic content artifacts need generation or repair."""
     folder = Path(folder)
@@ -281,6 +306,11 @@ def content_pipeline_needed(folder, force=False):
         transcript = load_json(folder / "transcript.raw.json")
         content_map = load_json(folder / "content_map.json")
         if content_map.get("schema_version", 1) < 3:
+            return True
+        if (
+                content_map.get("canonical_entities_contract_version")
+                == CANONICAL_ENTITIES_VERSION
+                and not _canonical_entities_is_valid(folder, transcript)):
             return True
         notes_text = (folder / "中文完整笔记.md").read_text(encoding="utf-8")
         briefing_text = (folder / "讲书稿.md").read_text(encoding="utf-8")
@@ -534,6 +564,7 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                 raise RuntimeError("content_map subagent 输出必须是对象")
             payload = dict(seed)
             payload["units"] = generated.get("units")
+            normalize_detail_items(payload)
             stage_errors = _validate_content_map_stage(payload, raw)
             if stage_errors:
                 if stage is not None:
@@ -579,6 +610,70 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
             if stage is not None:
                 stage.metrics.update(metrics)
 
+    entities_path = folder / "canonical_entities.json"
+    entities_ready = (
+        not force and content_map_ready
+        and _canonical_entities_is_valid(folder, raw)
+    )
+    with _stage(run_report, "subagent_canonical_entities") as stage:
+        if entities_ready:
+            entities = load_json(entities_path)
+            content_map = load_json(content_map_path)
+            if content_map.get("canonical_entities_contract_version") != (
+                    CANONICAL_ENTITIES_VERSION):
+                content_map["canonical_entities_contract_version"] = (
+                    CANONICAL_ENTITIES_VERSION)
+                save_json(content_map_path, content_map)
+            if stage is not None:
+                stage.metrics.update({
+                    "skipped": True,
+                    "reason": "valid canonical entity ledger",
+                    "entity_count": len(entities.get("entities", [])),
+                })
+        else:
+            result = run_json_task(
+                folder,
+                """读取 transcript.raw.json、转录_纠错.txt（若存在）和 content_map.json。
+为所有可能进入中文笔记或讲稿的人名、公司、产品、机构、作品标题、地点和关键术语
+建立规范实体表。observed_names 必须列出转录或 content-map 中实际出现的拼写，包括
+ASR 错词和大小写变体；canonical_name 使用官方规范名称；public_aliases 只列允许在
+公开中文稿继续使用的安全简称（例如姓氏或通行缩写），不得包含 ASR 错词。person/company/product/
+institution/title 必须提供官方或一手来源 URL。segment_ids 只能引用实体实际出现的
+Sxxxx。不要把普通名词、整句 claim 或未经来源确认的猜测当作实体。只返回 schema
+JSON，不修改文件。""",
+                CANONICAL_ENTITIES_SCHEMA,
+                task_name="canonical_entities",
+                enable_search=True,
+                model=os.environ.get("SUBAGENT_ENTITY_MODEL", "") or None,
+                timeout=1200,
+            )
+            generated = result.get("payload")
+            if not isinstance(generated, dict):
+                raise RuntimeError("canonical entity subagent 输出必须是对象")
+            entities = {
+                "schema_version": CANONICAL_ENTITIES_VERSION,
+                "evidence_revision": (
+                    (raw.get("evidence", {}) or {}).get("revision_sha256")
+                    or (raw.get("evidence", {}) or {}).get("transcript_sha256")
+                ),
+                "entities": generated.get("entities"),
+            }
+            entity_errors = validate_canonical_entities(entities, raw)
+            if entity_errors:
+                if stage is not None:
+                    stage.fail("; ".join(entity_errors[:10]))
+                return False
+            save_json(entities_path, entities)
+            content_map = load_json(content_map_path)
+            content_map["canonical_entities_contract_version"] = (
+                CANONICAL_ENTITIES_VERSION)
+            save_json(content_map_path, content_map)
+            if stage is not None:
+                stage.metrics.update({
+                    "entity_count": len(entities.get("entities", [])),
+                    "structured_output": True,
+                })
+
     with _stage(run_report, "subagent_content_writing") as stage:
         notes_path = folder / "中文完整笔记.md"
         briefing_path = folder / "讲书稿.md"
@@ -586,22 +681,23 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
         run_edit_task(
             folder,
             f"""读取 transcript.raw.json、原始转录.txt，
-如果存在则读取 转录_纠错.txt，并读取已经完成的 content_map.json。
+如果存在则读取 转录_纠错.txt、canonical_entities.json，并读取已经完成的 content_map.json。
 
 按顺序完成：
 1. 先写 中文完整笔记.md，逐项覆盖所有 included high/medium unit 的
 claims、numbers 和 examples，保留人物归属、限定条件、时间顺序和推理链。
 2. 再写 讲书稿.md，将完整笔记整理为适合中文收听的讲书稿。
 3. 最后写 summary_map.json，映射章节标题、unit_ids 和 claim_ids；并显式填写
-notes_claim_ids，只能列入中文完整笔记正文实际覆盖的 claim。若仍有 high/medium claim
-未覆盖，先补写笔记，再将其加入 notes_claim_ids。
+notes_claim_ids、notes_number_ids、notes_example_ids，只能列入中文完整笔记正文实际
+覆盖的 claim/number/example。若仍有必需项未覆盖，先补写笔记，再加入对应 ID。
 
 要求：
+- 必须使用 canonical_entities.json 中的 canonical_name；observed_names 只用于定位原始错误，不得泄漏到公开文本；
 - 不得编造转录之外的观点；
 - 不得遗漏 included high/medium 的 claims、numbers 或 examples；
 - 必须保持 content_map.claim_modalities：conditional 继续使用“如果/即使/可能”，prediction 继续标明预测，opinion/recommendation 保留说话人归因，禁止改写为已发生事实；
 - 完成前按中文汉字数自检：中文完整笔记必须至少比讲书稿多百分之十五；不足时只能从转录和 content_map 补充证据细节、数字范围、例子、限定条件与推理链，禁止用重复或空话凑字数；
-- 中文完整笔记必须逐项覆盖 content_map 的 examples，讲稿出现的证据例子不得只存在于讲稿；
+- 中文完整笔记必须逐项覆盖 content_map 的 number_items 和 example_items；summary_map 中分别用完整 ID（如 U0001-N01、U0001-E01）声明，讲稿出现的证据细节不得只存在于讲稿；
 - 不要修改 content_map.json 或任何证据文件；
 - 第一个 ## 前写 50–100 字全局导览；
 - 每章正文必须包含 420–900 个中文汉字（按汉字计数，不是总字符），禁止超过 1000；
@@ -619,7 +715,7 @@ notes_claim_ids，只能列入中文完整笔记正文实际覆盖的 claim。�
             input_files=[
                 path for path in (
                     raw_path, transcript_path, correction_path,
-                    content_map_path, source_path)
+                    content_map_path, entities_path, source_path)
                 if path.exists()
             ],
             required_files=[notes_path, briefing_path, summary_path],
@@ -663,8 +759,10 @@ notes_claim_ids，只能列入中文完整笔记正文实际覆盖的 claim。�
             content_map,
             notes_text,
         )
-        if errors or summary_errors:
-            all_errors = errors + summary_errors
+        entity_alias_errors = public_entity_alias_errors(
+            load_json(entities_path), notes_text, briefing_text)
+        if errors or summary_errors or entity_alias_errors:
+            all_errors = errors + summary_errors + entity_alias_errors
             if stage is not None:
                 stage.fail("; ".join(all_errors[:10]))
             return False

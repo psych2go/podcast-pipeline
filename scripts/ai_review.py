@@ -18,6 +18,7 @@ try:
     from atomic_io import atomic_write_json
     from evidence import ASR_SOURCE_KINDS, effective_source_kind
     from run_report import RunReport
+    from source_relevance import refresh_source_relevance_cache
     from subagent import run_json_task
     from fact_check_cache import (
         CACHE_FILENAME, build_cache_context, update_cache_from_review)
@@ -38,6 +39,7 @@ except ImportError:
     from scripts.atomic_io import atomic_write_json
     from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
     from scripts.run_report import RunReport
+    from scripts.source_relevance import refresh_source_relevance_cache
     from scripts.subagent import run_json_task
     from scripts.fact_check_cache import (
         CACHE_FILENAME, build_cache_context, update_cache_from_review)
@@ -66,7 +68,8 @@ REVIEW_FILES = (
     "来源.md",
 )
 OPTIONAL_REVIEW_FILES = (
-    "转录_纠错.txt", "tts_lexicon.json", "editorial_corrections.json")
+    "转录_纠错.txt", "tts_lexicon.json", "editorial_corrections.json",
+    "canonical_entities.json", "source_relevance_cache.json")
 
 REVIEW_SCHEMA = {
     "type": "object",
@@ -516,7 +519,7 @@ def _prompt(folder, scope=None):
 {folder}
 {scope_instruction}{cache_instruction}
 
-必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt、tts_lexicon.json 和 editorial_corrections.json。editorial_corrections.json 只记录外部校正，不得把其中事实伪装成 transcript evidence。
+必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt、tts_lexicon.json、editorial_corrections.json、canonical_entities.json 和 source_relevance_cache.json。editorial_corrections.json 只记录外部校正，不得把其中事实伪装成 transcript evidence；canonical_entities.json 是公开名称真源；source_relevance_cache.json 的网页标题和摘录必须与对应 claim/correction 语义相关，URL 可访问不等于来源支持主张。
 
 审查目标：无需人工复核也能直接发布。请执行：
 1. 抽查所有章节和对应时间片，检查脑补、漏点、人物归属和逻辑链。
@@ -565,7 +568,8 @@ def _prompt(folder, scope=None):
 12. 检查讲稿是否适合中文 TTS：阿拉伯数字、英文缩写、专有名词、难读符号和可能误读的混合表达。
    如果存在 tts_lexicon.json，还要检查替换是否会改变原意、误替换子串或引入错误读音。
 13. 检查 summary_map 是否真实反映讲稿，而不是只自报 unit IDs。
-   同时检查 notes_claim_ids 与中文完整笔记正文是否真实对应。
+   同时检查 notes_claim_ids、notes_number_ids、notes_example_ids 与中文完整笔记正文
+   是否真实对应；detail item ID 必须逐项绑定 content_map 的 Nxx/Exx。
    哈希规范化规则与 scripts/content_map.py 一致：讲稿按换行后紧跟“## ”切章，
    body_sha256 只计算标题行之后的章节正文，正文先 strip 再做 UTF-8 SHA-256；
    notes_sha256 对中文完整笔记全文先 strip 再做 UTF-8 SHA-256。请按此规则复核，
@@ -719,6 +723,7 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
         f"[AI审查] subagent model={model or 'default'} "
         f"effort={effort} folder={folder.name}",
         file=sys.stderr, flush=True)
+    refresh_source_relevance_cache(folder)
     input_snapshot = reviewed_hashes(folder)
     context_snapshot = review_context_hashes(folder)
     scope = review_scope(folder)
