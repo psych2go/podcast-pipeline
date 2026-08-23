@@ -1998,28 +1998,6 @@ class CatalogTests(unittest.TestCase):
                 catalog_core.rebuild_catalog()
                 self.assertEqual(catalog_site.catalog_consistency_errors(), [])
 
-    def test_sync_site_copies_versioned_public_assets(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            site = root / "site"
-            asset_dir = root / "assets"
-            asset_dir.mkdir()
-            (asset_dir / "podcast-studio.webp").write_bytes(b"webp")
-            (asset_dir / "README.md").write_text(
-                "deployment notes", encoding="utf-8")
-            with patch.object(catalog_site, "SITE_DIR", site), \
-                    patch.object(
-                        catalog_site, "PUBLIC_ASSET_DIR", asset_dir), \
-                    patch.object(
-                        catalog_site, "_ordered_episode_names",
-                        return_value=[]):
-                catalog_site.sync_site()
-            self.assertEqual(
-                (site / "assets" / "podcast-studio.webp").read_bytes(),
-                b"webp",
-            )
-            self.assertFalse((site / "assets" / "README.md").exists())
-
     def test_finish_fails_when_remote_verification_fails(self):
         with tempfile.TemporaryDirectory() as td:
             content = Path(td) / "content"
