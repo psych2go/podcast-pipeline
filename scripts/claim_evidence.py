@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -214,6 +215,7 @@ def _prompt(batch):
 - primary_segment_ids 只能放直接支持整条 claim 的最小片段，至少一项。
 - context_segment_ids 只放归因、限定或背景所需的相邻片段，可为空。
 - 两组 ID 只能从该 unit 提供的 segments.id 中选择，不能重复。
+- text 是不可改写的 raw evidence；corrected_text 若存在，是同一 segment 的规范化纠错文本。可用 corrected_text 理解 ASR 专名或漏词，但 segment ID 和证据哈希仍绑定 raw evidence，不得声称已听音频。
 - 禁止为了省事把整个 unit 的全部片段复制给每条 claim，除非每个片段确实都不可缺少。
 - 不要根据常识补证据；转录没有充分支持时 confidence=low。
 - rationale 用一句中文说明为什么这些片段足以支持 claim。
@@ -225,8 +227,35 @@ def _prompt(batch):
 """
 
 
+def _corrected_segment_texts(folder, transcript):
+    corrected_path = Path(folder) / "转录_纠错.txt"
+    if not corrected_path.exists():
+        return {}
+    source_segments = [
+        segment for segment in transcript.get("segments", [])
+        if isinstance(segment, dict)
+        and segment.get("id")
+        and str(segment.get("text", "")).strip()
+    ]
+    paragraphs = [
+        paragraph.strip()
+        for paragraph in re.split(
+            r"\n\s*\n", corrected_path.read_text(encoding="utf-8"))
+        if paragraph.strip()
+    ]
+    if len(paragraphs) != len(source_segments):
+        return {}
+    return {
+        segment["id"]: paragraph
+        for segment, paragraph in zip(source_segments, paragraphs)
+    }
+
+
 def _unit_payloads(
-        content_map, transcript, unit_ids=None, skip_complete=False):
+        content_map, transcript, unit_ids=None, skip_complete=False,
+        folder=None):
+    corrected_by_id = (
+        _corrected_segment_texts(folder, transcript) if folder else {})
     segments = {
         segment.get("id"): {
             "id": segment.get("id"),
@@ -234,6 +263,7 @@ def _unit_payloads(
             "end": segment.get("end"),
             "synthetic_boundary": segment.get("synthetic_boundary", False),
             "text": segment.get("text", ""),
+            "corrected_text": corrected_by_id.get(segment.get("id")),
         }
         for segment in transcript.get("segments", [])
         if segment.get("id")
@@ -308,6 +338,12 @@ def _normalize_mapping_roles(mappings):
     return normalized
 
 
+def _batch_label(value):
+    if isinstance(value, int):
+        return f"{value:03d}"
+    return str(value).replace("/", "_").replace(" ", "_")
+
+
 def _run_batch(folder, batch, model, effort, batch_index):
     result = run_json_task(
         folder,
@@ -316,7 +352,7 @@ def _run_batch(folder, batch, model, effort, batch_index):
             "只返回符合 schema 的 JSON，不修改任何文件。"
         ),
         CLAIM_EVIDENCE_SCHEMA,
-        task_name=f"claim_evidence_{batch_index:03d}",
+        task_name=f"claim_evidence_{_batch_label(batch_index)}",
         model=model or None,
         timeout=600,
     )
@@ -328,6 +364,53 @@ def _run_batch(folder, batch, model, effort, batch_index):
             "claim evidence 返回值必须是对象或 claim 数组")
     payload["claims"] = _normalize_mapping_roles(payload.get("claims", []))
     return payload, result
+
+
+def _retry_low_confidence_units(
+        folder, batch, mappings, model, batch_index):
+    low_unit_ids = {
+        str(item.get("claim_id", "")).rsplit("-C", 1)[0]
+        for item in mappings
+        if isinstance(item, dict) and item.get("confidence") == "low"
+    }
+    if not low_unit_ids:
+        return mappings, []
+    by_unit = {item["unit_id"]: item for item in batch}
+    merged = list(mappings)
+    wrappers = []
+    for retry_index, unit_id in enumerate(sorted(low_unit_ids), start=1):
+        item = by_unit.get(unit_id)
+        if item is None:
+            raise RuntimeError(
+                f"low confidence claim 引用了未知 unit: {unit_id}")
+        payload, wrapper = _run_batch(
+            folder,
+            [item],
+            model,
+            "max",
+            f"{batch_index}_low_{retry_index}",
+        )
+        retry_mappings = payload.get("claims", [])
+        expected_ids = {
+            claim["claim_id"] for claim in item.get("claims", [])
+        }
+        returned_ids = {
+            value.get("claim_id")
+            for value in retry_mappings if isinstance(value, dict)
+        }
+        if returned_ids != expected_ids:
+            raise RuntimeError(
+                f"low confidence 单 unit 复核返回集合不完整: "
+                f"unit={unit_id}, expected={sorted(expected_ids)}, "
+                f"actual={sorted(returned_ids)}")
+        merged = [
+            value for value in merged
+            if not str(value.get("claim_id", "")).startswith(
+                f"{unit_id}-C")
+        ]
+        merged.extend(retry_mappings)
+        wrappers.append(wrapper)
+    return merged, wrappers
 
 
 def refine_claim_evidence(
@@ -371,6 +454,7 @@ def refine_claim_evidence(
         transcript,
         selected_ids,
         skip_complete=True,
+        folder=folder,
     )
     pending_unit_ids = {
         payload.get("unit_id") for payload in payloads
@@ -459,6 +543,15 @@ def refine_claim_evidence(
             try:
                 payload, wrapper = future.result()
                 batch_mappings = payload.get("claims", [])
+                batch_mappings, low_retry_wrappers = (
+                    _retry_low_confidence_units(
+                        folder,
+                        batch,
+                        batch_mappings,
+                        model,
+                        batch_index,
+                    )
+                )
                 batch_unit_ids = {
                     item["unit_id"] for item in batch
                 }
@@ -471,6 +564,7 @@ def refine_claim_evidence(
                 save_json(content_map_path, content_map)
                 mappings.extend(batch_mappings)
                 wrappers.append(wrapper)
+                wrappers.extend(low_retry_wrappers)
                 checkpoint_completed(batch_unit_ids)
             except Exception as exc:
                 if not allow_fallback:
@@ -485,6 +579,15 @@ def refine_claim_evidence(
                                     f"{batch_index}_{unit_index}",
                                 )
                                 batch_mappings = payload.get("claims", [])
+                                batch_mappings, low_retry_wrappers = (
+                                    _retry_low_confidence_units(
+                                        folder,
+                                        [item],
+                                        batch_mappings,
+                                        model,
+                                        f"{batch_index}_{unit_index}",
+                                    )
+                                )
                                 content_map, transcript = (
                                     apply_claim_evidence_mapping(
                                         content_map,
@@ -496,6 +599,7 @@ def refine_claim_evidence(
                                 save_json(content_map_path, content_map)
                                 mappings.extend(batch_mappings)
                                 wrappers.append(wrapper)
+                                wrappers.extend(low_retry_wrappers)
                                 checkpoint_completed({item["unit_id"]})
                                 recovered_unit_count += 1
                             except Exception as unit_exc:
@@ -583,6 +687,19 @@ def refine_claim_evidence(
 
     errors, warnings = validate_content_map(content_map, transcript)
     if errors:
+        failed_from_validation = set(re.findall(
+            r"\bU\d{4,}\b", " ".join(errors))) & target_unit_ids
+        if not failed_from_validation:
+            failed_from_validation = set(target_unit_ids)
+        _write_progress(
+            folder,
+            transcript,
+            target=target_unit_ids,
+            completed=target_unit_ids - failed_from_validation,
+            pending=failed_from_validation,
+            failed=failed_from_validation,
+            status="invalid_result",
+        )
         raise RuntimeError(
             "claim evidence 精炼后校验失败: " + "; ".join(errors[:10]))
     content_map["claim_evidence_refiner"] = {

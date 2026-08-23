@@ -8,8 +8,11 @@ TTS or diarization credentials.  Individual pipeline stages call
 import os
 from pathlib import Path
 
-# Project root = parent of scripts/
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Code root contains scripts and public assets. PODCAST_ROOT may point at a
+# separate private workspace containing .env, content, and generated site data.
+CODE_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(os.environ.get(
+    "PODCAST_ROOT", str(CODE_ROOT))).expanduser().resolve()
 
 
 def _load_dotenv(path):
@@ -78,6 +81,10 @@ FISH_KEY = os.environ.get("FISH_KEY", "")
 FISH_VOICE = os.environ.get("FISH_VOICE", "b561236e80b04f22843c6637682b5478")
 FISH_MODEL = os.environ.get("FISH_MODEL", "s2.1-pro-free")
 BASE_DIR = Path(os.environ.get("PODCAST_DIR", str(PROJECT_ROOT / "content")))
+SITE_DIR = Path(os.environ.get(
+    "PODCAST_SITE_DIR", str(PROJECT_ROOT / "site")))
+CATALOG_PATH = Path(os.environ.get(
+    "PODCAST_CATALOG", str(BASE_DIR / "播客目录.md")))
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 R2_PUBLIC_URL = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
 R2_BUCKET = os.environ.get("R2_BUCKET", "podcast-audio")

@@ -174,13 +174,49 @@ def _run_with_output(cmd, cwd, dry_run=False):
         return False, str(exc)
 
 def _run(cmd, cwd, dry_run=False):
+    if _is_wrangler_command(cmd):
+        return _run_wrangler(cmd, dry_run=dry_run)[0]
     return _run_with_output(cmd, cwd, dry_run=dry_run)[0]
 
+def _wrangler_retryable(output):
+    text = str(output or "").casefold()
+    return any(marker in text for marker in (
+        "fetch failed",
+        "connectivity issue",
+        "connection reset",
+        "connection timed out",
+        "network error",
+        "timed out",
+        "too many requests",
+        "status code 429",
+        "status code 500",
+        "status code 502",
+        "status code 503",
+        "status code 504",
+    ))
+
+
 def _run_wrangler(cmd, dry_run=False):
-    """Run Wrangler away from the repository .env using OAuth by default."""
+    """Run Wrangler with bounded retries for transient network failures."""
     if not _is_wrangler_command(cmd):
         raise ValueError("_run_wrangler 只接受 Wrangler 命令")
-    return _run_with_output(cmd, SITE_DIR, dry_run=dry_run)
+    if dry_run:
+        return _run_with_output(cmd, SITE_DIR, dry_run=True)
+    max_retries = max(0, int(os.environ.get("WRANGLER_MAX_RETRIES", "2")))
+    backoff = max(0.0, float(os.environ.get("WRANGLER_RETRY_BACKOFF", "2")))
+    result = (False, "")
+    for attempt in range(max_retries + 1):
+        result = _run_with_output(cmd, SITE_DIR, dry_run=False)
+        ok, output = result
+        if ok or attempt >= max_retries or not _wrangler_retryable(output):
+            return result
+        delay = min(30.0, backoff * (2 ** attempt))
+        print(
+            f"[Wrangler] 网络错误，{delay:g}s 后重试 "
+            f"({attempt + 1}/{max_retries})...")
+        if delay:
+            time.sleep(delay)
+    return result
 
 def _verify_publish_with_retry(*args, attempts=4, delay=3):
     """Retry only transient Pages propagation failures after a deployment."""
@@ -433,10 +469,10 @@ def _finish_impl(name, dry_run, run_report):
                 "dry_run": True,
                 "project": PAGES_PROJECT,
         }):
-            _run_with_output(
+            _run_wrangler(
                 ["npx", "wrangler", "pages", "deploy", ".",
                  "--project-name", PAGES_PROJECT, "--branch", "main"],
-                cwd=SITE_DIR, dry_run=True,
+                dry_run=True,
             )
         print("[完成] dry-run：未修改 site、台账、首页或 release 状态")
         return True
@@ -490,10 +526,10 @@ def _finish_impl(name, dry_run, run_report):
             "project": PAGES_PROJECT,
     }) as stage:
         print("[部署] Pages 部署 ...")
-        deployed, deploy_output = _run_with_output(
+        deployed, deploy_output = _run_wrangler(
             ["npx", "wrangler", "pages", "deploy", ".",
              "--project-name", PAGES_PROJECT, "--branch", "main"],
-            cwd=SITE_DIR, dry_run=False,
+            dry_run=False,
         )
         if not deployed:
             print("[发布] Pages 部署失败")
@@ -637,12 +673,11 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
     if dry_run:
         for item in items:
             _upload_r2_item(item, dry_run=True)
-        _run_with_output(
+        _run_wrangler(
             [
                 "npx", "wrangler", "pages", "deploy", ".",
                 "--project-name", PAGES_PROJECT, "--branch", "main",
             ],
-            cwd=SITE_DIR,
             dry_run=True,
         )
         print(
@@ -721,12 +756,11 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
                 item["folder"], "site_ready")
 
     print(f"[部署] Pages 批量部署 {len(items)} 期 ...")
-    deployed, deploy_output = _run_with_output(
+    deployed, deploy_output = _run_wrangler(
         [
             "npx", "wrangler", "pages", "deploy", ".",
             "--project-name", PAGES_PROJECT, "--branch", "main",
         ],
-        cwd=SITE_DIR,
         dry_run=False,
     )
     if not deployed:

@@ -678,6 +678,32 @@ class WranglerIsolationTests(unittest.TestCase):
         kwargs = run.call_args.kwargs
         self.assertEqual(kwargs["cwd"], site)
         self.assertNotIn("CLOUDFLARE_API_TOKEN", kwargs["env"])
+    def test_wrangler_retries_transient_fetch_failure(self):
+        command = ["npx", "wrangler", "r2", "bucket", "list"]
+        with patch.dict(os.environ, {
+                "WRANGLER_MAX_RETRIES": "2",
+                "WRANGLER_RETRY_BACKOFF": "0",
+        }, clear=False), patch.object(
+                catalog, "_run_with_output", side_effect=[
+                    (False, "ERROR fetch failed due to connectivity issue"),
+                    (True, "ok"),
+                ]) as run:
+            ok, output = catalog._run_wrangler(command)
+        self.assertTrue(ok)
+        self.assertEqual(output, "ok")
+        self.assertEqual(run.call_count, 2)
+
+    def test_wrangler_does_not_retry_permission_failure(self):
+        command = ["npx", "wrangler", "r2", "bucket", "list"]
+        with patch.dict(os.environ, {
+                "WRANGLER_MAX_RETRIES": "2",
+                "WRANGLER_RETRY_BACKOFF": "0",
+        }, clear=False), patch.object(
+                catalog, "_run_with_output",
+                return_value=(False, "ERROR authentication permission denied")) as run:
+            ok, _output = catalog._run_wrangler(command)
+        self.assertFalse(ok)
+        self.assertEqual(run.call_count, 1)
 
 
 if __name__ == "__main__":
