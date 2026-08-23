@@ -68,6 +68,7 @@ except ImportError:
         sha256_file as _source_sha256, sha256_text as _text_sha256)
 from preflight import quality_gate as shared_quality_gate
 from agent_pipeline import content_pipeline_needed, run_content_pipeline
+from rebuild_plan import build_rebuild_plan
 from release import prepare_release
 from run_report import RunReport
 from tts import build_tts_plan
@@ -921,12 +922,20 @@ def _process_impl(source, name, folder, run_report, options):
 
     # ---- 抓取后：默认由 subagent 自动生成内容 ----
     briefing_file, briefing_path = detect_briefing(folder)
+    rebuild_plan = build_rebuild_plan(folder, force=force_refetch)
+    with _stage(run_report, "rebuild_plan", rebuild_plan):
+        pass
     needs_content = (
         not fetch_only
         and auto_content
         and content_pipeline_needed(folder, force=force_refetch)
     )
     if needs_content:
+        reasons = rebuild_plan.get("reasons") or ["deterministic_validation"]
+        print(
+            "[内容计划] " + ", ".join(reasons[:8]),
+            flush=True,
+        )
         print("[内容] 内容产物缺失、过期或不完整，启动 subagent 编排...", flush=True)
         if not run_content_pipeline(
                 folder,

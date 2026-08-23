@@ -62,6 +62,15 @@ custom provider 的环境仍可认证，同时不会加载用户自动化扩展�
 
 ## 2. 核心模块
 
+### `rebuild_plan.py` 与 `editorial_corrections.py`
+
+`rebuild_plan.py` 以只读 shadow mode 记录缺失产物、转录依据漂移、受影响阶段、
+unit 和章节；实际执行仍由 `process.py` 控制。完成真实长单集校准前，planner 不会
+绕过现有全量质量门。
+
+`editorial_corrections.py` 校验外部事实校正台账。校正必须绑定 content-map claim、
+公开处理文本、来源 URL、日期和风险域；该台账属于 review 输入，但绝不冒充转录证据。
+
 ### `episode.py`
 
 `episode.json` 是单集元数据真源：
@@ -219,6 +228,13 @@ Podscripts 只有在明确的证书校验异常时才允许 source-scoped TLS �
 ```
 
 ### `content_map.py`
+
+`content_map.json` 生成使用只读 structured output；agent 只返回 unit 分组和语义字段，
+哈希由确定性代码补齐。claim-evidence 前的 stage validator 会拒绝未知 status、空或未知
+segment、无证据 unit、excluded claim 和未记账源片段，避免结构错误进入昂贵模型调用。
+
+claim evidence 可记录直接支持的 `primary_segment_ids` 与仅提供归因/限定的
+`context_segment_ids`，同时派生旧版扁平数组保持已发布 v3 数据可读。
 
 evidence v3 的约束：
 

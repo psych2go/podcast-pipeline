@@ -118,6 +118,53 @@ class ClaimTaxonomyTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
 
+    def test_firsthand_high_risk_recommendation_allows_safety_cross_check(self):
+        recommendation = fact_check(
+            claim="嘉宾建议公共安全 AI 始终保留人在回路",
+            claim_type="guest_opinion",
+            assertion_type="recommendation",
+            verification_mode="safety_cross_check",
+            risk_domain="safety",
+            verdict="qualified",
+            source_urls=["https://example.com/safety-guidance"],
+        )
+        errors, _warnings = _ai_fact_check_consistency(
+            {"schema_version": 3, "fact_checks": [recommendation]},
+            valid_claim_ids={"U0001-C01"},
+        )
+        self.assertEqual(errors, [])
+
+    def test_firsthand_allegation_uses_source_document_rules(self):
+        allegation = fact_check(
+            claim="嘉宾指控公司组织媒体宣传",
+            claim_type="not_applicable",
+            assertion_type="allegation",
+            verification_mode="source_document_required",
+            verdict="accurately_reported",
+            source_urls=["https://example.com/source"],
+        )
+        errors, _warnings = _ai_fact_check_consistency(
+            {"schema_version": 3, "fact_checks": [allegation]},
+            valid_claim_ids={"U0001-C01"},
+        )
+        self.assertEqual(errors, [])
+
+    def test_firsthand_high_risk_explanation_allows_safety_cross_check(self):
+        explanation = fact_check(
+            claim="嘉宾解释越狱模型可能带来生物安全风险",
+            claim_type="not_applicable",
+            assertion_type="explanation",
+            verification_mode="safety_cross_check",
+            risk_domain="safety",
+            verdict="qualified",
+            source_urls=["https://example.com/safety-research"],
+        )
+        errors, _warnings = _ai_fact_check_consistency(
+            {"schema_version": 3, "fact_checks": [explanation]},
+            valid_claim_ids={"U0001-C01"},
+        )
+        self.assertEqual(errors, [])
+
     def test_high_risk_recommendation_requires_safety_cross_check(self):
         recommendation = fact_check(
             claim="嘉宾建议调整药物剂量",

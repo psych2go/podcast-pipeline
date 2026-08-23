@@ -27,6 +27,7 @@ try:
         CLAIM_ORIGINS,
         LEGACY_CLAIM_TYPES,
         normalize_review_fact_checks,
+        validate_review_fact_checks,
         PUBLICATION_STATUSES,
         RISK_DOMAINS,
         SPEAKER_ROLES,
@@ -46,6 +47,7 @@ except ImportError:
         CLAIM_ORIGINS,
         LEGACY_CLAIM_TYPES,
         normalize_review_fact_checks,
+        validate_review_fact_checks,
         PUBLICATION_STATUSES,
         RISK_DOMAINS,
         SPEAKER_ROLES,
@@ -63,7 +65,8 @@ REVIEW_FILES = (
     "summary_map.json",
     "来源.md",
 )
-OPTIONAL_REVIEW_FILES = ("转录_纠错.txt", "tts_lexicon.json")
+OPTIONAL_REVIEW_FILES = (
+    "转录_纠错.txt", "tts_lexicon.json", "editorial_corrections.json")
 
 REVIEW_SCHEMA = {
     "type": "object",
@@ -513,7 +516,7 @@ def _prompt(folder, scope=None):
 {folder}
 {scope_instruction}{cache_instruction}
 
-必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt 和 tts_lexicon.json。
+必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt、tts_lexicon.json 和 editorial_corrections.json。editorial_corrections.json 只记录外部校正，不得把其中事实伪装成 transcript evidence。
 
 审查目标：无需人工复核也能直接发布。请执行：
 1. 抽查所有章节和对应时间片，检查脑补、漏点、人物归属和逻辑链。
@@ -594,10 +597,10 @@ def _prompt(folder, scope=None):
 - 对动态数字注明“节目播出时/节目称”，不能把不断变化的数值写成永久事实。
 
 返回前必须逐条执行以下机械一致性检查；这些规则优先于自然语言直觉：
-- speaker_firsthand：verification_mode 必须是 transcript_attribution；非 excluded 时 verdict 只能是 faithfully_attributed 或 qualified，publication_status 不能是 used_as_fact。
+- speaker_firsthand：普通事实和轶事使用 transcript_attribution；opinion/prediction/recommendation/explanation/definition/allegation 以各自下列专用规则为准，并始终保留 evidence_segment_ids；非 excluded 时 publication_status 不能是 used_as_fact。
 - speaker_reported + fact：必须保留明确归因；非 excluded 时 verdict 只能是 accurately_reported、qualified 或 uncertain，publication_status 不能是 used_as_fact。
 - opinion/prediction：verification_mode 只能是 transcript_attribution、transcript_only 或 not_applicable，且不能 used_as_fact。
-- recommendation：普通、非 medical/legal/financial/safety 的建议使用 transcript_attribution；只有真正高风险建议才使用 safety_cross_check 并提供 URL。不要把一般商业或劳工政策意见误标为 financial 风险建议。
+- recommendation：先检查 risk_domain；只要是 medical、legal、financial、safety 中任一值，verification_mode 必须是 safety_cross_check 且 source_urls 必须非空；普通 general/political 建议才使用 transcript_attribution。产品责任、诉讼、合规审批等治理建议属于 legal，不得写成 general 规避安全核查。
 - explanation/definition：verification_mode 只能是 transcript_attribution、transcript_only、web_spot_check 或 safety_cross_check；若 verdict 是 faithfully_attributed/accurately_reported/not_applicable，publication_status 必须是 attributed_or_qualified 或 excluded。
 - allegation：verification_mode 必须是 source_document_required，必须提供来源 URL，不能 used_as_fact。
 - external_source/editorial_added + fact + used_as_fact：verification_mode 必须是 web_required，verdict 必须是 supported 或 qualified。
@@ -605,6 +608,106 @@ def _prompt(folder, scope=None):
 - 最后模拟 quality_report._ai_fact_check_consistency_v3 的上述规则；若任一条不满足，必须先修正 fact_check 再返回。review.passed=true 时 fact_checks 也必须机械一致，不能只让分项文字通过。
 - 不要修改任何文件，只返回符合 schema 的 JSON。
 """
+
+
+def _content_map_claim_ids(workspace):
+    try:
+        payload = json.loads(
+            (Path(workspace) / "content_map.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {
+        f"{unit.get('id')}-C{index:02d}"
+        for unit in payload.get("units", [])
+        if isinstance(unit, dict) and unit.get("id")
+        for index, _claim in enumerate(unit.get("claims", []), start=1)
+    }
+
+
+def _review_semantic_fingerprint(review):
+    semantic = {
+        key: review.get(key)
+        for key in (
+            "passed", "summary", "transcript_quality", "coverage",
+            "factuality", "numbers", "attribution", "entity_accuracy",
+            "tts", "publish", "issues",
+        )
+    }
+    fact_checks = []
+    for item in review.get("fact_checks", []) or []:
+        if not isinstance(item, dict):
+            fact_checks.append(item)
+            continue
+        fact_checks.append({
+            key: item.get(key)
+            for key in (
+                "claim", "parent_claim_id", "claim_origin", "speaker_role",
+                "assertion_type", "risk_domain", "evidence_segment_ids",
+            )
+        })
+    semantic["fact_checks"] = fact_checks
+    return semantic
+
+
+def _mechanical_retry_prompt(review, errors):
+    return f"""上一次 AI review 的语义结论已经冻结，但 fact_checks 违反确定性合同。
+只允许修正 fact_checks 的机械字段，例如 claim_type、subclaim_id、verification_mode、
+verdict、publication_status、source_urls、checked_at 和 notes。不得改变 passed、summary、
+任何分项分数或 passed、issues、claim 文本、parent_claim_id、claim_origin、speaker_role、
+assertion_type、risk_domain 或 evidence_segment_ids。需要 URL 时必须联网找到真实来源，
+不得编造。返回完整 REVIEW_SCHEMA JSON，不修改文件。
+
+确定性错误：
+{json.dumps(errors, ensure_ascii=False)}
+
+冻结的首次输出：
+{json.dumps(review, ensure_ascii=False)}
+"""
+
+
+def _validate_or_retry_review(workspace, review, *, model, effort):
+    normalize_review_fact_checks(review)
+    claim_ids = _content_map_claim_ids(workspace)
+    errors, warnings = validate_review_fact_checks(
+        review, valid_claim_ids=claim_ids)
+    audit = {
+        "initial_errors": errors,
+        "initial_warnings": warnings,
+        "retry_count": 0,
+    }
+    if not errors:
+        return review, audit, None
+    semantic = _review_semantic_fingerprint(review)
+    retry_result = run_json_task(
+        workspace,
+        _mechanical_retry_prompt(review, errors) + (
+            f"\n本次机械纠错 effort 要求：{effort}。只返回 JSON。"),
+        REVIEW_SCHEMA,
+        task_name="ai_review_mechanical_retry",
+        enable_search=True,
+        model=model or None,
+        timeout=900,
+    )
+    corrected = retry_result.get("payload")
+    if not isinstance(corrected, dict):
+        raise RuntimeError("AI review 机械纠错输出必须是对象")
+    normalize_review_fact_checks(corrected)
+    if _review_semantic_fingerprint(corrected) != semantic:
+        raise RuntimeError("AI review 机械纠错修改了冻结的语义结论")
+    final_errors, final_warnings = validate_review_fact_checks(
+        corrected, valid_claim_ids=claim_ids)
+    audit.update({
+        "retry_count": 1,
+        "final_errors": final_errors,
+        "final_warnings": final_warnings,
+    })
+    if final_errors:
+        raise RuntimeError(
+            "AI review 机械纠错后仍不符合合同: "
+            + "; ".join(final_errors[:10]))
+    return corrected, audit, retry_result
 
 
 def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True):
@@ -636,9 +739,25 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
                 schema_path, task_name="ai_review", enable_search=True,
                 model=model or None, timeout=1800)
             review = result["payload"]
-            taxonomy_changes = normalize_review_fact_checks(review)
-            if taxonomy_changes:
-                review["taxonomy_normalization"] = taxonomy_changes
+            review, mechanical_audit, retry_result = _validate_or_retry_review(
+                workspace,
+                review,
+                model=model,
+                effort=effort,
+            )
+            if retry_result is not None:
+                result = {
+                    **retry_result,
+                    "duration_ms": (
+                        (result.get("duration_ms") or 0)
+                        + (retry_result.get("duration_ms") or 0)
+                    ),
+                    "retry_count": (
+                        (result.get("retry_count") or 0)
+                        + (retry_result.get("retry_count") or 0)
+                    ),
+                }
+            review["mechanical_validation"] = mechanical_audit
     finally:
         try:
             schema_file.close()
@@ -658,6 +777,8 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
         "reported_cost_usd": None,
         "usage": {},
         "retry_count": result.get("retry_count", 0),
+        "mechanical_retry_count": review.get(
+            "mechanical_validation", {}).get("retry_count", 0),
     }
     review["review_scope"] = scope
     review["reviewed_files"] = input_snapshot

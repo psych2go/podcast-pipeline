@@ -36,10 +36,14 @@ CLAIM_EVIDENCE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "claim_id": {"type": "string"},
-                    "segment_ids": {
+                    "primary_segment_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "minItems": 1,
+                    },
+                    "context_segment_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
                     },
                     "confidence": {
                         "type": "string",
@@ -48,7 +52,8 @@ CLAIM_EVIDENCE_SCHEMA = {
                     "rationale": {"type": "string", "minLength": 10},
                 },
                 "required": [
-                    "claim_id", "segment_ids", "confidence", "rationale",
+                    "claim_id", "primary_segment_ids",
+                    "context_segment_ids", "confidence", "rationale",
                 ],
             },
         },
@@ -86,6 +91,8 @@ def deterministic_fallback_mappings(payloads):
             mappings.append({
                 "claim_id": claim["claim_id"],
                 "segment_ids": [segment_id],
+                "primary_segment_ids": [segment_id],
+                "context_segment_ids": [],
                 "confidence": "medium",
                 "rationale": (
                     "外部审查服务不可用，按 claim 顺序绑定到该单元的"
@@ -125,9 +132,9 @@ def _prompt(batch):
 
 对每个非空 claims 项返回一条记录：
 - claim_id 使用完整格式，例如 U0003-C02。
-- segment_ids 只能从该 unit 提供的 segments.id 中选择。
-- 选择能够直接支持整条 claim 的最小片段集合。
-- 人物归因、限定条件、数字或因果关系需要相邻上下文时可以多选片段。
+- primary_segment_ids 只能放直接支持整条 claim 的最小片段，至少一项。
+- context_segment_ids 只放归因、限定或背景所需的相邻片段，可为空。
+- 两组 ID 只能从该 unit 提供的 segments.id 中选择，不能重复。
 - 禁止为了省事把整个 unit 的全部片段复制给每条 claim，除非每个片段确实都不可缺少。
 - 不要根据常识补证据；转录没有充分支持时 confidence=low。
 - rationale 用一句中文说明为什么这些片段足以支持 claim。
@@ -155,6 +162,8 @@ def _unit_payloads(
     payloads = []
     for unit in content_map.get("units", []):
         if unit_ids and unit.get("id") not in unit_ids:
+            continue
+        if unit.get("status") == "excluded":
             continue
         if skip_complete and _has_complete_claim_evidence(unit):
             continue
@@ -196,6 +205,30 @@ def _batches(payloads, max_chars):
     return batches
 
 
+def _normalize_mapping_roles(mappings):
+    normalized = []
+    for raw in mappings or []:
+        if not isinstance(raw, dict):
+            normalized.append(raw)
+            continue
+        item = dict(raw)
+        primary = item.get("primary_segment_ids")
+        context = item.get("context_segment_ids")
+        if primary is None:
+            primary = item.get("segment_ids", [])
+        primary = list(dict.fromkeys(primary or []))
+        context = [
+            segment_id
+            for segment_id in dict.fromkeys(context or [])
+            if segment_id not in set(primary)
+        ]
+        item["primary_segment_ids"] = primary
+        item["context_segment_ids"] = context
+        item["segment_ids"] = primary + context
+        normalized.append(item)
+    return normalized
+
+
 def _run_batch(folder, batch, model, effort, batch_index):
     result = run_json_task(
         folder,
@@ -214,6 +247,7 @@ def _run_batch(folder, batch, model, effort, batch_index):
     if not isinstance(payload, dict):
         raise RuntimeError(
             "claim evidence 返回值必须是对象或 claim 数组")
+    payload["claims"] = _normalize_mapping_roles(payload.get("claims", []))
     return payload, result
 
 
