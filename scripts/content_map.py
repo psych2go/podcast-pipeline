@@ -651,12 +651,29 @@ def load_summary_map(path):
     return payload
 
 
-def unit_claim_ids(content_map, include_excluded=False):
+def unit_claim_ids(content_map, include_excluded=False, purpose="notes"):
+    """Return claim IDs required or allowed for a downstream artifact."""
+    if purpose not in {"notes", "briefing_required", "briefing_allowed"}:
+        raise ValueError(f"未知 claim coverage purpose: {purpose}")
     result = []
     for unit in content_map.get("units", []):
-        if not include_excluded and unit.get("status") == "excluded":
+        status = unit.get("status")
+        importance = unit.get("importance")
+        if status == "excluded" and not include_excluded:
             continue
-        if unit.get("importance") not in {"high", "medium"}:
+        if purpose == "notes":
+            selected = (
+                status == "condensed"
+                or importance in {"high", "medium"}
+            )
+        elif purpose == "briefing_required":
+            selected = (
+                status == "included"
+                and importance in {"high", "medium"}
+            )
+        else:
+            selected = status in {"included", "condensed"}
+        if not selected:
             continue
         for index, _claim in enumerate(unit.get("claims", []), start=1):
             result.append(f"{unit.get('id')}-C{index:02d}")
@@ -730,7 +747,7 @@ def validate_summary_map(
     if (
             content_map is not None
             and payload.get("schema_version", 1) >= SUMMARY_MAP_SCHEMA_VERSION):
-        expected_claims = set(unit_claim_ids(content_map))
+        expected_claims = set(unit_claim_ids(content_map, purpose="notes"))
         notes_claim_ids = payload.get("notes_claim_ids")
         if not isinstance(notes_claim_ids, list):
             errors.append("summary_map.notes_claim_ids 必须是数组")
@@ -766,20 +783,29 @@ def coverage_report(content_map, summary_map):
         if isinstance(chapter, dict):
             referenced_claims.extend(chapter.get("claim_ids", []) or [])
     referenced_claim_set = set(referenced_claims)
-    expected_claim_set = set(unit_claim_ids(content_map))
-    unknown_claims = sorted(referenced_claim_set - expected_claim_set)
-    missing_claims = sorted(expected_claim_set - referenced_claim_set)
+    required_briefing_claims = set(unit_claim_ids(
+        content_map, purpose="briefing_required"))
+    allowed_briefing_claims = set(unit_claim_ids(
+        content_map, purpose="briefing_allowed"))
+    expected_notes_claims = set(unit_claim_ids(content_map, purpose="notes"))
+    unknown_claims = sorted(referenced_claim_set - allowed_briefing_claims)
+    missing_claims = sorted(required_briefing_claims - referenced_claim_set)
     duplicate_claims = sorted(
         claim_id for claim_id in referenced_claim_set
         if referenced_claims.count(claim_id) > 1
     )
-    high = {u["id"] for u in units if u.get("importance") == "high"}
-    medium = {u["id"] for u in units if u.get("importance") == "medium"}
-    excluded = {u["id"] for u in units if u.get("status") == "excluded"}
+    high = {
+        u["id"] for u in units
+        if u.get("importance") == "high" and u.get("status") == "included"
+    }
+    medium = {
+        u["id"] for u in units
+        if u.get("importance") == "medium" and u.get("status") == "included"
+    }
     unsupported = {u["id"] for u in units if u.get("status") == "unsupported"}
 
-    required_high = high - excluded
-    required_medium = medium - excluded
+    required_high = high
+    required_medium = medium
     unknown = sorted(referenced_set - set(unit_by_id))
     high_missing = sorted(required_high - referenced_set)
     medium_missing = sorted(required_medium - referenced_set)
@@ -789,8 +815,8 @@ def coverage_report(content_map, summary_map):
         if u.get("status") == "excluded" and not u.get("notes")
     )
     notes_claims = set(summary_map.get("notes_claim_ids", []) or [])
-    notes_missing_claims = sorted(expected_claim_set - notes_claims)
-    notes_unknown_claims = sorted(notes_claims - expected_claim_set)
+    notes_missing_claims = sorted(expected_notes_claims - notes_claims)
+    notes_unknown_claims = sorted(notes_claims - expected_notes_claims)
 
     return {
         "chapter_count": len(chapters),
@@ -810,19 +836,20 @@ def coverage_report(content_map, summary_map):
         "high_missing": high_missing,
         "medium_missing": medium_missing,
         "duplicate_references": duplicate_refs,
-        "claim_total": len(expected_claim_set),
-        "claim_covered": len(expected_claim_set & referenced_claim_set),
+        "claim_total": len(required_briefing_claims),
+        "claim_covered": len(required_briefing_claims & referenced_claim_set),
         "claim_coverage": round(
-            len(expected_claim_set & referenced_claim_set) / len(expected_claim_set), 4
-        ) if expected_claim_set else 1.0,
+            len(required_briefing_claims & referenced_claim_set)
+            / len(required_briefing_claims), 4
+        ) if required_briefing_claims else 1.0,
         "unknown_claim_ids": unknown_claims,
         "missing_claim_ids": missing_claims,
         "duplicate_claim_ids": duplicate_claims,
-        "notes_claim_total": len(expected_claim_set),
-        "notes_claim_covered": len(expected_claim_set & notes_claims),
+        "notes_claim_total": len(expected_notes_claims),
+        "notes_claim_covered": len(expected_notes_claims & notes_claims),
         "notes_claim_coverage": round(
-            len(expected_claim_set & notes_claims) / len(expected_claim_set), 4
-        ) if expected_claim_set else 1.0,
+            len(expected_notes_claims & notes_claims) / len(expected_notes_claims), 4
+        ) if expected_notes_claims else 1.0,
         "notes_missing_claim_ids": notes_missing_claims,
         "notes_unknown_claim_ids": notes_unknown_claims,
         "unsupported_units": sorted(unsupported),

@@ -12,6 +12,7 @@ import ai_review
 from editorial_corrections import validate_editorial_corrections
 from content_map import (
     apply_claim_evidence_mapping,
+    coverage_report,
     enrich_content_map_evidence,
     validate_content_map,
 )
@@ -53,6 +54,36 @@ def review_payload():
             "notes": "节目中的治理建议。",
         }],
     }
+
+
+class CondensedCoverageTests(unittest.TestCase):
+    def test_condensed_claim_is_required_in_notes_but_optional_in_briefing(self):
+        content_map = {
+            "units": [
+                {
+                    "id": "U0001", "status": "included",
+                    "importance": "high", "claims": ["required"],
+                },
+                {
+                    "id": "U0002", "status": "condensed",
+                    "importance": "medium", "claims": ["notes only"],
+                },
+            ],
+        }
+        summary = {
+            "schema_version": 2,
+            "chapters": [{
+                "title": "chapter",
+                "unit_ids": ["U0001"],
+                "claim_ids": ["U0001-C01"],
+            }],
+            "notes_claim_ids": ["U0001-C01", "U0002-C01"],
+        }
+        report = coverage_report(content_map, summary)
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["medium_total"], 0)
+        self.assertEqual(report["claim_total"], 1)
+        self.assertEqual(report["notes_claim_total"], 2)
 
 
 class EvidenceEnrichmentSafetyTests(unittest.TestCase):
