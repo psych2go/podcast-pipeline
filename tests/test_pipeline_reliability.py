@@ -9,6 +9,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import ai_review
+import agent_pipeline
+import catalog as catalog_cli
+import catalog_core
+import catalog_publish
+import catalog_site
 from editorial_corrections import validate_editorial_corrections
 from content_map import (
     apply_claim_evidence_mapping,
@@ -84,6 +89,149 @@ class CondensedCoverageTests(unittest.TestCase):
         self.assertEqual(report["medium_total"], 0)
         self.assertEqual(report["claim_total"], 1)
         self.assertEqual(report["notes_claim_total"], 2)
+
+
+class CorrectedClaimEvidenceTests(unittest.TestCase):
+    def test_corrected_paragraphs_align_to_segment_ids(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "转录_纠错.txt").write_text(
+                "corrected one\n\ncorrected two", encoding="utf-8")
+            transcript = {
+                "segments": [
+                    {"id": "S0001", "text": "raw one"},
+                    {"id": "S0002", "text": "raw two"},
+                ],
+            }
+            aligned = claim_evidence._corrected_segment_texts(
+                folder, transcript)
+            payloads = claim_evidence._unit_payloads({
+                "units": [{
+                    "id": "U0001", "status": "included",
+                    "topic": "topic", "claims": ["claim"],
+                    "evidence": {"segment_ids": ["S0002"]},
+                }],
+            }, transcript, folder=folder)
+        self.assertEqual(aligned["S0002"], "corrected two")
+        self.assertEqual(
+            payloads[0]["segments"][0]["corrected_text"],
+            "corrected two")
+
+    def test_low_confidence_unit_is_retried_at_max_effort(self):
+        batch = [{
+            "unit_id": "U0001",
+            "claims": [{"claim_id": "U0001-C01", "text": "claim"}],
+            "segments": [{"id": "S0001", "text": "source"}],
+        }]
+        low = [{
+            "claim_id": "U0001-C01", "segment_ids": ["S0001"],
+            "confidence": "low", "rationale": "insufficient initial support",
+        }]
+        high = [{
+            "claim_id": "U0001-C01", "segment_ids": ["S0001"],
+            "confidence": "high", "rationale": "source directly supports claim",
+        }]
+        with mock.patch.object(
+                claim_evidence, "_run_batch",
+                return_value=({"claims": high}, {"duration_ms": 1})) as runner:
+            mappings, wrappers = claim_evidence._retry_low_confidence_units(
+                Path("/tmp"), batch, low, "model", 1)
+        self.assertEqual(mappings, high)
+        self.assertEqual(len(wrappers), 1)
+        self.assertEqual(runner.call_args.args[3], "max")
+
+    def test_final_low_confidence_marks_invalid_result(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            transcript = {
+                "evidence": {"revision_sha256": "revision"},
+                "meta": {"timestamped": True, "evidence_mode": "timestamp"},
+                "segments": [
+                    {"id": "S0001", "start": 0, "end": 5, "text": "one"},
+                    {"id": "S0002", "start": 5, "end": 10, "text": "two"},
+                ],
+            }
+            content_map = {
+                "schema_version": 3,
+                "evidence_mode": "timestamp",
+                "units": [{
+                    "id": "U0001", "topic": "topic",
+                    "claims": ["one", "two"],
+                    "importance": "high", "status": "included",
+                    "timestamps": [[0, 10]],
+                }],
+            }
+            (folder / "transcript.raw.json").write_text(
+                json.dumps(transcript), encoding="utf-8")
+            (folder / "content_map.json").write_text(
+                json.dumps(content_map), encoding="utf-8")
+
+            def low_result(_folder, batch, _model, _effort, _index):
+                claims = [{
+                    "claim_id": claim["claim_id"],
+                    "segment_ids": [batch[0]["segments"][0]["id"]],
+                    "confidence": "low",
+                    "rationale": "source remains insufficient after review",
+                } for claim in batch[0]["claims"]]
+                return {"claims": claims}, {"duration_ms": 1}
+
+            with mock.patch.object(
+                    claim_evidence, "_run_batch", side_effect=low_result):
+                with self.assertRaisesRegex(RuntimeError, "confidence=low"):
+                    claim_evidence.refine_claim_evidence(
+                        folder, concurrency=1, max_batch_chars=100000)
+            progress = json.loads(
+                (folder / claim_evidence.PROGRESS_FILENAME).read_text(
+                    encoding="utf-8"))
+        self.assertEqual(progress["status"], "invalid_result")
+        self.assertEqual(progress["failed_unit_ids"], ["U0001"])
+        self.assertEqual(progress["completed_unit_ids"], [])
+
+
+class LowConfidenceClaimRepairTests(unittest.TestCase):
+    def test_repair_updates_only_named_unit_and_modalities(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            raw = {
+                "segments": [{"id": "S0001", "text": "direct support"}],
+            }
+            content_map = {
+                "units": [
+                    {
+                        "id": "U0001", "topic": "topic",
+                        "claims": ["overbroad claim"],
+                        "claim_modalities": ["general_claim"],
+                        "evidence": {"segment_ids": ["S0001"]},
+                    },
+                    {
+                        "id": "U0002", "topic": "untouched",
+                        "claims": ["keep"],
+                        "claim_modalities": ["actual_event"],
+                        "evidence": {"segment_ids": ["S0001"]},
+                    },
+                ],
+            }
+            (folder / "transcript.raw.json").write_text(
+                json.dumps(raw), encoding="utf-8")
+            (folder / "content_map.json").write_text(
+                json.dumps(content_map), encoding="utf-8")
+            with mock.patch.object(agent_pipeline, "run_json_task", return_value={
+                "payload": {"units": [{
+                    "unit_id": "U0001",
+                    "claims": ["direct support"],
+                    "claim_modalities": ["actual_event"],
+                }]},
+            }):
+                repaired = agent_pipeline._repair_low_confidence_claims(
+                    folder,
+                    folder / "transcript.raw.json",
+                    RuntimeError("U0001-C01: confidence=low"),
+                )
+            result = json.loads(
+                (folder / "content_map.json").read_text(encoding="utf-8"))
+        self.assertEqual(repaired, ["U0001"])
+        self.assertEqual(result["units"][0]["claims"], ["direct support"])
+        self.assertEqual(result["units"][1]["claims"], ["keep"])
 
 
 class EvidenceEnrichmentSafetyTests(unittest.TestCase):
@@ -198,6 +346,40 @@ class ClaimEvidenceProgressTests(unittest.TestCase):
             "revision" in error
             for error in claim_evidence.validate_progress(payload, transcript)
         ))
+
+
+class PodcastRootTests(unittest.TestCase):
+    def test_catalog_cli_binds_all_modules_to_configured_root(self):
+        old = catalog_core.CatalogPaths(
+            base_dir=catalog_publish.BASE_DIR,
+            content_dir=catalog_publish.CONTENT_DIR,
+            site_dir=catalog_publish.SITE_DIR,
+            catalog=catalog_publish.CATALOG,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            content = root / "private-content"
+            site = root / "private-site"
+            catalog_path = content / "catalog.md"
+            try:
+                with mock.patch.object(catalog_cli, "CONFIG_ROOT", root), \
+                        mock.patch.object(
+                            catalog_cli, "CONFIG_CONTENT_DIR", content), \
+                        mock.patch.object(
+                            catalog_cli, "CONFIG_SITE_DIR", site), \
+                        mock.patch.object(
+                            catalog_cli, "CONFIG_CATALOG", catalog_path):
+                    paths = catalog_cli._configure_cli_paths()
+                self.assertEqual(paths.base_dir, root)
+                self.assertEqual(catalog_core.CONTENT_DIR, content)
+                self.assertEqual(catalog_site.SITE_DIR, site)
+                self.assertEqual(catalog_publish.CATALOG, catalog_path)
+            finally:
+                catalog_publish.configure_paths(old)
+                catalog_cli.BASE_DIR = old.base_dir
+                catalog_cli.CONTENT_DIR = old.content_dir
+                catalog_cli.SITE_DIR = old.site_dir
+                catalog_cli.CATALOG = old.catalog
 
 
 class SourceLabelTests(unittest.TestCase):

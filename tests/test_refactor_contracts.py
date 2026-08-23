@@ -19,8 +19,8 @@ from process import (
 from tts import split_sections as tts_split_sections
 from pipeline_metrics import quality_metrics
 from quality_errors import (
-    AI_REVIEW_FAILED, AI_REVIEW_MISSING, AI_REVIEW_STALE,
-    SOURCE_REVIEW_STATUS, add_error, coded_errors,
+    AI_REVIEW_FAILED, AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_STALE,
+    CONTENT_REVIEW_STATUS, SOURCE_REVIEW_STATUS, add_error, coded_errors,
 )
 from sections import parse_markdown_sections
 from text_distance import edit_details, levenshtein_distance
@@ -124,6 +124,19 @@ class StructuredQualityErrorTests(unittest.TestCase):
         self.assertEqual(
             [item["code"] for item in report["error_details"]],
             [AI_REVIEW_MISSING, AI_REVIEW_STALE])
+        missing, can_auto = _review_recovery_decision(report)
+        self.assertTrue(missing)
+        self.assertTrue(can_auto)
+
+    def test_stale_review_supersedes_old_review_failures(self):
+        report = {"errors": [], "error_details": []}
+        coded_errors(report)
+        add_error(report, AI_REVIEW_STALE,
+                  "AI 审查已过期，文件变更: ['讲书稿.md']")
+        add_error(report, CONTENT_REVIEW_STATUS,
+                  "内容审查状态未通过: failed")
+        add_error(report, AI_REVIEW_FAILED, "AI 最终审查未通过")
+        add_error(report, AI_REVIEW_SCORE, "AI 审查分数不足")
         missing, can_auto = _review_recovery_decision(report)
         self.assertTrue(missing)
         self.assertTrue(can_auto)

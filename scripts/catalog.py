@@ -30,6 +30,12 @@ try:
         _build_entry, _site_readiness_errors, backfill_sources,
         catalog_consistency_errors, gen_index, sync_site,
     )
+    from config import (
+        BASE_DIR as CONFIG_CONTENT_DIR,
+        CATALOG_PATH as CONFIG_CATALOG,
+        PROJECT_ROOT as CONFIG_ROOT,
+        SITE_DIR as CONFIG_SITE_DIR,
+    )
 except ImportError:
     from scripts.atomic_io import atomic_write_text
     from scripts.catalog_core import (
@@ -53,6 +59,29 @@ except ImportError:
         _build_entry, _site_readiness_errors, backfill_sources,
         catalog_consistency_errors, gen_index, sync_site,
     )
+    from scripts.config import (
+        BASE_DIR as CONFIG_CONTENT_DIR,
+        CATALOG_PATH as CONFIG_CATALOG,
+        PROJECT_ROOT as CONFIG_ROOT,
+        SITE_DIR as CONFIG_SITE_DIR,
+    )
+
+
+def _configure_cli_paths():
+    """Bind the facade and deep catalog modules to one private workspace."""
+    global BASE_DIR, CONTENT_DIR, SITE_DIR, CATALOG
+    paths = CatalogPaths(
+        base_dir=CONFIG_ROOT,
+        content_dir=CONFIG_CONTENT_DIR,
+        site_dir=CONFIG_SITE_DIR,
+        catalog=CONFIG_CATALOG,
+    )
+    configure_paths(paths)
+    BASE_DIR = paths.base_dir
+    CONTENT_DIR = paths.content_dir
+    SITE_DIR = paths.site_dir
+    CATALOG = paths.catalog
+    return paths
 
 
 def build_health_report(content_dir=None, since="7d", now=None):
@@ -69,6 +98,7 @@ def health(since="7d", output=None):
 
 
 def main():
+    _configure_cli_paths()
     parser = argparse.ArgumentParser(description="播客台账与完整发布维护")
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("stats", help="打印某期字数/时长，不写入"); p.add_argument("name")

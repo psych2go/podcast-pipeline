@@ -208,7 +208,10 @@ claim 单元的映射。历史数据需要按 unit 精炼：
 strict 模式下 claim evidence runner 失败会按单 unit 重试，仍失败则阻断。
 每次运行以 `claim_evidence_progress.json` 绑定 evidence revision，并原子记录 target、
 completed、pending 和 failed unit；中断后的 partial 状态可按 unit 恢复，不能把半成品
-误报为完整精炼。只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；确定性
+误报为完整精炼。最终 confidence/hash 校验失败写为 `invalid_result`。claim-evidence
+同时读取 raw segment 与可对齐的 corrected segment 文本，但 segment ID 和证据哈希始终
+绑定 raw evidence。low confidence 先按单 unit 以 max effort 复核；仍低时只允许收窄该
+unit 的原子 claim 与 modality，再精炼一次。只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；确定性
 质量门会识别 `deterministic-fallback` 并阻断发布，不能用它降低 evidence v3
 或逐 claim 证据要求。
 
@@ -243,7 +246,9 @@ re-review`。AI review 输出在写入状态或 fact-check cache 前先执行与
 claim ID、节目陈述、公开处理、来源 URL、日期和风险域；它不构成 transcript evidence，
 但存在时属于 AI review 输入并由严格质量门校验。
 
-复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定，
+复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定。
+只要 reviewed input hash 已变化，旧 review 的 failed/score/issue 错误就被视为 stale 结论，
+不会阻止自动独立复审；artifact/evidence 本身的结构错误仍然阻断。
 分数和 high/critical 阈值不变。AI review v3 要求先把复合 claim 拆为原子
 subclaim，并用 `parent_claim_id` / `subclaim_id` 绑定 content_map；每个子主张分别填写：
 
@@ -451,6 +456,22 @@ TTS、HTML 和发布事务的耗时、失败、重试、调用量与模型成本
 `audio/` 分章节音频可在发布后清理，但保留它可以提高同配置重跑速度。
 
 ## 配置
+
+私有工作区配置：
+
+私有内容与公开代码分离部署时可设置：
+
+```env
+PODCAST_ROOT=/path/to/private-workspace
+PODCAST_DIR=/path/to/private-workspace/content       # 可选覆盖
+PODCAST_SITE_DIR=/path/to/private-workspace/site     # 可选覆盖
+PODCAST_CATALOG=/path/to/private-workspace/content/播客目录.md
+WRANGLER_MAX_RETRIES=2
+WRANGLER_RETRY_BACKOFF=2
+```
+
+`PODCAST_ROOT` 同时决定私有 `.env`、content、site 和 catalog 默认位置。Wrangler 只对
+网络、429 和 5xx 类失败做有界指数退避；认证、权限和参数错误不重试。
 
 `.env`：
 

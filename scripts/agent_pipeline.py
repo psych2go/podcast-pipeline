@@ -1,5 +1,7 @@
 """Subagent-orchestrated content production for a single episode."""
+import json
 import os
+import re
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -309,6 +311,125 @@ def _correction_prompt(source_kind):
     )
 
 
+CLAIM_REPAIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "units": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "unit_id": {"type": "string"},
+                    "claims": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "claim_modalities": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "string",
+                            "enum": sorted(CLAIM_MODALITIES),
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+def _repair_low_confidence_claims(folder, raw_path, error):
+    unit_ids = sorted(set(re.findall(r"\bU\d{4,}\b", str(error))))
+    if not unit_ids:
+        raise error
+    content_map_path = folder / "content_map.json"
+    content_map = load_json(content_map_path)
+    transcript = load_json(raw_path)
+    segments = {
+        segment.get("id"): segment
+        for segment in transcript.get("segments", [])
+        if isinstance(segment, dict) and segment.get("id")
+    }
+    units_by_id = {
+        unit.get("id"): unit
+        for unit in content_map.get("units", [])
+        if isinstance(unit, dict) and unit.get("id")
+    }
+    missing = sorted(set(unit_ids) - set(units_by_id))
+    if missing:
+        raise RuntimeError(f"low confidence repair 引用了未知 unit: {missing}")
+    repair_input = []
+    for unit_id in unit_ids:
+        unit = units_by_id[unit_id]
+        segment_ids = unit.get("evidence", {}).get("segment_ids", [])
+        repair_input.append({
+            "unit_id": unit_id,
+            "topic": unit.get("topic", ""),
+            "claims": list(unit.get("claims", [])),
+            "claim_modalities": list(unit.get("claim_modalities", [])),
+            "low_evidence_notes": unit.get("claim_evidence_notes", {}),
+            "segments": [
+                {
+                    "id": segment_id,
+                    "text": segments.get(segment_id, {}).get("text", ""),
+                }
+                for segment_id in segment_ids
+            ],
+        })
+    result = run_json_task(
+        folder,
+        f"""下面这些 unit 的 claim evidence 经过批量和单 unit 复核后仍为 low。
+依据 low_evidence_notes 和原始 segments，返回每个 unit 的完整替换 claims 与
+一一对应的 claim_modalities。只能删除转录不支持的从句、拆分或合并原 claim；
+不得增加新事实、改变 topic 或 evidence。每条 claim 必须原子且由给定 segment
+直接支持。必须恰好返回这些 unit。只返回 schema JSON，不修改文件。
+
+输入：
+{json.dumps(repair_input, ensure_ascii=False)}""",
+        CLAIM_REPAIR_SCHEMA,
+        task_name="repair_low_confidence_claims",
+        model=os.environ.get("SUBAGENT_CLAIM_MODEL", "") or None,
+        timeout=600,
+    )
+    payload = result.get("payload", {})
+    returned = payload.get("units", []) if isinstance(payload, dict) else []
+    returned_ids = [
+        item.get("unit_id") for item in returned if isinstance(item, dict)
+    ]
+    if returned_ids != unit_ids:
+        raise RuntimeError(
+            "low confidence claim repair 返回集合不匹配: "
+            f"expected={unit_ids}, actual={returned_ids}")
+    for item in returned:
+        claims = item.get("claims")
+        modalities = item.get("claim_modalities")
+        if (
+                not isinstance(claims, list)
+                or not claims
+                or any(not isinstance(claim, str) or not claim.strip()
+                       for claim in claims)):
+            raise RuntimeError(
+                f"{item.get('unit_id')}: repair claims 必须是非空字符串数组")
+        if (
+                not isinstance(modalities, list)
+                or len(modalities) != len(claims)
+                or set(modalities) - CLAIM_MODALITIES):
+            raise RuntimeError(
+                f"{item.get('unit_id')}: repair claim_modalities 无效")
+        unit = units_by_id[item["unit_id"]]
+        unit["claims"] = [claim.strip() for claim in claims]
+        unit["claim_modalities"] = modalities
+        unit["claim_evidence"] = {}
+        unit["claim_evidence_roles"] = {}
+        unit["claim_evidence_sha256"] = {}
+        unit["claim_evidence_notes"] = {}
+    save_json(content_map_path, content_map)
+    return unit_ids
+
+
 def run_content_pipeline(folder, title, run_report=None, force=False):
     """Run correction, content mapping, writing, evidence, and hash enrichment."""
     folder = Path(folder).resolve()
@@ -434,15 +555,27 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                     "reason": "valid content map",
                 })
         else:
-            metrics = refine_claim_evidence(
-                folder,
-                model=os.environ.get("SUBAGENT_CLAIM_MODEL", ""),
-                effort=os.environ.get("SUBAGENT_CLAIM_EFFORT", "high"),
-                max_batch_chars=_env_positive_int(
+            claim_kwargs = {
+                "model": os.environ.get("SUBAGENT_CLAIM_MODEL", ""),
+                "effort": os.environ.get("SUBAGENT_CLAIM_EFFORT", "high"),
+                "max_batch_chars": _env_positive_int(
                     "CLAIM_EVIDENCE_BATCH_CHARS", 35000),
-                concurrency=_env_positive_int(
+                "concurrency": _env_positive_int(
                     "CLAIM_EVIDENCE_CONCURRENCY", 3),
-            )
+            }
+            try:
+                metrics = refine_claim_evidence(folder, **claim_kwargs)
+            except RuntimeError as exc:
+                if "claim evidence confidence=low" not in str(exc):
+                    raise
+                repair_unit_ids = _repair_low_confidence_claims(
+                    folder, raw_path, exc)
+                metrics = refine_claim_evidence(
+                    folder,
+                    unit_ids=repair_unit_ids,
+                    **claim_kwargs,
+                )
+                metrics["claim_repair_unit_count"] = len(repair_unit_ids)
             if stage is not None:
                 stage.metrics.update(metrics)
 

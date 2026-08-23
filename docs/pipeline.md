@@ -266,8 +266,10 @@ evidence v3 的约束：
 迁移历史数据。超过 60 个 segment 的 unit 会产生结构告警。
 
 `claim_evidence_progress.json` 是 evidence revision 绑定的批次 checkpoint，记录 target、
-completed、pending、failed unit 和 completed/partial/invalid_input 状态；每个成功 unit
-提交后原子刷新，runner 中断不会把部分结果伪装成完整精炼。
+completed、pending、failed unit 和 completed/partial/invalid_input/invalid_result 状态；
+每个成功 unit 提交后原子刷新。claim-evidence 可读取与 segment 一一对齐的 corrected text
+辅助理解 ASR 错词，但 ID/hash 仍绑定 raw evidence。low confidence 会先进行 max effort
+单 unit 复核，再执行一次受限 claim 收窄；runner 中断或最终校验失败都不会伪装成完成。
 
 ### `ai_review.py`
 
@@ -385,6 +387,10 @@ AI review 之后，`process.py` 的 TTS/HTML 路径只读验证讲稿和 summary
 `--allow-unchecked`。
 
 ### `catalog.py` 和 `publish.py`
+
+`PODCAST_ROOT` 可将公开代码指向独立私有 workspace；CLI 会把 catalog core、site 和
+publish 模块统一绑定到派生的 content/site/catalog 路径。Wrangler R2 与 Pages 命令对
+网络、429、5xx 错误执行有界指数退避，权限或参数错误立即失败。
 
 `catalog.py finish` 是发布事务入口。它会先全量重建 `site.json` 和
 `播客目录.md`，校验标题、顺序、字数和 `ffprobe` 真实时长一致，再上传 R2、
