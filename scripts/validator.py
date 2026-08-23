@@ -175,7 +175,8 @@ def integer_to_chinese(value):
 
 def _normalize_arabic_numbers(text):
     changed = False
-    pattern = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?%?")
+    pattern = re.compile(
+        r"(?<![A-Za-z0-9.-])\d[\d,]*(?:\.\d+)?%?(?![A-Za-z0-9])")
 
     def replace(match):
         nonlocal changed

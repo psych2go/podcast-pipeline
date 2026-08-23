@@ -160,6 +160,8 @@ def build_tts_plan(folder, briefing_file, speed=1.0, read_titles=True):
         intended.append({
             "filename": filename,
             "text": normalized,
+            "display_sha256": _sha256_bytes(spoken.encode("utf-8")),
+            "spoken_sha256": _sha256_bytes(normalized.encode("utf-8")),
             "fingerprint": _section_fingerprint(
                 normalized, speed, read_titles),
         })
@@ -209,6 +211,14 @@ def validate_tts_manifest(folder, briefing_file, merged_name):
             continue
         if section.get("fingerprint") != item["fingerprint"]:
             errors.append(f"TTS 章节指纹已过期: {item['filename']}")
+        if (
+                section.get("display_sha256") is not None
+                and section.get("display_sha256") != item["display_sha256"]):
+            errors.append(f"TTS 显示文本哈希已过期: {item['filename']}")
+        if (
+                section.get("spoken_sha256") is not None
+                and section.get("spoken_sha256") != item["spoken_sha256"]):
+            errors.append(f"TTS 朗读文本哈希已过期: {item['filename']}")
 
     final_path = folder / f"{merged_name}.mp3"
     final = manifest.get("final", {})
@@ -658,6 +668,8 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
                 manifest["sections"].append({
                     "filename": fname,
                     "fingerprint": item["fingerprint"],
+                    "display_sha256": item["display_sha256"],
+                    "spoken_sha256": item["spoken_sha256"],
                     "output_sha256": output_sha256,
                     "size": size,
                     "status": "complete",
@@ -683,6 +695,8 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
                 manifest["sections"].append({
                     "filename": fname,
                     "fingerprint": item["fingerprint"],
+                    "display_sha256": item["display_sha256"],
+                    "spoken_sha256": item["spoken_sha256"],
                     "output_sha256": output_sha256,
                     "size": size,
                     "status": "complete",
@@ -694,6 +708,8 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
                 manifest["sections"].append({
                     "filename": fname,
                     "fingerprint": item["fingerprint"],
+                    "display_sha256": item["display_sha256"],
+                    "spoken_sha256": item["spoken_sha256"],
                     "status": "failed",
                     "error": str(e),
                 })

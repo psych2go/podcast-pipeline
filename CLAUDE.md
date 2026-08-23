@@ -167,8 +167,15 @@ diarization 默认模型为
 ```
 
 `content_map.json` 的每个 unit/claim 必须绑定转录 segment ID 和源文本
-SHA-256。多 claim 单元不得给所有 claim 复制整个 unit 的 segment 集合；
-每条 claim 还要记录证据置信度和选择理由。
+SHA-256。content-map 子进程只返回结构化 JSON，主流程在启动 claim-evidence
+之前校验 status 枚举、segment 存在性、时间窗合法性、完整源片段记账和 excluded
+约束；结构错误不进入模型重试。evidence enrichment 不允许把有来源的 unit 静默刷新
+为空，`null`/倒序时间窗或未知 text anchor 会直接阻断且不覆盖原 evidence。多 claim
+单元不得给所有 claim 复制整个 unit 的 segment 集合；每条 claim 还要记录证据置信度、
+选择理由和 `claim_modalities`（actual_event、conditional、prediction、opinion、
+recommendation、general_claim），写稿不得把条件句、预测或观点升级为已发生事实。新映射可同时记录
+`primary_segment_ids` 与 `context_segment_ids`，并继续派生旧版扁平
+`claim_evidence` 供已有单集读取。
 
 没有真实时间戳的网页或本地文本使用 `evidence_mode=text_anchor`，通过
 `segment_id + source_sha256` 回溯原始文本，不伪造音频时间；有真实时间戳的
@@ -199,7 +206,9 @@ claim 单元的映射。历史数据需要按 unit 精炼：
 ```
 
 strict 模式下 claim evidence runner 失败会按单 unit 重试，仍失败则阻断。
-只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；确定性
+每次运行以 `claim_evidence_progress.json` 绑定 evidence revision，并原子记录 target、
+completed、pending 和 failed unit；中断后的 partial 状态可按 unit 恢复，不能把半成品
+误报为完整精炼。只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；确定性
 质量门会识别 `deterministic-fallback` 并阻断发布，不能用它降低 evidence v3
 或逐 claim 证据要求。
 
@@ -223,9 +232,16 @@ evidence v2，所有待重新发布单集必须先迁移到 evidence v3。
 ```
 
 缺失或过期审查会进入最多两轮的受限 `review → safe repair → independent
-re-review`。自动修复只允许 summary map 最终化、确定性 TTS 词典和明确 unit 的
-claim evidence；事实性、医疗、数字、归因、转录质量及未知 high/critical 类别
-一律阻断。修复记录写入 `review_repair.json`，绝不直接把 `passed` 改为 true。
+re-review`。AI review 输出在写入状态或 fact-check cache 前先执行与质量门相同的
+机械 taxonomy 校验；仅允许一次冻结语义结论的合同纠错重试，且不得修改 passed、
+分数、issues、claim 文本、来源性质或 evidence segment。自动修复只允许 summary map
+最终化、确定性 TTS 词典和明确 unit 的 claim evidence；事实性、医疗、数字、归因、
+转录质量及未知 high/critical 类别一律阻断。修复记录写入 `review_repair.json`，
+绝不直接把 `passed` 改为 true。
+
+节目原话与外部校正必须分账。可选的 `editorial_corrections.json` 绑定原始
+claim ID、节目陈述、公开处理、来源 URL、日期和风险域；它不构成 transcript evidence，
+但存在时属于 AI review 输入并由严格质量门校验。
 
 复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定，
 分数和 high/critical 阈值不变。AI review v3 要求先把复合 claim 拆为原子

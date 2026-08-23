@@ -28,6 +28,10 @@ IMPORTANCE_VALUES = {"high", "medium", "low"}
 CONTENT_MAP_SCHEMA_VERSION = 3
 SUMMARY_MAP_SCHEMA_VERSION = 2
 CLAIM_CONFIDENCE_VALUES = {"high", "medium", "low"}
+CLAIM_MODALITIES = {
+    "actual_event", "conditional", "prediction", "opinion",
+    "recommendation", "general_claim",
+}
 EVIDENCE_MODES = {"timestamp", "text_anchor"}
 
 
@@ -86,18 +90,23 @@ def segment_evidence_sha256(segments, segment_ids):
 
 def _segments_for_timestamps(segments, timestamps):
     selected = []
+    for window in timestamps or []:
+        if not isinstance(window, list) or len(window) != 2:
+            raise ValueError(f"timestamp 格式无效: {window!r}")
+        window_start, window_end = window
+        if (
+                window_start is None
+                or window_end is None
+                or window_start < 0
+                or window_end < window_start):
+            raise ValueError(f"timestamp 范围无效: {window!r}")
     for segment in segments:
         start = segment.get("start")
         end = segment.get("end")
         if start is None:
             continue
         end = end if end is not None else start
-        for window in timestamps or []:
-            if not isinstance(window, list) or len(window) != 2:
-                continue
-            window_start, window_end = window
-            if window_start is None or window_end is None:
-                continue
+        for window_start, window_end in timestamps or []:
             if end >= window_start and start <= window_end:
                 selected.append(segment)
                 break
@@ -111,6 +120,9 @@ def enrich_content_map_evidence(content_map, transcript):
     mode = content_map_evidence_mode(content_map, transcript)
     content_map["evidence_mode"] = mode
     for unit in content_map.get("units", []):
+        unit_id = unit.get("id") or "unknown-unit"
+        previous_ids = list(
+            unit.get("evidence", {}).get("segment_ids", []) or [])
         if mode == "text_anchor":
             existing_ids = set(
                 unit.get("evidence", {}).get("segment_ids", []))
@@ -123,6 +135,11 @@ def enrich_content_map_evidence(content_map, transcript):
                 segments, unit.get("timestamps", []))
         segment_ids = [
             segment["id"] for segment in selected if segment.get("id")]
+        if not segment_ids:
+            raise ValueError(
+                f"{unit_id}: evidence enrichment 结果为空；"
+                f"previous_segment_ids={previous_ids!r}, "
+                f"timestamps={unit.get('timestamps', [])!r}")
         unit["evidence"] = {
             "mode": mode,
             "segment_ids": segment_ids,
@@ -184,6 +201,7 @@ def apply_claim_evidence_mapping(
         unit_segments = set(
             unit.get("evidence", {}).get("segment_ids", []))
         evidence = {}
+        roles = {}
         hashes = {}
         notes = {}
         for index, _claim in enumerate(unit.get("claims", []), start=1):
@@ -202,12 +220,29 @@ def apply_claim_evidence_mapping(
             if not rationale:
                 raise ValueError(f"{full_id}: 缺少 evidence rationale")
             evidence[key] = segment_ids
+            primary = list(dict.fromkeys(
+                item.get("primary_segment_ids", segment_ids)))
+            context = [
+                segment_id
+                for segment_id in dict.fromkeys(
+                    item.get("context_segment_ids", []))
+                if segment_id not in set(primary)
+            ]
+            if not primary:
+                raise ValueError(f"{full_id}: primary_segment_ids 不能为空")
+            if primary + context != segment_ids:
+                raise ValueError(f"{full_id}: primary/context 与 claim 证据不一致")
+            roles[key] = {
+                "primary_segment_ids": primary,
+                "context_segment_ids": context,
+            }
             hashes[key] = segment_evidence_sha256(segments, segment_ids)
             notes[key] = {
                 "confidence": confidence,
                 "rationale": rationale,
             }
         unit["claim_evidence"] = evidence
+        unit["claim_evidence_roles"] = roles
         unit["claim_evidence_sha256"] = hashes
         unit["claim_evidence_notes"] = notes
     content_map["schema_version"] = CONTENT_MAP_SCHEMA_VERSION
@@ -286,6 +321,7 @@ def init_content_map(transcript_json, output, title=""):
             "topic": "",
             "speaker": segment.get("speaker"),
             "claims": [],
+            "claim_modalities": [],
             "reasoning": [],
             "examples": [],
             "numbers": [],
@@ -418,8 +454,24 @@ def validate_content_map(payload, transcript=None):
             errors.append(f"{display_id}: status={status}，尚未完成核验")
         if not unit.get("topic"):
             errors.append(f"{display_id}: 缺少 topic")
-        if importance in {"high", "medium"} and not unit.get("claims"):
+        if (
+                status != "excluded"
+                and importance in {"high", "medium"}
+                and not unit.get("claims")):
             errors.append(f"{display_id}: {importance} 单元没有 claims")
+        modalities = unit.get("claim_modalities")
+        if modalities:
+            if not isinstance(modalities, list):
+                errors.append(f"{display_id}: claim_modalities 必须是数组")
+            elif len(modalities) != len(unit.get("claims", [])):
+                errors.append(
+                    f"{display_id}: claim_modalities 数量必须与 claims 一致")
+            else:
+                invalid_modalities = sorted(
+                    set(modalities) - CLAIM_MODALITIES)
+                if invalid_modalities:
+                    errors.append(
+                        f"{display_id}: claim modality 无效: {invalid_modalities}")
         if evidence_mode == "timestamp":
             if not unit.get("timestamps"):
                 errors.append(f"{display_id}: 缺少 timestamps，无法回溯原音频")
@@ -509,6 +561,33 @@ def validate_content_map(payload, transcript=None):
                         if len(claim_segments) != len(set(claim_segments)):
                             errors.append(
                                 f"{display_id}-{claim_key}: claim 证据存在重复片段")
+                        claim_roles = unit.get("claim_evidence_roles")
+                        if isinstance(claim_roles, dict) and claim_key in claim_roles:
+                            role = claim_roles.get(claim_key)
+                            primary = (
+                                role.get("primary_segment_ids")
+                                if isinstance(role, dict) else None
+                            )
+                            context = (
+                                role.get("context_segment_ids")
+                                if isinstance(role, dict) else None
+                            )
+                            if not isinstance(primary, list) or not primary:
+                                errors.append(
+                                    f"{display_id}-{claim_key}: "
+                                    "primary_segment_ids 不能为空")
+                            elif not isinstance(context, list):
+                                errors.append(
+                                    f"{display_id}-{claim_key}: "
+                                    "context_segment_ids 必须是数组")
+                            elif set(primary) & set(context):
+                                errors.append(
+                                    f"{display_id}-{claim_key}: "
+                                    "primary/context 证据不得重叠")
+                            elif primary + context != claim_segments:
+                                errors.append(
+                                    f"{display_id}-{claim_key}: "
+                                    "primary/context 与 claim 证据不一致")
                         claim_sets.append(tuple(claim_segments))
                         if payload.get(
                                 "schema_version", 1) >= CONTENT_MAP_SCHEMA_VERSION:

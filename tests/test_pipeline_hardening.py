@@ -320,6 +320,31 @@ class ArtifactNormalizationTests(unittest.TestCase):
         )
         self.assertIn("normalized_numbers", changes)
 
+    def test_finalizer_preserves_mixed_alphanumeric_brand_names(self):
+        briefing = (
+            "导览内容足够长，用来说明全篇结构和核心问题。\n\n"
+            "## a16z 与 GPT-4 的四十五岁测试\n\n"
+            "a16z 讨论 GPT-4，也比较 45 岁群体。"
+        )
+        summary = {
+            "schema_version": 2,
+            "chapters": [{
+                "title": "placeholder",
+                "unit_ids": ["U0001"],
+                "claim_ids": ["U0001-C01"],
+            }],
+        }
+        finalized, aligned, changes = finalize_content_artifacts(
+            briefing, summary)
+        self.assertIn("a16z", finalized)
+        self.assertIn("GPT-4", finalized)
+        self.assertIn("四十五岁", finalized)
+        self.assertEqual(
+            aligned["chapters"][0]["title"],
+            "a16z 与 GPT-4 的四十五岁测试",
+        )
+        self.assertIn("normalized_numbers", changes)
+
     def test_finalizer_merges_trailing_conclusion_mapping(self):
         briefing = (
             "导览内容足够长，用来说明全篇结构和核心问题。\n\n"
