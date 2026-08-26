@@ -1451,6 +1451,27 @@ class EpisodeTests(unittest.TestCase):
                 "Long Folder Name & Guest/Long Folder Name & Guest.mp3",
             )
 
+    def test_failed_review_becomes_stale_when_reviewed_input_changes(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            load_episode(folder, create=True)
+            briefing = folder / "讲书稿.md"
+            briefing.write_text("original", encoding="utf-8")
+            digest = hashlib.sha256(briefing.read_bytes()).hexdigest()
+            (folder / "ai_review.json").write_text(json.dumps({
+                "passed": False,
+                "reviewed_files": {"讲书稿.md": digest},
+            }), encoding="utf-8")
+            self.assertEqual(
+                inspect_episode_state(folder)["content_review_status"],
+                "failed",
+            )
+            briefing.write_text("repaired", encoding="utf-8")
+            self.assertEqual(
+                inspect_episode_state(folder)["content_review_status"],
+                "stale",
+            )
+
     def test_review_status_does_not_overwrite_transcript_status(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)

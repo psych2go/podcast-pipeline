@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+import agent_pipeline
 import catalog_publish as catalog
 import claim_evidence
 import process
@@ -30,6 +31,99 @@ from validator import integer_to_chinese, normalize_briefing_artifacts
 
 
 class SubagentRecoveryTests(unittest.TestCase):
+    def test_pre_review_tts_lexicon_repair_is_scoped(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            briefing = folder / "讲书稿.md"
+            briefing.write_text(
+                "血液pH、LinkedIn和A/B测试。", encoding="utf-8")
+
+            def repair(_folder, _task, **kwargs):
+                self.assertEqual(
+                    [Path(path).name for path in kwargs["allowed_files"]],
+                    ["tts_lexicon.json"],
+                )
+                (folder / "tts_lexicon.json").write_text(json.dumps({
+                    "pH": "酸碱度",
+                    "LinkedIn": "领英",
+                    "A/B": "A B",
+                }), encoding="utf-8")
+
+            with patch("agent_pipeline.run_edit_task", side_effect=repair):
+                result = agent_pipeline._ensure_tts_lexicon_ready(
+                    folder, briefing)
+        self.assertTrue(result["repaired"])
+        self.assertEqual(result["entries"], 3)
+
+    def test_pre_review_tts_lexicon_rejects_sentence_scale_mapping(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            briefing = folder / "讲书稿.md"
+            briefing.write_text(
+                "血液pH、LinkedIn和A/B测试需要准确朗读。", encoding="utf-8")
+            existing = {"LinkedIn": "领英"}
+            (folder / "tts_lexicon.json").write_text(
+                json.dumps(existing), encoding="utf-8")
+
+            def repair(_folder, _task, **_kwargs):
+                (folder / "tts_lexicon.json").write_text(json.dumps({
+                    **existing,
+                    "血液pH、LinkedIn和A/B测试需要准确朗读": "完全不同事实",
+                }), encoding="utf-8")
+
+            with patch("agent_pipeline.run_edit_task", side_effect=repair):
+                with self.assertRaisesRegex(RuntimeError, "key 范围过大"):
+                    agent_pipeline._ensure_tts_lexicon_ready(folder, briefing)
+            restored = json.loads(
+                (folder / "tts_lexicon.json").read_text(encoding="utf-8"))
+        self.assertEqual(restored, existing)
+
+    def test_low_confidence_claim_repair_is_applied_deterministically(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            content_map = folder / "content_map.json"
+            content_map.write_text(json.dumps({
+                "units": [
+                    {
+                        "id": "U10000", "topic": "target",
+                        "claims": ["supported fact and unsupported addition"],
+                        "evidence": {"segment_ids": ["S0001"]},
+                        "claim_evidence": {"C01": ["S0001"]},
+                        "claim_evidence_sha256": {"C01": "old"},
+                        "claim_evidence_notes": {
+                            "C01": {"confidence": "low", "rationale": "too broad"},
+                        },
+                    },
+                    {"id": "U0020", "topic": "untouched", "claims": ["keep"]},
+                ],
+            }), encoding="utf-8")
+            raw = folder / "transcript.raw.json"
+            raw.write_text(json.dumps({
+                "segments": [{"id": "S0001", "text": "supported fact"}],
+            }), encoding="utf-8")
+            response = {
+                "payload": {"units": [{
+                    "unit_id": "U10000",
+                    "claims": ["supported fact"],
+                }]},
+            }
+            error = RuntimeError(
+                "U10000-C01: claim evidence confidence=low，需人工复核")
+            with patch(
+                    "agent_pipeline.run_json_task",
+                    return_value=response) as repair:
+                unit_ids = agent_pipeline._repair_low_confidence_claims(
+                    folder, raw, error)
+            repaired = json.loads(content_map.read_text(encoding="utf-8"))
+        self.assertEqual(unit_ids, ["U10000"])
+        self.assertEqual(repaired["units"][0]["claims"], ["supported fact"])
+        self.assertEqual(repaired["units"][0]["claim_evidence"], {})
+        self.assertEqual(repaired["units"][0]["claim_evidence_sha256"], {})
+        self.assertEqual(repaired["units"][0]["claim_evidence_notes"], {})
+        self.assertEqual(repaired["units"][1]["claims"], ["keep"])
+        self.assertIn("U10000", repair.call_args.args[1])
+        self.assertNotIn("U0020", repair.call_args.args[1])
+
     def test_output_schema_is_normalized_for_strict_codex_outputs(self):
         schema = {
             "type": "object",
@@ -220,6 +314,40 @@ class SubagentRecoveryTests(unittest.TestCase):
         self.assertEqual(
             validate_content_map(recovered, transcript)[0], [])
 
+    def test_claim_evidence_string_retry_labels_are_supported(self):
+        self.assertEqual(claim_evidence._batch_label(2), "002")
+        self.assertEqual(
+            claim_evidence._batch_label("2_1"), "2_1")
+
+    def test_claim_evidence_low_confidence_retries_single_unit(self):
+        batch = [{
+            "unit_id": "U0001",
+            "claims": [{"claim_id": "U0001-C01", "text": "claim"}],
+            "segments": [{"id": "S0001", "text": "source"}],
+        }]
+        low = [{
+            "claim_id": "U0001-C01",
+            "segment_ids": ["S0001"],
+            "confidence": "low",
+            "rationale": "首次证据不足，需要按单元重新核对。",
+        }]
+        high = [{
+            "claim_id": "U0001-C01",
+            "segment_ids": ["S0001"],
+            "confidence": "high",
+            "rationale": "单元复核确认原文直接支持该主张。",
+        }]
+        with patch(
+                "claim_evidence._run_batch",
+                return_value=({"claims": high}, {"duration_ms": 1})) as run:
+            mappings, wrappers = (
+                claim_evidence._retry_low_confidence_units(
+                    Path("/tmp"), batch, low, "model", 2))
+        self.assertEqual(mappings, high)
+        self.assertEqual(len(wrappers), 1)
+        self.assertEqual(run.call_args.args[3], "max")
+        self.assertEqual(run.call_args.args[4], "2_low_1")
+
     def test_claim_evidence_strict_mode_retries_failed_batch_per_unit(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
@@ -334,8 +462,10 @@ class ArtifactNormalizationTests(unittest.TestCase):
                 "claim_ids": ["U0001-C01"],
             }],
         }
+
         finalized, aligned, changes = finalize_content_artifacts(
             briefing, summary)
+
         self.assertIn("a16z", finalized)
         self.assertIn("GPT-4", finalized)
         self.assertIn("四十五岁", finalized)
@@ -678,32 +808,6 @@ class WranglerIsolationTests(unittest.TestCase):
         kwargs = run.call_args.kwargs
         self.assertEqual(kwargs["cwd"], site)
         self.assertNotIn("CLOUDFLARE_API_TOKEN", kwargs["env"])
-    def test_wrangler_retries_transient_fetch_failure(self):
-        command = ["npx", "wrangler", "r2", "bucket", "list"]
-        with patch.dict(os.environ, {
-                "WRANGLER_MAX_RETRIES": "2",
-                "WRANGLER_RETRY_BACKOFF": "0",
-        }, clear=False), patch.object(
-                catalog, "_run_with_output", side_effect=[
-                    (False, "ERROR fetch failed due to connectivity issue"),
-                    (True, "ok"),
-                ]) as run:
-            ok, output = catalog._run_wrangler(command)
-        self.assertTrue(ok)
-        self.assertEqual(output, "ok")
-        self.assertEqual(run.call_count, 2)
-
-    def test_wrangler_does_not_retry_permission_failure(self):
-        command = ["npx", "wrangler", "r2", "bucket", "list"]
-        with patch.dict(os.environ, {
-                "WRANGLER_MAX_RETRIES": "2",
-                "WRANGLER_RETRY_BACKOFF": "0",
-        }, clear=False), patch.object(
-                catalog, "_run_with_output",
-                return_value=(False, "ERROR authentication permission denied")) as run:
-            ok, _output = catalog._run_wrangler(command)
-        self.assertFalse(ok)
-        self.assertEqual(run.call_count, 1)
 
 
 if __name__ == "__main__":

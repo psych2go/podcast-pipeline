@@ -37,6 +37,7 @@ PRIVATE_ARTIFACT_NAMES = {
     "中文完整笔记.md",
     "transcript.raw.json",
     "content_map.json",
+    "editorial_fact_checks.json",
     "summary_map.json",
     "ai_review.json",
     "quality_report.json",

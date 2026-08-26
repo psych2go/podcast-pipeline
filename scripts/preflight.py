@@ -9,8 +9,7 @@ try:
         AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
         AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
         AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, AUTO_REVIEW_CODES,
-        ENTITY_ACCURACY_FAILED, SOURCE_QUALITY_FAILED,
-        quality_error_alignment,
+        ENTITY_ACCURACY_FAILED, quality_error_alignment,
     )
 except ImportError:
     from scripts.atomic_io import atomic_write_json
@@ -19,20 +18,8 @@ except ImportError:
         AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
         AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
         AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, AUTO_REVIEW_CODES,
-        ENTITY_ACCURACY_FAILED, SOURCE_QUALITY_FAILED,
-        quality_error_alignment,
+        ENTITY_ACCURACY_FAILED, quality_error_alignment,
     )
-
-STALE_REVIEW_SUPERSEDED_CODES = frozenset({
-    AI_REVIEW_FAILED,
-    AI_REVIEW_SECTION,
-    AI_REVIEW_SCORE,
-    AI_REVIEW_SEVERE_ISSUE,
-    AI_REVIEW_FACT_CHECK,
-    AI_REVIEW_ISSUE_EVIDENCE,
-    ENTITY_ACCURACY_FAILED,
-    SOURCE_QUALITY_FAILED,
-})
 
 
 def _review_recovery_decision(report):
@@ -45,11 +32,19 @@ def _review_recovery_decision(report):
     ]
     review_missing_or_stale = any(
         code in {AI_REVIEW_MISSING, AI_REVIEW_STALE} for code in codes)
-    allowed = set(AUTO_REVIEW_CODES)
-    if AI_REVIEW_STALE in codes:
-        allowed.update(STALE_REVIEW_SUPERSEDED_CODES)
+    stale = AI_REVIEW_STALE in codes
+    stale_review_codes = AUTO_REVIEW_CODES | {
+        AI_REVIEW_FAILED,
+        AI_REVIEW_SECTION,
+        AI_REVIEW_SCORE,
+        AI_REVIEW_SEVERE_ISSUE,
+        AI_REVIEW_FACT_CHECK,
+        AI_REVIEW_ISSUE_EVIDENCE,
+        ENTITY_ACCURACY_FAILED,
+    }
+    allowed_codes = stale_review_codes if stale else AUTO_REVIEW_CODES
     can_auto_review = review_missing_or_stale and bool(codes) and all(
-        code in allowed for code in codes)
+        code in allowed_codes for code in codes)
     return review_missing_or_stale, can_auto_review
 
 

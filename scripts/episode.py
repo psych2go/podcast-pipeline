@@ -273,8 +273,6 @@ def _review_status(folder):
         review = json.loads(review_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return "stale"
-    if not review.get("passed", False):
-        return "failed"
     for name, expected in review.get("reviewed_files", {}).items():
         path = Path(folder) / name
         if not path.exists():
@@ -282,6 +280,8 @@ def _review_status(folder):
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual != expected:
             return "stale"
+    if not review.get("passed", False):
+        return "failed"
     return "passed"
 
 
@@ -298,13 +298,44 @@ def inspect_episode_state(folder, payload=None):
             raw = {}
     source_kind = effective_source_kind(folder, raw)
     corrected = (folder / "转录_纠错.txt").exists()
+    if source_kind == "local_asr":
+        try:
+            try:
+                from transcript_correction import (
+                    MANIFEST_NAME as correction_manifest_name,
+                    correction_contract_required,
+                    validate_correction_manifest,
+                )
+            except ImportError:
+                from scripts.transcript_correction import (
+                    MANIFEST_NAME as correction_manifest_name,
+                    correction_contract_required,
+                    validate_correction_manifest,
+                )
+            if correction_contract_required(raw):
+                manifest_path = folder / correction_manifest_name
+                if not manifest_path.exists():
+                    corrected = False
+                else:
+                    manifest = json.loads(
+                        manifest_path.read_text(encoding="utf-8"))
+                    corrected = corrected and not validate_correction_manifest(
+                        raw, manifest,
+                        rendered_text=(folder / "转录_纠错.txt").read_text(
+                            encoding="utf-8"),
+                    )
+        except (ImportError, OSError, ValueError, TypeError):
+            corrected = False
     stored_quality = payload.get("quality", {})
 
     if source_kind in ASR_SOURCE_KINDS:
         transcript_status = (
             "已纠错（ASR）" if corrected else "待纠错（ASR）")
         correction_status = (
-            "corrected" if corrected else "required_missing")
+            "corrected_structured"
+            if corrected and (raw.get("meta", {}) or {}).get(
+                "correction_contract_version")
+            else "corrected" if corrected else "required_missing")
     elif corrected:
         transcript_status = "已纠错"
         correction_status = "corrected"
@@ -387,7 +418,7 @@ def render_source_markdown(folder, payload=None, state=None, processing_date="")
     lines = [
         "# 来源信息",
         "",
-        f"## {_source_heading(state['source_kind'])}",
+        "## 原始播客",
         f"- 标题：{payload.get('display_title') or folder.name}",
     ]
     if source.get("url"):

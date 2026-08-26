@@ -246,7 +246,7 @@ class LowConfidenceClaimRepairTests(unittest.TestCase):
 
 
 class EvidenceEnrichmentSafetyTests(unittest.TestCase):
-    def test_open_ended_unit_window_is_rejected_without_erasing_evidence(self):
+    def test_open_ended_last_unit_window_is_normalized_without_erasing_evidence(self):
         transcript = {
             "meta": {"timestamped": True, "evidence_mode": "timestamp"},
             "segments": [{
@@ -267,10 +267,11 @@ class EvidenceEnrichmentSafetyTests(unittest.TestCase):
                 },
             }],
         }
-        with self.assertRaisesRegex(ValueError, "timestamp 范围无效"):
-            enrich_content_map_evidence(content_map, transcript)
+        enriched, _transcript = enrich_content_map_evidence(
+            content_map, transcript)
+        self.assertEqual(enriched["units"][0]["timestamps"], [[12, 12]])
         self.assertEqual(
-            content_map["units"][0]["evidence"]["segment_ids"],
+            enriched["units"][0]["evidence"]["segment_ids"],
             ["S0001"],
         )
 

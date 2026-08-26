@@ -8,13 +8,20 @@ from pathlib import Path
 try:
     from atomic_io import atomic_write_json
     from quality_errors import (
-        ASR_QUALITY_FAILED, BRIEFING_AUDIT_NARRATION, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
+        ASR_QUALITY_FAILED, ASR_COMPLETENESS_MISSING,
+        ASR_SPEECH_COVERAGE_FAILED, ASR_TIMELINE_INVALID,
+        BRIEFING_AUDIT_NARRATION, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
         CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
+        CONTENT_MAP_SOURCE_SEGMENT_MISSING, CONTENT_MAP_EXCLUSION_INVALID,
         CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_AUDIT_NARRATION, NOTES_MISSING,
         SOURCE_QUALITY_FAILED, SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
-        TRANSCRIPT_CORRECTION_MISSING, TRANSCRIPT_INTEGRITY_FAILED,
+        PREWRITE_FACT_CHECKS_INVALID,
+        TRANSCRIPT_CORRECTION_MISSING, CORRECTION_MANIFEST_MISSING,
+        CORRECTION_MANIFEST_INVALID, CORRECTION_UNRESOLVED_HIGH_RISK,
+        TRANSCRIPT_INTEGRITY_FAILED,
         TRANSCRIPT_MISSING,
-        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
+        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_INCOMPLETE,
+        AI_REVIEW_ISSUE_EVIDENCE,
         AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
         AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, CONTENT_MAP_SCHEMA,
         CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
@@ -25,13 +32,20 @@ try:
 except ImportError:
     from scripts.atomic_io import atomic_write_json
     from scripts.quality_errors import (
-        ASR_QUALITY_FAILED, BRIEFING_AUDIT_NARRATION, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
+        ASR_QUALITY_FAILED, ASR_COMPLETENESS_MISSING,
+        ASR_SPEECH_COVERAGE_FAILED, ASR_TIMELINE_INVALID,
+        BRIEFING_AUDIT_NARRATION, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
         CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
+        CONTENT_MAP_SOURCE_SEGMENT_MISSING, CONTENT_MAP_EXCLUSION_INVALID,
         CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_AUDIT_NARRATION, NOTES_MISSING,
         SOURCE_QUALITY_FAILED, SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
-        TRANSCRIPT_CORRECTION_MISSING, TRANSCRIPT_INTEGRITY_FAILED,
+        PREWRITE_FACT_CHECKS_INVALID,
+        TRANSCRIPT_CORRECTION_MISSING, CORRECTION_MANIFEST_MISSING,
+        CORRECTION_MANIFEST_INVALID, CORRECTION_UNRESOLVED_HIGH_RISK,
+        TRANSCRIPT_INTEGRITY_FAILED,
         TRANSCRIPT_MISSING,
-        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
+        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_INCOMPLETE,
+        AI_REVIEW_ISSUE_EVIDENCE,
         AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
         AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, CONTENT_MAP_SCHEMA,
         CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
@@ -44,7 +58,8 @@ try:
     from content_map import (
         CONTENT_MAP_SCHEMA_VERSION,
         body_sha256, content_map_evidence_mode, coverage_report, load_json,
-        transcript_evidence_mode, unit_claim_ids, validate_content_map,
+        source_segment_accountability, transcript_evidence_mode,
+        unit_claim_ids, validate_content_map,
         validate_summary_map,
     )
     from validator import audit_narration_issues, structure_report
@@ -73,13 +88,33 @@ try:
         expected_source_references,
         validate_source_relevance_cache,
     )
+    from prewrite_fact_checks import (
+        FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
+        SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
+        validate_ledger as validate_prewrite_fact_checks,
+    )
     from tts import load_tts_lexicon
-    from claim_taxonomy import validate_review_fact_checks
+    from claim_taxonomy import (
+        atomic_subclaim_parent,
+        derive_legacy_claim_type,
+    )
+    from transcript_correction import (
+        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
+        correction_contract_required,
+        correction_summary,
+        validate_correction_manifest,
+    )
+    from transcript_completeness import (
+        completeness_contract_required,
+        completeness_enforcement_mode,
+        validate_completeness_result,
+    )
 except ImportError:  # package import
     from scripts.content_map import (
         CONTENT_MAP_SCHEMA_VERSION,
         body_sha256, content_map_evidence_mode, coverage_report, load_json,
-        transcript_evidence_mode, unit_claim_ids, validate_content_map,
+        source_segment_accountability, transcript_evidence_mode,
+        unit_claim_ids, validate_content_map,
         validate_summary_map,
     )
     from scripts.validator import audit_narration_issues, structure_report
@@ -108,8 +143,27 @@ except ImportError:  # package import
         expected_source_references,
         validate_source_relevance_cache,
     )
+    from scripts.prewrite_fact_checks import (
+        FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
+        SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
+        validate_ledger as validate_prewrite_fact_checks,
+    )
     from scripts.tts import load_tts_lexicon
-    from scripts.claim_taxonomy import validate_review_fact_checks
+    from scripts.claim_taxonomy import (
+        atomic_subclaim_parent,
+        derive_legacy_claim_type,
+    )
+    from scripts.transcript_correction import (
+        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
+        correction_contract_required,
+        correction_summary,
+        validate_correction_manifest,
+    )
+    from scripts.transcript_completeness import (
+        completeness_contract_required,
+        completeness_enforcement_mode,
+        validate_completeness_result,
+    )
 
 
 MIN_NOTES_TO_BRIEFING_RATIO = 1.15
@@ -204,6 +258,12 @@ def _transcript_metrics(raw):
                 "word_timestamp_coverage"),
             "warning": meta.get("alignment_warning"),
         },
+        "completeness_contract_version": meta.get(
+            "completeness_contract_version"),
+        "completeness_mode": meta.get("completeness_mode", "report_only"),
+        "correction_contract_version": meta.get(
+            "correction_contract_version"),
+        "completeness": meta.get("completeness", {}),
         "transcript_chars": meta.get("transcript_chars"),
         "model": meta.get("model"),
         "quality": meta.get("quality"),
@@ -234,8 +294,167 @@ def _transcript_metrics(raw):
 
 
 def _ai_fact_check_consistency_v3(review, valid_claim_ids=None):
-    return validate_review_fact_checks(
-        review, valid_claim_ids=valid_claim_ids)
+    fact_checks = review.get("fact_checks", [])
+    errors = []
+    warnings = []
+    required = {
+        "claim", "parent_claim_id", "subclaim_id", "claim_type",
+        "claim_origin", "speaker_role", "assertion_type",
+        "verification_mode", "risk_domain", "verdict",
+        "publication_status", "evidence_segment_ids", "source_urls",
+        "checked_at", "notes",
+    }
+    seen_subclaims = set()
+    subclaim_numbers = {}
+    compound_pattern = re.compile(
+        r"；|，(?:但|而|因此|从而|同时|并且)|以及|并认为|并称")
+
+    for index, item in enumerate(fact_checks):
+        if not isinstance(item, dict):
+            errors.append(f"AI fact_checks[{index}] 必须是对象")
+            continue
+        claim = item.get("claim") or f"fact_checks[{index}]"
+        missing = sorted(required - set(item))
+        if missing:
+            errors.append(f"{claim}: AI review v3 缺少字段 {missing}")
+            continue
+
+        parent = item.get("parent_claim_id")
+        subclaim = item.get("subclaim_id")
+        parsed_parent = atomic_subclaim_parent(subclaim)
+        if parsed_parent != parent:
+            errors.append(
+                f"{claim}: subclaim_id 必须使用 {{parent_claim_id}}-Fxx")
+        if subclaim in seen_subclaims:
+            errors.append(f"{claim}: subclaim_id 重复: {subclaim}")
+        seen_subclaims.add(subclaim)
+        if parsed_parent:
+            number = int(str(subclaim).rsplit("F", 1)[1])
+            subclaim_numbers.setdefault(parent, []).append(number)
+        if valid_claim_ids is not None and parent not in valid_claim_ids:
+            errors.append(f"{claim}: parent_claim_id 不存在于 content_map: {parent}")
+
+        expected_legacy = derive_legacy_claim_type(item)
+        if item.get("claim_type") != expected_legacy:
+            errors.append(
+                f"{claim}: claim_type 应由 v3 维度派生为 "
+                f"{expected_legacy!r}，实际为 {item.get('claim_type')!r}")
+
+        origin = item.get("claim_origin")
+        role = item.get("speaker_role")
+        assertion = item.get("assertion_type")
+        mode = item.get("verification_mode")
+        risk = item.get("risk_domain")
+        verdict = item.get("verdict")
+        status = item.get("publication_status")
+        segments = item.get("evidence_segment_ids") or []
+        urls = item.get("source_urls") or []
+
+        if origin in {"speaker_firsthand", "speaker_reported"} and role in {
+                "editorial", "not_applicable"}:
+            errors.append(f"{claim}: speaker 来源必须填写真实 speaker_role")
+        if origin == "editorial_added" and role != "editorial":
+            errors.append(f"{claim}: editorial_added 必须使用 speaker_role=editorial")
+
+        if verdict in {"unsupported", "contradicted"} and status == "used_as_fact":
+            errors.append(f"{claim}: 未获支持或被反驳内容仍作为事实采用")
+        if verdict in {"faithfully_attributed", "accurately_reported", "not_applicable"} \
+                and status == "used_as_fact":
+            errors.append(f"{claim}: 该 verdict 不能作为无归因客观事实采用")
+
+        if origin == "speaker_firsthand":
+            specialized_assertion = assertion in {
+                "allegation", "explanation", "definition",
+                "opinion", "prediction", "recommendation",
+            }
+            if not specialized_assertion and mode != "transcript_attribution":
+                errors.append(
+                    f"{claim}: speaker_firsthand 核查模式必须是 transcript_attribution")
+            if status == "used_as_fact":
+                errors.append(f"{claim}: 一手信息必须明确归因")
+            if status != "excluded" and not segments:
+                errors.append(f"{claim}: 一手信息缺少 transcript segment")
+            if (
+                    not specialized_assertion
+                    and status != "excluded"
+                    and verdict not in {"faithfully_attributed", "qualified"}):
+                errors.append(f"{claim}: 一手信息 verdict 不符合归因规则")
+
+        if origin == "speaker_reported" and assertion == "fact":
+            if status == "used_as_fact":
+                errors.append(f"{claim}: speaker_reported 必须明确归因，不能作为无归因事实")
+            if status != "excluded" and not segments:
+                errors.append(f"{claim}: speaker_reported 缺少 transcript segment")
+            if status != "excluded" and verdict not in {
+                    "accurately_reported", "qualified", "uncertain"}:
+                errors.append(f"{claim}: speaker_reported verdict 不符合来源转述语义")
+
+        if assertion in {"opinion", "prediction"}:
+            if status == "used_as_fact":
+                errors.append(f"{claim}: 观点或预测不能升级为客观事实")
+            if status != "excluded" and not segments:
+                errors.append(f"{claim}: 观点或预测缺少转录归因证据")
+            if mode not in {"transcript_attribution", "transcript_only", "not_applicable"}:
+                errors.append(f"{claim}: 观点或预测不应要求外部事实证明")
+
+        if assertion == "recommendation":
+            if origin in {"speaker_firsthand", "speaker_reported"} \
+                    and status != "excluded" and not segments:
+                errors.append(f"{claim}: 建议缺少说话人转录证据")
+            if risk in {"medical", "legal", "financial", "safety"} \
+                    and status != "excluded":
+                if mode != "safety_cross_check":
+                    errors.append(f"{claim}: 高风险建议必须 safety_cross_check")
+                if not urls:
+                    errors.append(f"{claim}: 高风险建议缺少公开安全核查来源")
+
+        if assertion in {"explanation", "definition"}:
+            if mode not in {
+                    "transcript_attribution", "transcript_only",
+                    "web_spot_check", "safety_cross_check"}:
+                errors.append(f"{claim}: 解释或定义的核查模式不匹配")
+            if origin in {"speaker_firsthand", "speaker_reported"} \
+                    and status != "excluded" and not segments:
+                errors.append(f"{claim}: 解释或定义缺少转录证据")
+
+        if assertion == "allegation":
+            if mode != "source_document_required":
+                errors.append(f"{claim}: allegation 必须 source_document_required")
+            if status != "excluded" and not urls:
+                errors.append(f"{claim}: allegation 缺少来源文件 URL")
+            if status == "used_as_fact":
+                errors.append(f"{claim}: 未裁判指控不能写成既定事实")
+            if status != "excluded" and verdict not in {
+                    "accurately_reported", "qualified", "unsupported",
+                    "contradicted", "uncertain"}:
+                errors.append(f"{claim}: allegation verdict 不符合来源转述语义")
+
+        if origin in {"external_source", "editorial_added"} \
+                and assertion == "fact" and status == "used_as_fact":
+            if mode != "web_required":
+                errors.append(f"{claim}: 外部或编辑部客观事实必须 web_required")
+            if verdict not in {"supported", "qualified"}:
+                errors.append(
+                    f"{claim}: 作为事实采用时 verdict 必须为 supported 或 qualified")
+            if not urls:
+                errors.append(f"{claim}: 外部或编辑部客观事实缺少网页来源")
+
+        if origin == "episode_metadata" and mode != "transcript_only":
+            errors.append(f"{claim}: episode_metadata 应使用 transcript_only")
+        if assertion == "inference" and status == "used_as_fact":
+            errors.append(f"{claim}: 推论必须明确限定，不能写成既定事实")
+
+        if compound_pattern.search(str(claim)):
+            warnings.append(
+                f"{subclaim}: 子主张仍含复合连接词，请确认已保持单一 assertion_type")
+
+    for parent, numbers in subclaim_numbers.items():
+        ordered = sorted(set(numbers))
+        expected = list(range(1, len(ordered) + 1))
+        if ordered != expected:
+            errors.append(
+                f"{parent}: subclaim_id 序号必须从 F01 连续递增，实际 {ordered}")
+    return errors, warnings
 
 
 def _ai_fact_check_consistency(review, valid_claim_ids=None):
@@ -429,6 +648,52 @@ def build_quality_report(folder, strict=True, *, today=None):
             source_kind == "local_asr"
             and asr_quality in {"balanced", "max"}
         )
+        try:
+            completeness_required = bool(
+                source_kind == "local_asr"
+                and completeness_contract_required(raw)
+            )
+            completeness_mode = completeness_enforcement_mode(raw)
+        except ValueError as exc:
+            completeness_required = True
+            completeness_mode = "enforce"
+            add_error(report, ASR_COMPLETENESS_MISSING, str(exc))
+        completeness = report["transcript"].get("completeness")
+
+        def completeness_problem(code, message):
+            if completeness_mode == "enforce":
+                add_error(report, code, message)
+            else:
+                report["warnings"].append(
+                    "ASR 语音完整性处于 report_only，未阻断: " + message)
+
+        if completeness_required:
+            if not isinstance(completeness, dict) or not completeness:
+                completeness_problem(
+                    ASR_COMPLETENESS_MISSING,
+                    "新本地 ASR revision 缺少语音完整性报告")
+            else:
+                completeness_errors = validate_completeness_result(
+                    raw, completeness)
+                for error in completeness_errors:
+                    code = (
+                        ASR_TIMELINE_INVALID
+                        if "时间线" in error else
+                        ASR_COMPLETENESS_MISSING
+                        if (
+                            "schema" in error or "缺少" in error
+                            or "绑定" in error
+                        )
+                        else ASR_SPEECH_COVERAGE_FAILED
+                    )
+                    completeness_problem(code, error)
+                if completeness.get("passed") is not True:
+                    completeness_problem(
+                        ASR_SPEECH_COVERAGE_FAILED,
+                        "本地 ASR 语音完整性检查未通过: "
+                        f"status={completeness.get('status')}, "
+                        f"coverage={completeness.get('speech_coverage')}, "
+                        f"max_gap={completeness.get('max_uncovered_speech_seconds')}")
         if (
                 is_local_asr
                 and report["transcript"]["timestamp_coverage"] < 0.95):
@@ -495,6 +760,14 @@ def build_quality_report(folder, strict=True, *, today=None):
         add_error(report, TRANSCRIPT_MISSING, "缺少 transcript.raw.json，无法进行完整转录审计")
 
     corrected_path = folder / "转录_纠错.txt"
+    try:
+        correction_required = bool(
+            raw and effective_source_kind(folder, raw) == "local_asr"
+            and correction_contract_required(raw)
+        )
+    except ValueError as exc:
+        correction_required = True
+        add_error(report, CORRECTION_MANIFEST_INVALID, str(exc))
     if corrected_path.exists():
         corrected_text = corrected_path.read_text(encoding="utf-8")
         report["corrected_transcript"] = {
@@ -505,6 +778,39 @@ def build_quality_report(folder, strict=True, *, today=None):
         drift = correction_metrics(folder)
         if drift:
             report["corrected_transcript"]["drift"] = drift
+    if correction_required:
+        manifest_path = folder / CORRECTION_MANIFEST_NAME
+        if not manifest_path.exists():
+            add_error(
+                report, CORRECTION_MANIFEST_MISSING,
+                "新本地 ASR revision 缺少 correction_manifest.json")
+        else:
+            try:
+                manifest = load_json(manifest_path)
+                manifest_errors = validate_correction_manifest(
+                    raw, manifest,
+                    rendered_text=(
+                        corrected_path.read_text(encoding="utf-8")
+                        if corrected_path.exists() else None
+                    ),
+                )
+            except (OSError, ValueError, TypeError) as exc:
+                manifest_errors = [f"无法读取 correction manifest: {exc}"]
+            if manifest_errors:
+                for error in manifest_errors:
+                    add_error(
+                        report,
+                        CORRECTION_UNRESOLVED_HIGH_RISK
+                        if "高风险" in error else CORRECTION_MANIFEST_INVALID,
+                        error,
+                    )
+            else:
+                report.setdefault("corrected_transcript", {})[
+                    "manifest"] = {
+                        "file": CORRECTION_MANIFEST_NAME,
+                        "schema_version": manifest.get("schema_version"),
+                        "summary": correction_summary(raw, manifest),
+                    }
     if (
             raw
             and effective_source_kind(folder, raw) in ASR_SOURCE_KINDS
@@ -538,8 +844,7 @@ def build_quality_report(folder, strict=True, *, today=None):
             report["canonical_entities"] = {
                 "validation_errors": entity_errors,
             }
-            extend_errors(
-                report, CONTENT_MAP_VALIDATION, entity_errors)
+            extend_errors(report, CONTENT_MAP_VALIDATION, entity_errors)
         corrections_path = folder / "editorial_corrections.json"
         if corrections_path.exists():
             correction_errors = validate_editorial_corrections(
@@ -550,8 +855,7 @@ def build_quality_report(folder, strict=True, *, today=None):
             report["editorial_corrections"] = {
                 "validation_errors": correction_errors,
             }
-            extend_errors(
-                report, CONTENT_MAP_VALIDATION, correction_errors)
+            extend_errors(report, CONTENT_MAP_VALIDATION, correction_errors)
         relevance_path = folder / SOURCE_RELEVANCE_CACHE
         if relevance_path.exists():
             relevance_payload = load_json(relevance_path)
@@ -561,19 +865,16 @@ def build_quality_report(folder, strict=True, *, today=None):
                 "validation_errors": relevance_errors,
                 "entry_count": len(relevance_payload.get("entries", {})),
             }
-            extend_errors(
-                report, CONTENT_MAP_VALIDATION, relevance_errors)
+            extend_errors(report, CONTENT_MAP_VALIDATION, relevance_errors)
         progress_path = folder / PROGRESS_FILENAME
         if progress_path.exists():
             progress_payload = load_json(progress_path)
-            progress_errors = validate_progress(
-                progress_payload, raw or {})
+            progress_errors = validate_progress(progress_payload, raw or {})
             report["claim_evidence_progress"] = {
                 "status": progress_payload.get("status"),
                 "validation_errors": progress_errors,
             }
-            extend_errors(
-                report, CONTENT_MAP_VALIDATION, progress_errors)
+            extend_errors(report, CONTENT_MAP_VALIDATION, progress_errors)
         if (
                 strict
                 and content_map.get(
@@ -624,12 +925,20 @@ def build_quality_report(folder, strict=True, *, today=None):
                 "的 evidence_mode 不一致")
         errors, warnings = validate_content_map(
             content_map, raw_for_validation)
+        accountability = (
+            source_segment_accountability(content_map, raw_for_validation)
+            if raw_for_validation is not None else None
+        )
         report["content_map"] = {
             "unit_count": len(content_map.get("units", [])),
             "evidence_mode": map_mode,
+            "source_segment_coverage": accountability,
             "validation_errors": errors,
             "validation_warnings": warnings,
         }
+        if accountability and accountability["missing_ids"]:
+            report["warnings"].append(
+                "source segment accountability failed; see validation errors")
         refiner = content_map.get("claim_evidence_refiner")
         if isinstance(refiner, dict):
             report["content_map"]["claim_evidence_refiner"] = {
@@ -657,8 +966,41 @@ def build_quality_report(folder, strict=True, *, today=None):
                 and not content_map.get("claim_evidence_refined_at")):
             report["warnings"].append(
                 "evidence v3 含多 claim 单元，但缺少 claim evidence 精炼时间元数据")
-        extend_errors(report, CONTENT_MAP_VALIDATION, errors)
+        for error in errors:
+            add_error(
+                report,
+                CONTENT_MAP_SOURCE_SEGMENT_MISSING
+                if "缺少源 segment" in error
+                else CONTENT_MAP_EXCLUSION_INVALID
+                if "exclusion_type" in error
+                else CONTENT_MAP_VALIDATION,
+                error,
+            )
         report["warnings"].extend(warnings)
+        prewrite_path = folder / PREWRITE_FACT_CHECKS_FILENAME
+        prewrite_required = int(
+            content_map.get("prewrite_fact_checks_version", 0) or 0
+        ) >= PREWRITE_FACT_CHECKS_VERSION
+        if prewrite_path.exists():
+            prewrite_errors = validate_prewrite_fact_checks(folder)
+            report["editorial_fact_checks"] = {
+                "present": True,
+                "required": prewrite_required,
+                "passed": not prewrite_errors,
+                "validation_errors": prewrite_errors,
+            }
+            for error in prewrite_errors:
+                add_error(report, PREWRITE_FACT_CHECKS_INVALID, error)
+        elif prewrite_required:
+            message = (
+                "新内容 revision 缺少 editorial_fact_checks.json 预写作事实台账")
+            report["editorial_fact_checks"] = {
+                "present": False,
+                "required": True,
+                "passed": False,
+                "validation_errors": [message],
+            }
+            add_error(report, PREWRITE_FACT_CHECKS_INVALID, message)
         if summary_map_path.exists():
             summary_map = load_json(summary_map_path)
             if strict and summary_map.get("schema_version", 1) < 2:
@@ -709,7 +1051,8 @@ def build_quality_report(folder, strict=True, *, today=None):
             extend_errors(report, SUMMARY_MAP_VALIDATION, summary_errors)
             # 结构错误时不要继续调用 coverage_report，避免质量报告本身崩溃。
             if not errors and not summary_errors:
-                coverage = coverage_report(content_map, summary_map)
+                coverage = coverage_report(
+                    content_map, summary_map, raw_for_validation)
                 report["coverage"] = coverage
                 if not coverage["passed"]:
                     add_error(report, COVERAGE_FAILED, "总结覆盖率检查未通过")
@@ -816,6 +1159,26 @@ def build_quality_report(folder, strict=True, *, today=None):
 
             if not review.get("passed"):
                 ai_error(AI_REVIEW_FAILED, "AI 最终审查未通过")
+            audit_completion = review.get("audit_completion")
+            required_audits = {
+                "transcript", "entities", "factuality_numbers",
+                "attribution_evidence", "coverage", "tts",
+                "exhaustive_inventory_completed",
+            }
+            if isinstance(audit_completion, dict):
+                incomplete_audits = sorted(
+                    name for name in required_audits
+                    if audit_completion.get(name) is not True
+                )
+                if incomplete_audits:
+                    ai_error(
+                        AI_REVIEW_INCOMPLETE,
+                        "AI 审查未完成全部专项: "
+                        + ", ".join(incomplete_audits))
+            elif int(review.get("audit_contract_version", 0) or 0) >= 1:
+                ai_error(
+                    AI_REVIEW_INCOMPLETE,
+                    "AI 审查缺少 audit_completion 专项完成清单")
             for section in ("transcript_quality", "coverage", "factuality", "numbers", "attribution", "tts", "publish"):
                 if not review.get(section, {}).get("passed", False):
                     ai_error(AI_REVIEW_SECTION, f"AI 审查分项未通过: {section}")
@@ -873,6 +1236,7 @@ def build_quality_report(folder, strict=True, *, today=None):
                 "errors": ai_errors,
                 "reviewed_at": review.get("reviewed_at"),
                 "summary": review.get("summary"),
+                "audit_completion": review.get("audit_completion"),
                 "transcript_quality": {
                     key: review.get("transcript_quality", {}).get(key)
                     for key in (

@@ -62,18 +62,6 @@ custom provider 的环境仍可认证，同时不会加载用户自动化扩展�
 
 ## 2. 核心模块
 
-### `rebuild_plan.py`、`editorial_corrections.py`、`canonical_entities.py` 与 `source_relevance.py`
-
-`rebuild_plan.py` 以只读 shadow mode 记录缺失产物、转录依据漂移、受影响阶段、
-unit 和章节；实际执行仍由 `process.py` 控制。完成真实长单集校准前，planner 不会
-绕过现有全量质量门。
-
-`editorial_corrections.py` 校验外部事实校正台账。`canonical_entities.py` 自动建立
-observed/canonical/public-alias/entity-source/segment 合同并阻断错误别名进入公开稿。
-`source_relevance.py` 为 correction/entity URL 缓存标题、摘录、HTTP 状态和内容哈希，
-供 reviewer 核查来源是否真的支持主张。所有这些台账属于 review 输入，但绝不冒充
-转录证据。
-
 ### `episode.py`
 
 `episode.json` 是单集元数据真源：
@@ -130,6 +118,10 @@ transcript.raw.json
 ```
 
 默认每期最多处理 8 个区间，可通过 `ASR_REFINE_MAX_RANGES` 调整。
+
+`transcript_completeness.py` 使用独立、敏感的 Silero VAD adapter 计算音频语音区间与最终 ASR segment 区间的覆盖关系。音频以固定时长、有少量重叠的分块解码，避免多小时节目同时驻留另一份完整 PCM。指标包括音频时长、语音覆盖率、首尾差值、最大未覆盖区间和时间轴合法性，写入 `meta.completeness`；空 VAD 结果不会被认证为百分之百覆盖。阈值 policy 与纯区间计算分离。新本地 ASR revision 带 completeness/correction contract version，但两个 contract 独立生效：结构化纠错始终要求完整 manifest；completeness 默认 `ASR_COMPLETENESS_MODE=report_only`，未通过只告警，完成真实长播客校准后显式设为 `enforce` 才阻断内容与发布。未知 mode 或 contract version 会确定性失败。
+
+每个 ASR segment 保留 `decoder_text`，规范化后的 `text` 只允许可审计的保守变化，并记录 `normalization.operations`。广告、寒暄、口头语、外语标记和真实重复属于 faithful evidence，不在 ASR 层按编辑价值删除。
 
 候选选择额外处理 prompt echo：当原稿几乎完全由 context 词重复构成、原段
 仍为高风险，而候选质量更高、风险消除且语速合理时，可绕过长度和文本相似度
@@ -232,20 +224,12 @@ Podscripts 只有在明确的证书校验异常时才允许 source-scoped TLS �
 
 ### `content_map.py`
 
-`content_map.json` 生成使用只读 structured output；agent 只返回 unit 分组和语义字段，
-哈希由确定性代码补齐。claim-evidence 前的 stage validator 会拒绝未知 status、空或未知
-segment、`null`/倒序时间窗、无证据 unit、excluded claim 和未记账源片段，避免结构错误
-进入昂贵模型调用。enrichment 若会把 unit 证据刷新为空则硬失败，并保留原 evidence。
-
-每条 claim 可声明 `claim_modalities`，写稿必须保持 actual/conditional/prediction/opinion/
-recommendation 的事实状态。新 map 还为 numbers/examples 确定性生成 Nxx/Exx detail ID；
-summary map 的 `notes_number_ids` 和 `notes_example_ids` 必须逐项证明完整笔记覆盖。
-claim evidence 可记录直接支持的 `primary_segment_ids` 与仅提供归因/限定的
-`context_segment_ids`，同时派生旧版扁平数组保持已发布 v3 数据可读。
-
 evidence v3 的约束：
 
 - 每个 transcript segment 在当前 evidence revision 内有稳定 `Sxxxx` ID。
+- 新 evidence revision 声明 `source_accountability_contract_version=1`，对应 content map 必须保留 `source_accountability_version=1`；删除 map 字段不能绕过检查。所有非空源 segment 都必须被至少一个有效 unit 记账；`included`、`condensed` 和有明确分类/原因的 `excluded` 都算已处理，`unresolved`、`pending`、`unsupported` 或无效 excluded 不算覆盖并阻断。
+- `condensed` 的实质 claim 必须进入中文完整笔记，但进入讲稿可选；`included` high/medium claim 仍必须进入讲稿，不能借 condensed 降低既有覆盖要求。
+- 广告和无意义闲谈保留在转录与纠错 evidence 中，可在 content map 使用 `advertisement`、`housekeeping`、`banter` 等 `exclusion_type` 排除；summary map 不得引用 excluded unit。
 - unit 的 evidence 绑定 segment ID、时间范围和源文本 SHA-256。
 - 每个 claim 通过 `claim_evidence` 绑定最小 segment 集合。
 - 每个 claim 的 segment 集合有独立 SHA-256、置信度和选择理由。
@@ -269,12 +253,6 @@ evidence v3 的约束：
 `enrich-evidence` 不再为多 claim 单元猜测证据。新内容应在生成
 `content_map.json` 时直接填写精确映射；`claim_evidence.py` 主要用于按 unit
 迁移历史数据。超过 60 个 segment 的 unit 会产生结构告警。
-
-`claim_evidence_progress.json` 是 evidence revision 绑定的批次 checkpoint，记录 target、
-completed、pending、failed unit 和 completed/partial/invalid_input/invalid_result 状态；
-每个成功 unit 提交后原子刷新。claim-evidence 可读取与 segment 一一对齐的 corrected text
-辅助理解 ASR 错词，但 ID/hash 仍绑定 raw evidence。low confidence 会先进行 max effort
-单 unit 复核，再执行一次受限 claim 收窄；runner 中断或最终校验失败都不会伪装成完成。
 
 ### `ai_review.py`
 
@@ -333,7 +311,7 @@ metadata-only provenance 迁移可以使用严格受限的 `--rebind-provenance`
 - AI review v3 的原子 subclaim、content-map parent 绑定、实体准确性和多维核查规则通过；v1/v2 审查在下次内容变化时重审迁移
 - 三项百分制评分均不低于 90
 - balanced/max 本地 ASR 的时间戳与低置信度确定性指标通过
-- 本地 ASR 已生成纠错稿，且 summary map 绑定纠错稿 hash
+- 本地 ASR 已生成纠错稿，且新 revision 的 `correction_manifest.json` 逐 segment 绑定当前 evidence、通过顺序/哈希/删除率/未解决高风险校验；summary map 绑定纠错稿 hash
 - 来源抓取未关闭 TLS 证书校验
 - 无结构错误
 - lexicon 应用后的真实 TTS 输入不存在残留数字、未映射缩写、难读符号、重复替换或未确认英文串
@@ -392,10 +370,6 @@ AI review 之后，`process.py` 的 TTS/HTML 路径只读验证讲稿和 summary
 `--allow-unchecked`。
 
 ### `catalog.py` 和 `publish.py`
-
-`PODCAST_ROOT` 可将公开代码指向独立私有 workspace；CLI 会把 catalog core、site 和
-publish 模块统一绑定到派生的 content/site/catalog 路径。Wrangler R2 与 Pages 命令对
-网络、429、5xx 错误执行有界指数退避，权限或参数错误立即失败。
 
 `catalog.py finish` 是发布事务入口。它会先全量重建 `site.json` 和
 `播客目录.md`，校验标题、顺序、字数和 `ffprobe` 真实时长一致，再上传 R2、
@@ -536,3 +510,5 @@ npx wrangler pages deploy site --project-name podcast-scripts --branch main
     `legacy_asr/unknown`，不得写成官方字幕。
 11. 转录纠错只修复听写和说话人识别，嘉宾本身的事实错误必须保留原话并在
     fact check 或稿件归因中处理。
+12. 原始转录 faithful 保留真实广告、寒暄和口头语；是否进入公开内容只由带 segment 证据的 content-map 状态决定。
+13. 新本地 ASR 必须通过语音完整性合同和逐 segment correction manifest，不能仅凭输出文件存在判定完成。

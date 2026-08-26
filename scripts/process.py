@@ -304,6 +304,7 @@ def _prepare_evidence_metadata(metadata, transcript, folder=None):
             else "text_anchor"
         )
     metadata["meta"]["evidence_mode"] = evidence_mode
+    metadata["meta"].setdefault("source_accountability_contract_version", 1)
     metadata["evidence"] = {
         "schema_version": 1,
         "revision_id": uuid.uuid4().hex,
@@ -495,9 +496,12 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
         return False
 
     if write_evidence and source_kind in {"web_transcript", "local_transcript"}:
-        transcript = apply_content_policy(transcript, content_policy)
+        # Immutable source evidence is always faithful. Editorial policies are
+        # recorded for downstream unit classification and never delete source
+        # transcript text or desynchronize structured segments.
         if metadata:
-            metadata.setdefault("meta", {})["content_policy"] = content_policy
+            metadata.setdefault("meta", {})["content_policy"] = "faithful"
+            metadata["meta"]["requested_content_policy"] = content_policy
 
     if write_evidence:
         if not metadata:
@@ -932,10 +936,7 @@ def _process_impl(source, name, folder, run_report, options):
     )
     if needs_content:
         reasons = rebuild_plan.get("reasons") or ["deterministic_validation"]
-        print(
-            "[内容计划] " + ", ".join(reasons[:8]),
-            flush=True,
-        )
+        print("[内容计划] " + ", ".join(reasons[:8]), flush=True)
         print("[内容] 内容产物缺失、过期或不完整，启动 subagent 编排...", flush=True)
         if not run_content_pipeline(
                 folder,
