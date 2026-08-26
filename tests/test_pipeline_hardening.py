@@ -87,6 +87,7 @@ class SubagentRecoveryTests(unittest.TestCase):
                     {
                         "id": "U10000", "topic": "target",
                         "claims": ["supported fact and unsupported addition"],
+                        "claim_modalities": ["general_claim"],
                         "evidence": {"segment_ids": ["S0001"]},
                         "claim_evidence": {"C01": ["S0001"]},
                         "claim_evidence_sha256": {"C01": "old"},
@@ -105,6 +106,7 @@ class SubagentRecoveryTests(unittest.TestCase):
                 "payload": {"units": [{
                     "unit_id": "U10000",
                     "claims": ["supported fact"],
+                    "claim_modalities": ["actual_event"],
                 }]},
             }
             error = RuntimeError(
@@ -117,6 +119,8 @@ class SubagentRecoveryTests(unittest.TestCase):
             repaired = json.loads(content_map.read_text(encoding="utf-8"))
         self.assertEqual(unit_ids, ["U10000"])
         self.assertEqual(repaired["units"][0]["claims"], ["supported fact"])
+        self.assertEqual(
+            repaired["units"][0]["claim_modalities"], ["actual_event"])
         self.assertEqual(repaired["units"][0]["claim_evidence"], {})
         self.assertEqual(repaired["units"][0]["claim_evidence_sha256"], {})
         self.assertEqual(repaired["units"][0]["claim_evidence_notes"], {})
@@ -720,6 +724,19 @@ class ArtifactNormalizationTests(unittest.TestCase):
             ["U0001", "U0002"],
         )
         self.assertIn("merged_fragment_chapters", changes)
+
+    def test_normalizer_preserves_numbered_titles_and_hyphenated_brands(self):
+        briefing = (
+            "20,000 Leagues Under the Sea、Fantasia 2000 与 7-Eleven，"
+            "相关资料发布于 2018 年。"
+        )
+        fixed, _summary, changes = normalize_briefing_artifacts(
+            briefing, {"chapters": []})
+        self.assertIn("20,000 Leagues Under the Sea", fixed)
+        self.assertIn("Fantasia 2000", fixed)
+        self.assertIn("7-Eleven", fixed)
+        self.assertIn("二零一八年", fixed)
+        self.assertIn("normalized_numbers", changes)
 
     def test_numbers_are_normalized_without_episode_specific_fact_rewrite(self):
         briefing = (

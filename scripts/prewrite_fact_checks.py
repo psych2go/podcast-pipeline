@@ -298,12 +298,24 @@ def _prompt(folder, inventory, content_map_sha256, transcript_basis):
 1. 把每条 source claim 拆成原子 checks。人名、书名、公司、机构、药物、医学解剖、金额、比例、年份、倍数和动态事实必须单独成 check。
 2. 对 medical/legal/financial/political/safety 的客观事实，以及公开可验证的重要实体和精确数字，使用网页搜索并优先官方、一手论文或原始报告。
 3. 说话人观点、预测、解释和一手经历只检查转录忠实性与归因，不因缺少网页而判错。
-4. 外部来源与节目原话冲突时，保留 source_claim 不变，把自然、可直接供中文作者采用的纠正写入 editorial_correction，并提供实际 source_urls。
+4. 每个 check 的 subclaim_id 必须严格使用 {{parent_claim_id}}-F01、F02……连续编号；外部来源与节目原话冲突时，保留 source_claim 不变，把自然、可直接供中文作者采用的纠正写入 editorial_correction，并提供实际 source_urls。
 5. issue_inventory 必须一次性穷尽列出所有 critical/high/medium/low 问题；不得发现第一个高风险问题后停止。
 6. 每个 critical/high/medium issue 必须有明确 recommendation；联网问题必须有 source_urls。
 7. summary 数字必须与实际数组一致，exhaustive_inventory_completed 必须为 true。
 8. 返回符合 schema 的 JSON，不要输出解释文字。
 """
+
+
+def _normalize_subclaim_ids(payload):
+    """Assign pipeline-owned Fxx IDs while preserving model check order."""
+    for record in payload.get("claims", []) or []:
+        if not isinstance(record, dict):
+            continue
+        parent = str(record.get("parent_claim_id", ""))
+        for index, check in enumerate(record.get("checks", []) or [], start=1):
+            if isinstance(check, dict):
+                check["subclaim_id"] = f"{parent}-F{index:02d}"
+    return payload
 
 
 def run_prewrite_fact_checks(folder, *, model=None, effort="high"):
@@ -331,6 +343,9 @@ def run_prewrite_fact_checks(folder, *, model=None, effort="high"):
     payload["generated_at"] = datetime.now(timezone.utc).isoformat()
     payload["content_map_sha256"] = map_hash
     payload["transcript_basis"] = basis
+    # Subclaim IDs are mechanical bindings owned by the pipeline, not a
+    # research-model choice. Preserve returned order and normalize IDs.
+    _normalize_subclaim_ids(payload)
     errors = validate_ledger(folder, payload)
     if errors:
         raise RuntimeError("预写作事实台账无效: " + "; ".join(errors[:10]))

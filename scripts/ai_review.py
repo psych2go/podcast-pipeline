@@ -546,7 +546,7 @@ def _prompt(folder, scope=None):
 {folder}
 {scope_instruction}{cache_instruction}
 
-必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt、tts_lexicon.json、editorial_corrections.json、canonical_entities.json、source_relevance_cache.json 和 editorial_fact_checks.json。editorial_corrections.json 和 editorial_fact_checks.json 只记录外部校正，不得把其中事实伪装成 transcript evidence；canonical_entities.json 是公开名称真源；source_relevance_cache.json 的网页标题和摘录必须与对应 claim/correction 语义相关，URL 可访问不等于来源支持主张。预写作台账不是权威结论，必须独立复核其来源。
+必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt、tts_lexicon.json、editorial_corrections.json、canonical_entities.json、source_relevance_cache.json 和 editorial_fact_checks.json。editorial_corrections.json 和 editorial_fact_checks.json 只记录外部校正，不得把其中事实伪装成 transcript evidence；canonical_entities.json 是写稿前的规范名称台账，允许写稿后的外部校正新增已正确拼写的实体；缺少条目本身只能作为库存完善建议，只有公开稿实际名称错误、主体错配或重要歧义时才能令 entity_accuracy 失败。source_relevance_cache.json 是非权威的抓取与相关性线索：通用索引、标题未出现实体名或暂时抓取失败本身不得单独形成 high/critical 或阻断发布；只有公开稿实际采用的事实缺少 fact_checks/editorial ledger 中的直接可靠来源，或来源与主张语义冲突时，才能令 factuality/publish 失败。预写作台账不是权威结论，必须独立复核其来源。
 
 审查目标：无需人工复核也能直接发布。请执行：
 1. 逐章检查全部章节和对应时间片，检查脑补、漏点、人物归属和逻辑链；不得用抽样代替最终发布判定。

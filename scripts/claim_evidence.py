@@ -414,7 +414,7 @@ def _retry_low_confidence_units(
 
 
 def refine_claim_evidence(
-        folder, model="sonnet", effort="high",
+        folder, model="", effort="high",
         max_batch_chars=DEFAULT_BATCH_CHARS,
         concurrency=DEFAULT_CONCURRENCY, unit_ids=None,
         allow_fallback=False):

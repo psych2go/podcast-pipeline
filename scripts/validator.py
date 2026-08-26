@@ -176,7 +176,7 @@ def integer_to_chinese(value):
 def _normalize_arabic_numbers(text):
     changed = False
     pattern = re.compile(
-        r"(?<![A-Za-z0-9.-])\d[\d,]*(?:\.\d+)?%?(?![A-Za-z0-9])")
+        r"(?<![A-Za-z0-9.-])\d[\d,]*(?:\.\d+)?%?(?![A-Za-z0-9-])")
 
     def replace(match):
         nonlocal changed
@@ -184,7 +184,20 @@ def _normalize_arabic_numbers(text):
         percent = token.endswith("%")
         core = token[:-1] if percent else token
         compact = core.replace(",", "")
-        following = text[match.end():match.end() + 4]
+        following = text[match.end():match.end() + 48]
+        preceding = text[max(0, match.start() - 48):match.start()]
+        follows_title_word = bool(re.match(
+            r"\s+[A-Z][A-Za-z'’.\-]*(?:\s+[A-Za-z'’.\-]+){0,6}",
+            following,
+        ))
+        follows_year_marker = bool(re.match(r"\s*年", following))
+        preceded_by_title_word = bool(re.search(
+            r"[A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*){0,5}\s*$",
+            preceding,
+        ))
+        if not follows_year_marker and (
+                follows_title_word or preceded_by_title_word):
+            return token
         if "." in compact:
             integer, fraction = compact.split(".", 1)
             spoken = (

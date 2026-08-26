@@ -490,9 +490,75 @@ class CanonicalEntityTests(unittest.TestCase):
         self.assertTrue(any("Edward LeMay" in error for error in errors))
         self.assertEqual(
             public_entity_alias_errors(payload, "Interview with Edward Lemay"), [])
+    def test_short_observed_name_inside_canonical_name_is_not_a_leak(self):
+        transcript = {"segments": [{"id": "S0001", "text": "Neal Gabler"}]}
+        payload = {
+            "schema_version": 1,
+            "entities": [{
+                "entity_id": "EN0001",
+                "canonical_name": "Neal Gabler",
+                "observed_names": ["Neal", "Neal Gabler"],
+                "public_aliases": [],
+                "entity_type": "person",
+                "source_urls": ["https://example.com/neal-gabler"],
+                "segment_ids": ["S0001"],
+                "confidence": "high",
+                "rationale": "Official profile confirms the complete canonical name.",
+            }],
+        }
+        self.assertEqual(validate_canonical_entities(payload, transcript), [])
+        self.assertEqual(public_entity_alias_errors(payload, "Neal Gabler wrote it."), [])
+        self.assertTrue(public_entity_alias_errors(payload, "Neal wrote it."))
+
+    def test_sourced_localized_public_alias_is_allowed(self):
+        transcript = {"segments": [{"id": "S0001", "text": "Walt Disney"}]}
+        payload = {
+            "schema_version": 1,
+            "entities": [{
+                "entity_id": "EN0001",
+                "canonical_name": "Walt Disney",
+                "observed_names": ["Walt Disney"],
+                "public_aliases": ["华特·迪士尼"],
+                "entity_type": "person",
+                "source_urls": ["https://example.com/walt-disney"],
+                "segment_ids": ["S0001"],
+                "confidence": "high",
+                "rationale": "Official profile supports the localized public name.",
+            }],
+        }
+        self.assertEqual(validate_canonical_entities(payload, transcript), [])
+        self.assertEqual(
+            public_entity_alias_errors(payload, "华特·迪士尼创办了公司。"), [])
 
 
 class DetailItemCoverageTests(unittest.TestCase):
+    def test_low_priority_detail_may_be_mapped_when_notes_use_it(self):
+        content_map = normalize_detail_items({
+            "units": [
+                {
+                    "id": "U0001", "status": "included", "importance": "high",
+                    "claims": ["required"], "numbers": ["required number"],
+                    "examples": [],
+                },
+                {
+                    "id": "U0002", "status": "condensed", "importance": "low",
+                    "claims": ["optional"], "numbers": ["optional number"],
+                    "examples": [],
+                },
+            ],
+        })
+        summary = {
+            "schema_version": 2,
+            "chapters": [{
+                "title": "chapter", "unit_ids": ["U0001"],
+                "claim_ids": ["U0001-C01"],
+            }],
+            "notes_claim_ids": ["U0001-C01", "U0002-C01"],
+            "notes_number_ids": ["U0001-N01", "U0002-N01"],
+            "notes_example_ids": [],
+        }
+        self.assertTrue(coverage_report(content_map, summary)["passed"])
+
     def test_number_and_example_ids_are_stable_and_required_in_notes(self):
         content_map = normalize_detail_items({
             "units": [{

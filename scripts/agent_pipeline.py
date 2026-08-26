@@ -23,6 +23,7 @@ try:
         normalize_detail_items,
         normalize_summary_claim_ids,
         save_json,
+        CLAIM_MODALITIES,
         STATUS_VALUES,
         validate_content_map,
         validate_summary_map,
@@ -78,6 +79,7 @@ except ImportError:
         normalize_detail_items,
         normalize_summary_claim_ids,
         save_json,
+        CLAIM_MODALITIES,
         STATUS_VALUES,
         validate_content_map,
         validate_summary_map,
@@ -386,6 +388,14 @@ CLAIM_REPAIR_SCHEMA = {
                         "minItems": 1,
                         "items": {"type": "string", "minLength": 1},
                     },
+                    "claim_modalities": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "string",
+                            "enum": sorted(CLAIM_MODALITIES),
+                        },
+                    },
                 },
             },
         },
@@ -421,6 +431,7 @@ def _repair_low_confidence_claims(folder, raw_path, error):
             "unit_id": unit_id,
             "topic": unit.get("topic", ""),
             "claims": list(unit.get("claims", [])),
+            "claim_modalities": list(unit.get("claim_modalities", [])),
             "low_evidence_notes": unit.get("claim_evidence_notes", {}),
             "segments": [
                 {
@@ -433,9 +444,11 @@ def _repair_low_confidence_claims(folder, raw_path, error):
     result = run_json_task(
         folder,
         f"""下面这些 unit 的 claim evidence 经过批量和单 unit 复核后仍为 low。
-请依据 low_evidence_notes 和原始 segments，返回每个 unit 的完整替换 claims。
-只能删除转录不支持的从句、拆分或合并原 claim；不得增加新事实、改变 topic，
-也不得修改 evidence。每条 claim 必须原子且由给定 segment 直接支持。
+请依据 low_evidence_notes 和原始 segments，返回每个 unit 的完整替换 claims 和
+逐条对应的 claim_modalities。只能删除转录不支持的从句、拆分或合并原 claim；不得增加新事实、改变 topic，
+也不得修改 evidence。每条 claim 必须原子且由给定 segment 直接支持；每个 modality
+必须是 actual_event、conditional、prediction、opinion、recommendation 或 general_claim，
+并与 claims 数量和顺序完全一致。
 必须恰好返回这些 unit，不能遗漏或新增。只返回 schema JSON，不修改文件。
 
 输入：
@@ -461,8 +474,17 @@ def _repair_low_confidence_claims(folder, raw_path, error):
                 for claim in claims):
             raise RuntimeError(
                 f"{item.get('unit_id')}: repair claims 必须是非空字符串数组")
+        modalities = item.get("claim_modalities")
+        if (
+                not isinstance(modalities, list)
+                or len(modalities) != len(claims)
+                or any(modality not in CLAIM_MODALITIES for modality in modalities)):
+            raise RuntimeError(
+                f"{item.get('unit_id')}: claim_modalities 必须与 claims "
+                "数量一致且使用允许枚举")
         unit = units_by_id[item["unit_id"]]
         unit["claims"] = [claim.strip() for claim in claims]
+        unit["claim_modalities"] = list(modalities)
         unit["claim_evidence"] = {}
         unit["claim_evidence_sha256"] = {}
         unit["claim_evidence_notes"] = {}

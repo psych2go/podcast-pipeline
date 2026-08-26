@@ -98,6 +98,22 @@ class PrewriteFactCheckTests(unittest.TestCase):
             errors = prewrite_fact_checks.validate_ledger(folder)
         self.assertTrue(any("转录基准已过期" in error for error in errors))
 
+    def test_subclaim_ids_are_pipeline_owned_and_normalized(self):
+        payload = {
+            "claims": [{
+                "parent_claim_id": "U0001-C01",
+                "checks": [
+                    {"subclaim_id": "U0001-C01-S01"},
+                    {"subclaim_id": "anything"},
+                ],
+            }],
+        }
+        prewrite_fact_checks._normalize_subclaim_ids(payload)
+        self.assertEqual(
+            [item["subclaim_id"] for item in payload["claims"][0]["checks"]],
+            ["U0001-C01-F01", "U0001-C01-F02"],
+        )
+
     def test_requires_web_claim_must_include_a_source_url(self):
         with tempfile.TemporaryDirectory() as td:
             folder, content_map = self._folder(td)

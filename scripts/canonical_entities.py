@@ -107,11 +107,18 @@ def validate_canonical_entities(payload, transcript=None):
         if not isinstance(public_aliases, list):
             errors.append(f"{prefix}.public_aliases 必须是数组")
             public_aliases = []
-        unknown_aliases = sorted(
-            set(public_aliases) - ({canonical} | set(observed)))
-        if unknown_aliases:
-            errors.append(
-                f"{prefix}.public_aliases 未出现在 observed_names: {unknown_aliases}")
+        for alias in public_aliases:
+            alias = str(alias).strip()
+            if not alias:
+                errors.append(f"{prefix}.public_aliases 不得包含空值")
+                continue
+            normalized = alias.casefold()
+            previous = seen_names.get(normalized)
+            if previous and previous != canonical:
+                errors.append(
+                    f"实体公开别名冲突: {alias!r} 同时指向 "
+                    f"{previous!r} 和 {canonical!r}")
+            seen_names[normalized] = canonical
         if item.get("entity_type") not in ENTITY_TYPES:
             errors.append(f"{prefix}.entity_type 无效")
         if item.get("confidence") not in CONFIDENCE_VALUES:
@@ -148,10 +155,28 @@ def public_entity_alias_errors(payload, *texts):
         if not isinstance(item, dict):
             continue
         canonical = str(item.get("canonical_name", "")).strip()
-        allowed = {
-            str(value).strip().casefold()
+        public_aliases = [
+            str(value).strip()
             for value in item.get("public_aliases", []) or []
-        }
+            if str(value).strip()
+        ]
+        allowed = {value.casefold() for value in public_aliases}
+        allowed_spans = []
+        for allowed_name in [canonical, *public_aliases]:
+            if not allowed_name:
+                continue
+            flags = (
+                0 if allowed_name.casefold() == canonical.casefold()
+                else re.IGNORECASE
+            )
+            allowed_pattern = re.compile(
+                rf"(?<![A-Za-z0-9]){re.escape(allowed_name)}(?![A-Za-z0-9])",
+                flags,
+            )
+            allowed_spans.extend(
+                (match.start(), match.end())
+                for match in allowed_pattern.finditer(joined)
+            )
         for observed in item.get("observed_names", []) or []:
             observed = str(observed).strip()
             if (
@@ -167,7 +192,14 @@ def public_entity_alias_errors(payload, *texts):
                 rf"(?<![A-Za-z0-9]){re.escape(observed)}(?![A-Za-z0-9])",
                 flags,
             )
-            if pattern.search(joined):
+            leaked = any(
+                not any(
+                    start <= match.start() and match.end() <= end
+                    for start, end in allowed_spans
+                )
+                for match in pattern.finditer(joined)
+            )
+            if leaked:
                 errors.append(
                     f"公开文本仍包含非规范实体名 {observed!r}，应使用 {canonical!r}")
     return errors

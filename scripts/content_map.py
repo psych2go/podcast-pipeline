@@ -798,7 +798,7 @@ def normalize_detail_items(content_map):
 def unit_detail_ids(content_map, detail_type, purpose="notes"):
     if detail_type not in {"number", "example"}:
         raise ValueError(f"未知 detail type: {detail_type}")
-    if purpose != "notes":
+    if purpose not in {"notes", "notes_allowed"}:
         raise ValueError(f"未知 detail coverage purpose: {purpose}")
     field = "number_items" if detail_type == "number" else "example_items"
     prefix = "N" if detail_type == "number" else "E"
@@ -808,7 +808,9 @@ def unit_detail_ids(content_map, detail_type, purpose="notes"):
             continue
         if unit.get("status") not in {"included", "condensed"}:
             continue
-        if unit.get("importance") not in {"high", "medium"}:
+        if (
+                purpose == "notes"
+                and unit.get("importance") not in {"high", "medium"}):
             continue
         unit_id = unit.get("id")
         for index, item in enumerate(unit.get(field, []) or [], start=1):
@@ -953,13 +955,15 @@ def validate_summary_map(
                     ("notes_example_ids", "example", "例子")):
                 expected_details = set(unit_detail_ids(
                     content_map, detail_type, purpose="notes"))
+                allowed_details = set(unit_detail_ids(
+                    content_map, detail_type, purpose="notes_allowed"))
                 values = payload.get(field)
                 if not isinstance(values, list):
                     errors.append(f"summary_map.{field} 必须是数组")
                     continue
                 actual_details = set(values)
                 missing_details = sorted(expected_details - actual_details)
-                unknown_details = sorted(actual_details - expected_details)
+                unknown_details = sorted(actual_details - allowed_details)
                 if missing_details:
                     errors.append(f"完整笔记缺少{label}映射: {missing_details}")
                 if unknown_details:
@@ -1021,17 +1025,27 @@ def coverage_report(content_map, summary_map, transcript=None):
         if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
         else set()
     )
+    allowed_number_ids = (
+        set(unit_detail_ids(content_map, "number", purpose="notes_allowed"))
+        if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
+        else set()
+    )
     expected_example_ids = (
         set(unit_detail_ids(content_map, "example", purpose="notes"))
+        if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
+        else set()
+    )
+    allowed_example_ids = (
+        set(unit_detail_ids(content_map, "example", purpose="notes_allowed"))
         if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
         else set()
     )
     notes_number_ids = set(summary_map.get("notes_number_ids", []) or [])
     notes_example_ids = set(summary_map.get("notes_example_ids", []) or [])
     missing_number_ids = sorted(expected_number_ids - notes_number_ids)
-    unknown_number_ids = sorted(notes_number_ids - expected_number_ids)
+    unknown_number_ids = sorted(notes_number_ids - allowed_number_ids)
     missing_example_ids = sorted(expected_example_ids - notes_example_ids)
-    unknown_example_ids = sorted(notes_example_ids - expected_example_ids)
+    unknown_example_ids = sorted(notes_example_ids - allowed_example_ids)
 
     accountability = (
         source_segment_accountability(content_map, transcript)

@@ -861,11 +861,30 @@ def build_quality_report(folder, strict=True, *, today=None):
             relevance_payload = load_json(relevance_path)
             relevance_errors = validate_source_relevance_cache(
                 relevance_payload, expected_source_references(folder))
+            transient_prefixes = (
+                "source relevance cache 抓取失败:",
+                "source relevance cache 缺少内容哈希:",
+                "source relevance cache 缺少标题或摘录:",
+            )
+            relevance_warnings = [
+                error for error in relevance_errors
+                if error.startswith(transient_prefixes)
+            ]
+            hard_relevance_errors = [
+                error for error in relevance_errors
+                if error not in relevance_warnings
+            ]
             report["source_relevance_cache"] = {
-                "validation_errors": relevance_errors,
+                "validation_errors": hard_relevance_errors,
+                "validation_warnings": relevance_warnings,
                 "entry_count": len(relevance_payload.get("entries", {})),
             }
-            extend_errors(report, CONTENT_MAP_VALIDATION, relevance_errors)
+            report["warnings"].extend(
+                "外部来源缓存暂时不可用，终审仍须独立核查: " + warning
+                for warning in relevance_warnings
+            )
+            extend_errors(
+                report, CONTENT_MAP_VALIDATION, hard_relevance_errors)
         progress_path = folder / PROGRESS_FILENAME
         if progress_path.exists():
             progress_payload = load_json(progress_path)
