@@ -306,6 +306,29 @@ def _prompt(folder, inventory, content_map_sha256, transcript_basis):
 """
 
 
+def _sanitize_unsourced_corrections(payload):
+    """Drop model-authored corrections that have no auditable web source."""
+    for record in payload.get("claims", []) or []:
+        if not isinstance(record, dict):
+            continue
+        for check in record.get("checks", []) or []:
+            if not isinstance(check, dict):
+                continue
+            correction = str(check.get("editorial_correction", "")).strip()
+            urls = check.get("source_urls") or []
+            if not correction or urls:
+                continue
+            check["editorial_correction"] = ""
+            check["verdict"] = "uncertain"
+            if check.get("claim_origin") in {
+                    "speaker_firsthand", "speaker_reported", "episode_metadata"}:
+                check["verification_mode"] = "transcript_attribution"
+            note = str(check.get("notes", "")).strip()
+            suffix = "无可审计来源的编辑纠正已由流水线丢弃；只保留节目归因。"
+            check["notes"] = f"{note} {suffix}".strip()
+    return payload
+
+
 def _normalize_subclaim_ids(payload):
     """Assign pipeline-owned Fxx IDs while preserving model check order."""
     for record in payload.get("claims", []) or []:
@@ -345,6 +368,7 @@ def run_prewrite_fact_checks(folder, *, model=None, effort="high"):
     payload["transcript_basis"] = basis
     # Subclaim IDs are mechanical bindings owned by the pipeline, not a
     # research-model choice. Preserve returned order and normalize IDs.
+    _sanitize_unsourced_corrections(payload)
     _normalize_subclaim_ids(payload)
     errors = validate_ledger(folder, payload)
     if errors:

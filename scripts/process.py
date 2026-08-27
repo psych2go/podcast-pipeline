@@ -112,6 +112,7 @@ class EpisodeOptions:
     auto_ai_review: bool = True
     allow_legacy: bool = False
     display_title: str | None = None
+    official_url: str | None = None
     force_refetch: bool = False
     asr_language: str | None = "en"
     auto_content: bool = True
@@ -133,6 +134,7 @@ class EpisodeOptions:
             "mode": self.mode,
             "source": source if source and str(source).startswith("http") else (
                 str(source) if source else ""),
+            "official_url": self.official_url or "",
             "asr_quality": self.quality,
             "asr_model": self.asr_model,
             "asr_language": self.asr_language,
@@ -349,7 +351,7 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
                      lm_path=None, diarize_audio=True,
                      min_speakers=None, max_speakers=None,
                      content_policy="faithful", display_title=None,
-                     force_refetch=False, asr_language="en",
+                     official_url=None, force_refetch=False, asr_language="en",
                      adaptive_refinement=True, align_audio=True):
     """抓取/读取转录，写入纯文本和可审计的 transcript.raw.json。"""
     transcript_path = folder / "原始转录.txt"
@@ -574,7 +576,10 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
     ensure_episode(
         folder,
         display_title=display_title or name,
-        source_url=source if source and source.startswith("http") else "",
+        source_url=(
+            official_url
+            or (source if source and source.startswith("http") else "")
+        ),
         source_kind=source_kind,
         extractor=(
             metadata.get("meta", {}).get("extractor", "")
@@ -824,6 +829,7 @@ def _process_impl(source, name, folder, run_report, options):
     auto_ai_review = options.auto_ai_review
     allow_legacy = options.allow_legacy
     display_title = options.display_title
+    official_url = options.official_url
     force_refetch = options.force_refetch
     asr_language = options.asr_language
     auto_content = options.auto_content
@@ -875,6 +881,7 @@ def _process_impl(source, name, folder, run_report, options):
             min_speakers=min_speakers, max_speakers=max_speakers,
             content_policy=content_policy,
             display_title=display_title,
+            official_url=official_url,
             force_refetch=force_refetch,
             asr_language=asr_language,
             adaptive_refinement=adaptive_refinement,
@@ -997,7 +1004,8 @@ def process(source, name, asr_model=None, tts_speed=1.0,
             lm_path=None, diarize_audio=True,
             min_speakers=None, max_speakers=None,
             content_policy="faithful", auto_ai_review=True,
-            allow_legacy=False, display_title=None, force_refetch=False,
+            allow_legacy=False, display_title=None, official_url=None,
+            force_refetch=False,
             asr_language="en", auto_content=True, adaptive_refinement=True,
             align_audio=True):
     """Backward-compatible adapter; use process_episode + EpisodeOptions internally."""
@@ -1022,6 +1030,7 @@ def process(source, name, asr_model=None, tts_speed=1.0,
         auto_ai_review=auto_ai_review,
         allow_legacy=allow_legacy,
         display_title=display_title,
+        official_url=official_url,
         force_refetch=force_refetch,
         asr_language=asr_language,
         auto_content=auto_content,
@@ -1041,6 +1050,10 @@ def main():
     parser.add_argument("source", nargs="?",
                         help="URL / mp3 / 转录文件路径（--tts-only 时可省略）")
     parser.add_argument("--name", default=None, help="播客文件夹名称（不给则从 URL 自动提取标题；命名即原始标题）")
+    parser.add_argument(
+        "--official-url", default=None,
+        help="官方播客页面；与 positional 字幕/音频证据 URL 分开记录",
+    )
     parser.add_argument("--transcript", help="直接指定转录文件路径")
     parser.add_argument("--fetch-only", action="store_true",
                         help="只抓转录，不跑内容生成、TTS 或 HTML")
@@ -1183,6 +1196,7 @@ def main():
         auto_ai_review=not args.skip_ai_review,
         allow_legacy=args.allow_legacy_quality,
         display_title=raw_title,
+        official_url=args.official_url,
         force_refetch=args.force_refetch,
         asr_language=(
             None if args.asr_language.lower() == "auto"

@@ -692,6 +692,36 @@ class FaithfulEvidenceTests(unittest.TestCase):
             self.assertEqual(raw["meta"]["content_policy"], "faithful")
             self.assertEqual(raw["meta"]["requested_content_policy"], "no-ads")
 
+    def test_official_url_is_separate_from_transcript_evidence_source(self):
+        source_text = ("Official source separation transcript evidence. " * 10).strip()
+        with tempfile.TemporaryDirectory() as td, patch(
+                "process.fetch_transcript_from_url",
+                return_value={
+                    "text": source_text,
+                    "segments": [{
+                        "start": 0, "end": 30, "text": source_text,
+                    }],
+                    "meta": {"timestamped": True},
+                }):
+            folder = Path(td) / "Episode"
+            folder.mkdir()
+            transcript_url = "https://transcripts.example/episode"
+            official_url = "https://podcast.example/episode"
+            ok = pipeline_process.fetch_transcript(
+                transcript_url, folder, "Episode", None,
+                display_title="Episode", official_url=official_url,
+            )
+            self.assertTrue(ok)
+            episode = json.loads(
+                (folder / "episode.json").read_text(encoding="utf-8"))
+            raw = json.loads(
+                (folder / "transcript.raw.json").read_text(encoding="utf-8"))
+            source = (folder / "来源.md").read_text(encoding="utf-8")
+        self.assertEqual(episode["source"]["url"], official_url)
+        self.assertEqual(raw["source"], transcript_url)
+        self.assertIn(f"- 链接：{official_url}", source)
+        self.assertIn(f"- 输入来源：{transcript_url}", source)
+
     def test_transcribe_preserves_decoder_text(self):
         word = SimpleNamespace(
             word=" uh-huh", start=0.0, end=0.5, probability=0.9)

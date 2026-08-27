@@ -98,6 +98,27 @@ class PrewriteFactCheckTests(unittest.TestCase):
             errors = prewrite_fact_checks.validate_ledger(folder)
         self.assertTrue(any("转录基准已过期" in error for error in errors))
 
+    def test_unsourced_editorial_correction_is_dropped(self):
+        payload = {
+            "claims": [{
+                "parent_claim_id": "U0001-C01",
+                "checks": [{
+                    "claim_origin": "speaker_reported",
+                    "verification_mode": "web_required",
+                    "verdict": "qualified",
+                    "editorial_correction": "unsupported rewrite",
+                    "source_urls": [],
+                    "notes": "model suggestion",
+                }],
+            }],
+        }
+        prewrite_fact_checks._sanitize_unsourced_corrections(payload)
+        check = payload["claims"][0]["checks"][0]
+        self.assertEqual(check["editorial_correction"], "")
+        self.assertEqual(check["verdict"], "uncertain")
+        self.assertEqual(check["verification_mode"], "transcript_attribution")
+        self.assertIn("已由流水线丢弃", check["notes"])
+
     def test_subclaim_ids_are_pipeline_owned_and_normalized(self):
         payload = {
             "claims": [{
