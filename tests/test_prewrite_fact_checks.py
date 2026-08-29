@@ -94,6 +94,15 @@ class PrewriteFactCheckTests(unittest.TestCase):
         ]
         batches = prewrite_fact_checks._claim_batches(inventory, max_claims=2)
         self.assertEqual([len(batch) for batch in batches], [2, 2, 1])
+        char_batches = prewrite_fact_checks._claim_batches(
+            [
+                {"parent_claim_id": "A", "source_claim": "x" * 80},
+                {"parent_claim_id": "B", "source_claim": "y" * 80},
+            ],
+            max_claims=10,
+            max_chars=120,
+        )
+        self.assertEqual([len(batch) for batch in char_batches], [1, 1])
         self.assertEqual(
             [item["parent_claim_id"] for batch in batches for item in batch],
             [item["parent_claim_id"] for item in inventory],
@@ -162,6 +171,109 @@ class PrewriteFactCheckTests(unittest.TestCase):
             ledger["claims"][0]["checks"][0]["subclaim_id"],
             "U0001-C01-F01",
         )
+
+    def test_completed_batches_are_reused_on_resume(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder, content_map = self._folder(td)
+            records = {
+                item["parent_claim_id"]: item
+                for item in self._ledger(folder, content_map)["claims"]
+            }
+
+            def batch_result(
+                    _folder, batch, _map_hash, _basis,
+                    _model, _effort, batch_index):
+                return {
+                    "payload": {
+                        "claims": [
+                            records[item["parent_claim_id"]] for item in batch
+                        ],
+                        "issue_inventory": [],
+                        "summary": {
+                            "exhaustive_inventory_completed": True,
+                        },
+                    },
+                    "duration_ms": batch_index,
+                }
+
+            with patch.object(
+                    prewrite_fact_checks,
+                    "_run_fact_check_batch",
+                    side_effect=batch_result) as runner:
+                first = prewrite_fact_checks.run_prewrite_fact_checks(
+                    folder, max_batch_claims=1, concurrency=2)
+            with patch.object(
+                    prewrite_fact_checks,
+                    "_run_fact_check_batch",
+                    side_effect=AssertionError("cache was not reused")) as runner2:
+                second = prewrite_fact_checks.run_prewrite_fact_checks(
+                    folder, max_batch_claims=1, concurrency=2)
+            progress = json.loads(
+                (folder / prewrite_fact_checks.PROGRESS_FILENAME).read_text(
+                    encoding="utf-8"))
+        self.assertEqual(runner.call_count, 2)
+        runner2.assert_not_called()
+        self.assertEqual(first["executed_batch_count"], 2)
+        self.assertEqual(second["cached_batch_count"], 2)
+        self.assertEqual(progress["status"], "completed")
+        self.assertEqual(progress["pending_batches"], [])
+
+    def test_failed_batch_resume_keeps_successful_siblings(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder, content_map = self._folder(td)
+            records = {
+                item["parent_claim_id"]: item
+                for item in self._ledger(folder, content_map)["claims"]
+            }
+
+            def result_for(batch, batch_index):
+                return {
+                    "payload": {
+                        "claims": [
+                            records[item["parent_claim_id"]] for item in batch
+                        ],
+                        "issue_inventory": [],
+                        "summary": {
+                            "exhaustive_inventory_completed": True,
+                        },
+                    },
+                    "duration_ms": batch_index,
+                }
+
+            def fail_second(
+                    _folder, batch, _map_hash, _basis,
+                    _model, _effort, batch_index):
+                if batch_index == 2:
+                    raise RuntimeError("batch two failed")
+                return result_for(batch, batch_index)
+
+            with patch.object(
+                    prewrite_fact_checks,
+                    "_run_fact_check_batch",
+                    side_effect=fail_second):
+                with self.assertRaisesRegex(RuntimeError, "batch two failed"):
+                    prewrite_fact_checks.run_prewrite_fact_checks(
+                        folder, max_batch_claims=1, concurrency=2)
+            failed_progress = json.loads(
+                (folder / prewrite_fact_checks.PROGRESS_FILENAME).read_text(
+                    encoding="utf-8"))
+            self.assertEqual(failed_progress["status"], "failed")
+            self.assertEqual(failed_progress["failed_batches"], [2])
+
+            def finish_batch(
+                    _folder, batch, _map_hash, _basis,
+                    _model, _effort, batch_index):
+                return result_for(batch, batch_index)
+
+            with patch.object(
+                    prewrite_fact_checks,
+                    "_run_fact_check_batch",
+                    side_effect=finish_batch) as runner:
+                metrics = prewrite_fact_checks.run_prewrite_fact_checks(
+                    folder, max_batch_claims=1, concurrency=2)
+        self.assertEqual(runner.call_count, 1)
+        self.assertEqual(metrics["cached_batch_count"], 1)
+        self.assertEqual(metrics["executed_batch_count"], 1)
 
     def test_ledger_freshness_binds_content_map_and_transcript(self):
         with tempfile.TemporaryDirectory() as td:

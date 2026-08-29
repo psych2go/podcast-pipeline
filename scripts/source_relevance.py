@@ -2,10 +2,11 @@
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import httpx
 
@@ -19,6 +20,37 @@ SCHEMA_VERSION = 1
 CACHE_FILENAME = "source_relevance_cache.json"
 MAX_SOURCE_BYTES = 2_000_000
 MAX_EXCERPT_CHARS = 2000
+ERROR_RETRY_TTL = timedelta(hours=24)
+SUCCESS_REFRESH_TTL = timedelta(days=7)
+MAX_CLOCK_SKEW = timedelta(minutes=5)
+SOURCE_FETCH_CONCURRENCY = 8
+TRACKING_QUERY_KEYS = {
+    "cid", "fbclid", "gclid", "mc_cid", "mc_eid", "ref",
+}
+
+
+def normalize_source_url(url):
+    """Remove fragments and tracking parameters without changing source identity."""
+    value = str(url or "").strip()
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if parts.scheme not in {"http", "https"}:
+        return value
+    query = []
+    for key, item in parse_qsl(parts.query, keep_blank_values=True):
+        folded = key.casefold()
+        if folded.startswith("utm_") or folded in TRACKING_QUERY_KEYS:
+            continue
+        query.append((key, item))
+    return urlunsplit((
+        parts.scheme.casefold(),
+        parts.netloc.casefold(),
+        parts.path or "/",
+        urlencode(query, doseq=True),
+        "",
+    ))
 
 
 class _ReadableHTML(HTMLParser):
@@ -71,7 +103,8 @@ def expected_source_references(folder):
             continue
         reference = item.get("correction_id") or item.get("claim_id")
         for url in item.get("source_urls", []) or []:
-            references.setdefault(str(url), set()).add(str(reference))
+            references.setdefault(normalize_source_url(url), set()).add(
+                str(reference))
     entities = _load_json(
         folder / "canonical_entities.json", {"entities": []})
     for item in entities.get("entities", []) or []:
@@ -79,12 +112,70 @@ def expected_source_references(folder):
             continue
         reference = item.get("entity_id") or item.get("canonical_name")
         for url in item.get("source_urls", []) or []:
-            references.setdefault(str(url), set()).add(str(reference))
+            references.setdefault(normalize_source_url(url), set()).add(
+                str(reference))
     return {
         url: sorted(filter(None, values))
         for url, values in references.items()
         if urlparse(url).scheme in {"http", "https"}
     }
+
+
+def expected_source_terms(folder):
+    folder = Path(folder)
+    terms = {}
+    corrections = _load_json(
+        folder / "editorial_corrections.json", {"corrections": []})
+    for item in corrections.get("corrections", []) or []:
+        if not isinstance(item, dict):
+            continue
+        values = [
+            item.get("episode_statement", ""),
+            item.get("public_treatment", ""),
+        ]
+        for url in item.get("source_urls", []) or []:
+            terms.setdefault(normalize_source_url(url), set()).update(
+                str(value).strip() for value in values if str(value).strip())
+    entities = _load_json(
+        folder / "canonical_entities.json", {"entities": []})
+    for item in entities.get("entities", []) or []:
+        if not isinstance(item, dict):
+            continue
+        values = [item.get("canonical_name", "")]
+        values.extend(item.get("public_aliases", []) or [])
+        for url in item.get("source_urls", []) or []:
+            terms.setdefault(normalize_source_url(url), set()).update(
+                str(value).strip() for value in values if str(value).strip())
+    return {url: sorted(values) for url, values in terms.items()}
+
+
+def _relevance_tokens(values):
+    ignored = {
+        "about", "official", "report", "research", "science", "united",
+        "states", "公司", "节目", "报告", "研究", "官方",
+    }
+    tokens = set()
+    for value in values or []:
+        tokens.update(
+            token.casefold()
+            for token in re.findall(r"[A-Za-z0-9]{4,}|[一-鿿]{2,}", str(value))
+            if token.casefold() not in ignored
+        )
+    return tokens
+
+
+def _annotate_relevance(entry, expected_terms):
+    expected_tokens = _relevance_tokens(expected_terms)
+    observed_tokens = _relevance_tokens([
+        entry.get("title", ""), entry.get("excerpt", ""),
+    ])
+    matched = sorted(expected_tokens & observed_tokens)
+    entry["expected_terms"] = list(expected_terms or [])
+    entry["matched_terms"] = matched
+    entry["relevance_status"] = (
+        "matched" if not expected_tokens or matched else "unconfirmed"
+    )
+    return entry
 
 
 def _fetch_source(url):
@@ -116,41 +207,127 @@ def _fetch_source(url):
     }
 
 
+def _recent_error(entry, now=None):
+    if not isinstance(entry, dict) or entry.get("status") != "error":
+        return False
+    value = entry.get("last_attempt_at") or entry.get("fetched_at")
+    try:
+        attempted = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    now = now or datetime.now(timezone.utc)
+    if attempted.tzinfo is None:
+        attempted = attempted.replace(tzinfo=timezone.utc)
+    if attempted > now + MAX_CLOCK_SKEW:
+        return False
+    return now - attempted < ERROR_RETRY_TTL
+
+
+def _recent_success(entry, now=None):
+    if not isinstance(entry, dict) or entry.get("status") != "fetched":
+        return False
+    value = entry.get("fetched_at") or entry.get("last_attempt_at")
+    try:
+        fetched = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    now = now or datetime.now(timezone.utc)
+    if fetched.tzinfo is None:
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    if fetched > now + MAX_CLOCK_SKEW:
+        return False
+    return now - fetched < SUCCESS_REFRESH_TTL
+
+
+def _fetch_cache_entry(url, fetcher, now):
+    try:
+        entry = fetcher(url)
+    except Exception as exc:
+        entry = {
+            "status": "error",
+            "error": str(exc) or type(exc).__name__,
+            "error_kind": type(exc).__name__,
+            "http_status": getattr(
+                getattr(exc, "response", None), "status_code", None),
+            "final_url": url,
+            "content_type": "",
+            "title": "",
+            "excerpt": "",
+            "content_sha256": "",
+        }
+    entry["last_attempt_at"] = now.isoformat()
+    if entry.get("status") == "fetched":
+        entry["fetched_at"] = now.isoformat()
+    return entry
+
+
 def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
     folder = Path(folder)
     references = expected_source_references(folder)
+    relevance_terms = expected_source_terms(folder)
     path = folder / CACHE_FILENAME
     if not references:
+        if path.exists():
+            payload = {
+                "schema_version": SCHEMA_VERSION,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "entries": {},
+            }
+            atomic_write_json(path, payload)
+            return payload
         return None
     existing = _load_json(path, {"entries": {}})
     old_entries = existing.get("entries", {}) if isinstance(existing, dict) else {}
+    if isinstance(old_entries, dict):
+        old_entries = {
+            normalize_source_url(url): entry
+            for url, entry in old_entries.items()
+        }
     entries = {}
+    pending = []
     fetcher = fetcher or _fetch_source
+    now = datetime.now(timezone.utc)
     for url, source_ids in references.items():
         previous = old_entries.get(url) if isinstance(old_entries, dict) else None
-        if (
-                not force
-                and isinstance(previous, dict)
-                and previous.get("status") == "fetched"
-                and previous.get("content_sha256")):
-            entry = dict(previous)
+        reused = (
+            not force
+            and isinstance(previous, dict)
+            and (
+                (
+                    previous.get("content_sha256")
+                    and _recent_success(previous, now)
+                )
+                or _recent_error(previous, now)
+            )
+        )
+        if reused:
+            entries[url] = dict(previous)
         else:
-            try:
-                entry = fetcher(url)
-            except Exception as exc:
-                entry = {
-                    "status": "error",
-                    "error": str(exc) or type(exc).__name__,
-                    "http_status": None,
-                    "final_url": url,
-                    "content_type": "",
-                    "title": "",
-                    "excerpt": "",
-                    "content_sha256": "",
-                }
-        entry["source_ids"] = source_ids
-        entry["fetched_at"] = datetime.now(timezone.utc).isoformat()
-        entries[url] = entry
+            pending.append(url)
+    if pending:
+        with ThreadPoolExecutor(
+                max_workers=min(SOURCE_FETCH_CONCURRENCY, len(pending))) as pool:
+            futures = {
+                pool.submit(_fetch_cache_entry, url, fetcher, now): url
+                for url in pending
+            }
+            for future in as_completed(futures):
+                entries[futures[future]] = future.result()
+    entries = {
+        url: _annotate_relevance(
+            {
+                **entries[url],
+                "source_ids": source_ids,
+            },
+            relevance_terms.get(url, []),
+        )
+        for url, source_ids in references.items()
+    }
+    if (
+            isinstance(existing, dict)
+            and existing.get("schema_version") == SCHEMA_VERSION
+            and existing.get("entries") == entries):
+        return existing
     payload = {
         "schema_version": SCHEMA_VERSION,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -181,6 +358,9 @@ def validate_source_relevance_cache(payload, expected_references):
             errors.append(f"source relevance cache 缺少内容哈希: {url}")
         if not entry.get("title") and not entry.get("excerpt"):
             errors.append(f"source relevance cache 缺少标题或摘录: {url}")
+        if entry.get("relevance_status") == "unconfirmed":
+            errors.append(
+                f"source relevance cache 语义相关性未确认: {url}")
         missing_refs = set(source_ids) - set(entry.get("source_ids", []) or [])
         if missing_refs:
             errors.append(

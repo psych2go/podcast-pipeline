@@ -1,4 +1,5 @@
 """Pre-writing fact-check ledger for source-faithful podcast drafting."""
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -19,7 +20,11 @@ except ImportError:
 FILENAME = "editorial_fact_checks.json"
 SCHEMA_VERSION = 1
 DEFAULT_BATCH_CLAIMS = 24
+DEFAULT_BATCH_CHARS = 12000
 DEFAULT_CONCURRENCY = 3
+BATCH_CONTRACT_VERSION = 1
+PROGRESS_FILENAME = "prewrite_fact_checks_progress.json"
+BATCH_DIRECTORY = "editorial_fact_check_batches"
 RISK_LEVELS = ("low", "medium", "high")
 RISK_DOMAINS = ("general", "medical", "legal", "financial", "political", "safety")
 ASSERTION_TYPES = (
@@ -370,13 +375,81 @@ def _normalize_subclaim_ids(payload):
     return payload
 
 
-def _claim_batches(inventory, max_claims=DEFAULT_BATCH_CLAIMS):
+def _claim_batches(
+        inventory, max_claims=DEFAULT_BATCH_CLAIMS,
+        max_chars=DEFAULT_BATCH_CHARS):
     if max_claims < 1:
         raise ValueError("max_claims 必须大于 0")
-    return [
-        inventory[index:index + max_claims]
-        for index in range(0, len(inventory), max_claims)
-    ]
+    if max_chars < 1:
+        raise ValueError("max_chars 必须大于 0")
+    batches = []
+    current = []
+    current_chars = 0
+    for item in inventory:
+        item_chars = len(json.dumps(item, ensure_ascii=False))
+        if current and (
+                len(current) >= max_claims
+                or current_chars + item_chars > max_chars):
+            batches.append(current)
+            current = []
+            current_chars = 0
+        current.append(item)
+        current_chars += item_chars
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _batch_fingerprint(
+        inventory, content_map_sha256, transcript_basis, model, effort):
+    payload = {
+        "contract_version": BATCH_CONTRACT_VERSION,
+        "content_map_sha256": content_map_sha256,
+        "transcript_basis": transcript_basis,
+        "model": model or "",
+        "effort": effort,
+        "inventory": inventory,
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _load_cached_batch(path, fingerprint, expected_pairs):
+    try:
+        cached = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    result = cached.get("result") if isinstance(cached, dict) else None
+    payload = result.get("payload") if isinstance(result, dict) else None
+    if (
+            cached.get("fingerprint") != fingerprint
+            or not isinstance(payload, dict)
+            or _batch_pairs(payload) != expected_pairs
+            or payload.get("summary", {}).get(
+                "exhaustive_inventory_completed") is not True):
+        return None
+    return result
+
+
+def _write_progress(
+        folder, *, run_fingerprint, target, completed, failed, status):
+    target_set = set(target)
+    completed_set = set(completed)
+    failed_set = set(failed)
+    atomic_write_json(Path(folder) / PROGRESS_FILENAME, {
+        "schema_version": 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "run_fingerprint": run_fingerprint,
+        "target_batches": sorted(target_set),
+        "completed_batches": sorted(completed_set),
+        "pending_batches": sorted(
+            target_set - completed_set - failed_set),
+        "failed_batches": sorted(failed_set),
+    })
 
 
 def _batch_pairs(payload):
@@ -422,6 +495,7 @@ def _run_fact_check_batch(
 def run_prewrite_fact_checks(
         folder, *, model=None, effort="high",
         max_batch_claims=DEFAULT_BATCH_CLAIMS,
+        max_batch_chars=DEFAULT_BATCH_CHARS,
         concurrency=DEFAULT_CONCURRENCY):
     """Generate and persist a complete pre-writing fact-check ledger."""
     folder = Path(folder).resolve()
@@ -430,10 +504,54 @@ def run_prewrite_fact_checks(
     inventory = claim_inventory(content_map)
     map_hash = sha256_file(content_map_path)
     basis = _transcript_basis(folder)
-    batches = _claim_batches(inventory, max_batch_claims)
+    batches = _claim_batches(
+        inventory, max_batch_claims, max_batch_chars)
     results = [None] * len(batches)
+    batch_dir = folder / BATCH_DIRECTORY
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    target = list(range(1, len(batches) + 1))
+    completed = set()
+    failed = set()
+    pending = []
+    run_fingerprint = hashlib.sha256(json.dumps({
+        "contract_version": BATCH_CONTRACT_VERSION,
+        "content_map_sha256": map_hash,
+        "transcript_basis": basis,
+        "model": model or "",
+        "effort": effort,
+        "batch_fingerprints": [
+            _batch_fingerprint(batch, map_hash, basis, model, effort)
+            for batch in batches
+        ],
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    cached_batch_count = 0
+    for index, batch in enumerate(batches, start=1):
+        fingerprint = _batch_fingerprint(
+            batch, map_hash, basis, model, effort)
+        expected_pairs = [
+            (item["parent_claim_id"], item["source_claim"])
+            for item in batch
+        ]
+        batch_path = batch_dir / f"{index:03d}.json"
+        cached = _load_cached_batch(
+            batch_path, fingerprint, expected_pairs)
+        if cached is not None:
+            results[index - 1] = cached
+            completed.add(index)
+            cached_batch_count += 1
+        else:
+            pending.append((index, batch, fingerprint, batch_path))
+    _write_progress(
+        folder,
+        run_fingerprint=run_fingerprint,
+        target=target,
+        completed=completed,
+        failed=failed,
+        status="running" if pending else "completed",
+    )
+    batch_error = None
     with ThreadPoolExecutor(
-            max_workers=max(1, min(concurrency, len(batches) or 1))) as pool:
+            max_workers=max(1, min(concurrency, len(pending) or 1))) as pool:
         futures = {
             pool.submit(
                 _run_fact_check_batch,
@@ -444,12 +562,49 @@ def run_prewrite_fact_checks(
                 model,
                 effort,
                 index,
-            ): index
-            for index, batch in enumerate(batches, start=1)
+            ): (index, fingerprint, batch_path)
+            for index, batch, fingerprint, batch_path in pending
         }
         for future in as_completed(futures):
-            index = futures[future]
-            results[index - 1] = future.result()
+            index, fingerprint, batch_path = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                failed.add(index)
+                batch_error = batch_error or exc
+                _write_progress(
+                    folder,
+                    run_fingerprint=run_fingerprint,
+                    target=target,
+                    completed=completed,
+                    failed=failed,
+                    status="failed",
+                )
+                continue
+            results[index - 1] = result
+            atomic_write_json(batch_path, {
+                "schema_version": 1,
+                "batch_index": index,
+                "fingerprint": fingerprint,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "result": result,
+            })
+            completed.add(index)
+            _write_progress(
+                folder,
+                run_fingerprint=run_fingerprint,
+                target=target,
+                completed=completed,
+                failed=failed,
+                status=(
+                    "failed" if failed
+                    else (
+                        "completed" if len(completed) == len(target)
+                        else "running"
+                    )),
+            )
+    if batch_error is not None:
+        raise batch_error
 
     claims = []
     issues = []
@@ -494,5 +649,9 @@ def run_prewrite_fact_checks(
             "checked_subclaim_count", 0),
         "issue_count": len(payload.get("issue_inventory", [])),
         "batch_count": len(batches),
+        "cached_batch_count": cached_batch_count,
+        "executed_batch_count": len(batches) - cached_batch_count,
+        "max_batch_claims": max_batch_claims,
+        "max_batch_chars": max_batch_chars,
         "duration_ms": duration_ms,
     }

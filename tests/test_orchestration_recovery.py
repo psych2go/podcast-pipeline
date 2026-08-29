@@ -12,10 +12,12 @@ from agent_pipeline import (
     _env_positive_int,
     _transcript_basis_is_current,
     _validate_content_map_stage_statuses,
+    _writing_artifacts_are_current,
+    _writing_input_hashes,
     content_pipeline_needed,
 )
 from claim_evidence import _unit_payloads
-from content_map import init_content_map, validate_content_map
+from content_map import body_sha256, init_content_map, validate_content_map
 from episode import load_episode, update_transcript_status
 from quality_report import _transcript_status_accepted
 
@@ -65,6 +67,69 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                     "sha256": "stale",
                 },
             }))
+
+    def test_semantic_prose_reuse_ignores_tts_only_repairs(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "原始转录.txt").write_text("source", encoding="utf-8")
+            (folder / "transcript.raw.json").write_text(
+                json.dumps({"segments": []}), encoding="utf-8")
+            (folder / "content_map.json").write_text(
+                json.dumps({"schema_version": 3, "units": []}),
+                encoding="utf-8",
+            )
+            (folder / "中文完整笔记.md").write_text("notes", encoding="utf-8")
+            (folder / "讲书稿.md").write_text(
+                "导览。\n\n## 章节\nOpenAI", encoding="utf-8")
+            (folder / "summary_map.json").write_text(json.dumps({
+                "transcript_basis": {
+                    "file": "原始转录.txt",
+                    "sha256": body_sha256("source"),
+                },
+                "chapters": [],
+            }), encoding="utf-8")
+            with mock.patch(
+                    "agent_pipeline.validate_content_map",
+                    return_value=([], [])), mock.patch(
+                    "agent_pipeline.validate_summary_map",
+                    return_value=[]):
+                self.assertTrue(_writing_artifacts_are_current(folder))
+
+    def test_semantic_entity_change_invalidates_bound_prose(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "原始转录.txt").write_text("source", encoding="utf-8")
+            (folder / "transcript.raw.json").write_text(
+                json.dumps({"segments": []}), encoding="utf-8")
+            (folder / "content_map.json").write_text(
+                json.dumps({"schema_version": 3, "units": []}),
+                encoding="utf-8")
+            (folder / "canonical_entities.json").write_text(
+                json.dumps({"entities": [{"canonical_name": "Alpha"}]}),
+                encoding="utf-8")
+            (folder / "中文完整笔记.md").write_text("notes", encoding="utf-8")
+            (folder / "讲书稿.md").write_text("briefing", encoding="utf-8")
+            summary = {
+                "transcript_basis": {
+                    "file": "原始转录.txt",
+                    "sha256": body_sha256("source"),
+                },
+                "chapters": [],
+                "writing_inputs_version": 1,
+                "writing_inputs": _writing_input_hashes(folder),
+            }
+            (folder / "summary_map.json").write_text(
+                json.dumps(summary), encoding="utf-8")
+            with mock.patch(
+                    "agent_pipeline.validate_content_map",
+                    return_value=([], [])), mock.patch(
+                    "agent_pipeline.validate_summary_map",
+                    return_value=[]):
+                self.assertTrue(_writing_artifacts_are_current(folder))
+                (folder / "canonical_entities.json").write_text(
+                    json.dumps({"entities": [{"canonical_name": "Beta"}]}),
+                    encoding="utf-8")
+                self.assertFalse(_writing_artifacts_are_current(folder))
 
     def test_force_refetch_always_rebuilds_content(self):
         with tempfile.TemporaryDirectory() as td:

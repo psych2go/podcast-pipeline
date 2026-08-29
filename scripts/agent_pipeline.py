@@ -142,6 +142,81 @@ def _transcript_basis(folder):
     }
 
 
+WRITING_INPUTS_VERSION = 1
+
+
+def _semantic_content_map_hash(path):
+    payload = load_json(path)
+    projection = {
+        "schema_version": payload.get("schema_version"),
+        "detail_items_version": payload.get("detail_items_version"),
+        "units": [
+            {
+                key: unit.get(key)
+                for key in (
+                    "id", "topic", "speaker", "claims", "claim_modalities",
+                    "reasoning", "examples", "numbers", "terms", "importance",
+                    "status", "exclusion_type", "notes",
+                )
+                if key in unit
+            }
+            for unit in payload.get("units", []) or []
+            if isinstance(unit, dict)
+        ],
+    }
+    return body_sha256(json.dumps(
+        projection, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ))
+
+
+def _semantic_entities_hash(path):
+    payload = load_json(path)
+    projection = [
+        {
+            "entity_id": item.get("entity_id"),
+            "canonical_name": item.get("canonical_name"),
+        }
+        for item in payload.get("entities", []) or []
+        if isinstance(item, dict)
+    ]
+    return body_sha256(json.dumps(
+        projection, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ))
+
+
+def _writing_input_hashes(folder):
+    folder = Path(folder)
+    result = {
+        "transcript_basis": _transcript_basis(folder),
+    }
+    for name in (
+            "content_map.json", "canonical_entities.json",
+            PREWRITE_FACT_CHECKS_FILENAME):
+        path = folder / name
+        if name == "content_map.json" and path.exists():
+            result[name] = _semantic_content_map_hash(path)
+        elif name == "canonical_entities.json" and path.exists():
+            result[name] = _semantic_entities_hash(path)
+        else:
+            result[name] = (
+                body_sha256(path.read_text(encoding="utf-8"))
+                if path.exists() else None
+            )
+    return result
+
+
+def _writing_inputs_are_current(folder, summary_map):
+    version = summary_map.get("writing_inputs_version")
+    if version is None:
+        return True
+    return (
+        version == WRITING_INPUTS_VERSION
+        and summary_map.get("writing_inputs") == _writing_input_hashes(folder)
+    )
+
+
 def _transcript_basis_is_current(folder, summary_map):
     return summary_map.get("transcript_basis") == _transcript_basis(folder)
 
@@ -241,6 +316,8 @@ def content_pipeline_needed(folder, force=False):
             load_json(folder / "summary_map.json"))
         if not _transcript_basis_is_current(folder, summary_map):
             return True
+        if not _writing_inputs_are_current(folder, summary_map):
+            return True
         errors, _warnings = validate_content_map(content_map, transcript)
         summary_errors = validate_summary_map(
             summary_map, briefing_text, content_map, notes_text)
@@ -257,6 +334,47 @@ def content_pipeline_needed(folder, force=False):
         return bool(errors or summary_errors or tts_errors or ledger_stale)
     except (OSError, ValueError, TypeError):
         return True
+
+
+def _writing_artifacts_are_current(folder):
+    """Return whether semantic prose can be reused without regeneration."""
+    folder = Path(folder)
+    required = [
+        folder / "transcript.raw.json",
+        folder / "content_map.json",
+        folder / "中文完整笔记.md",
+        folder / "讲书稿.md",
+        folder / "summary_map.json",
+    ]
+    if any(not path.exists() for path in required):
+        return False
+    try:
+        transcript = load_json(folder / "transcript.raw.json")
+        content_map = load_json(folder / "content_map.json")
+        notes_text = (folder / "中文完整笔记.md").read_text(
+            encoding="utf-8")
+        briefing_text = (folder / "讲书稿.md").read_text(
+            encoding="utf-8")
+        summary_map = normalize_summary_claim_ids(
+            load_json(folder / "summary_map.json"))
+        if not _transcript_basis_is_current(folder, summary_map):
+            return False
+        if not _writing_inputs_are_current(folder, summary_map):
+            return False
+        map_errors, _warnings = validate_content_map(content_map, transcript)
+        summary_errors = validate_summary_map(
+            summary_map, briefing_text, content_map, notes_text)
+        ledger_path = folder / PREWRITE_FACT_CHECKS_FILENAME
+        ledger_required = int(
+            content_map.get("prewrite_fact_checks_version", 0) or 0
+        ) >= PREWRITE_FACT_CHECKS_VERSION
+        ledger_current = (
+            not (ledger_required or ledger_path.exists())
+            or ledger_is_current(folder)
+        )
+        return not map_errors and not summary_errors and ledger_current
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def _correction_prompt(source_kind):
@@ -566,6 +684,7 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
         raise RuntimeError("subagent 内容流程缺少原始转录证据")
 
     raw = load_json(raw_path)
+    writing_was_current = not force and _writing_artifacts_are_current(folder)
     source_kind = effective_source_kind(folder, raw)
     correction_path = folder / "转录_纠错.txt"
     source_path = folder / "来源.md"
@@ -804,7 +923,8 @@ JSON，不修改文件。""",
 
     with _stage(run_report, "subagent_prewrite_fact_checks") as stage:
         ledger_path = folder / PREWRITE_FACT_CHECKS_FILENAME
-        if not force and ledger_is_current(folder):
+        ledger_ready = not force and ledger_is_current(folder)
+        if ledger_ready:
             if stage is not None:
                 stage.metrics.update({
                     "skipped": True,
@@ -824,7 +944,23 @@ JSON，不修改文件。""",
         notes_path = folder / "中文完整笔记.md"
         briefing_path = folder / "讲书稿.md"
         summary_path = folder / "summary_map.json"
-        run_edit_task(
+        writing_ready = (
+            writing_was_current
+            and content_map_ready
+            and entities_ready
+            and ledger_ready
+        )
+        if writing_ready:
+            if stage is not None:
+                stage.metrics.update({
+                    "skipped": True,
+                    "reason": "semantic prose inputs unchanged",
+                    "outputs": [
+                        notes_path.name, briefing_path.name, summary_path.name,
+                    ],
+                })
+        else:
+            run_edit_task(
             folder,
             f"""读取 transcript.raw.json、原始转录.txt，
 如果存在则读取 转录_纠错.txt，并读取已经完成的 content_map.json、
@@ -875,8 +1011,8 @@ notes_claim_ids、notes_number_ids、notes_example_ids，只能列入中文完�
                     content_map_path, entities_path, source_path, ledger_path)
                 if path.exists()
             ],
-            required_files=[notes_path, briefing_path, summary_path],
-        )
+                required_files=[notes_path, briefing_path, summary_path],
+            )
         missing = [
             path.name for path in (notes_path, briefing_path, summary_path)
             if not path.exists()
@@ -900,17 +1036,20 @@ notes_claim_ids、notes_number_ids、notes_example_ids，只能列入中文完�
         normalization_changes = finalized["normalization_changes"]
         tts_readiness = _ensure_tts_lexicon_ready(
             folder, folder / "讲书稿.md")
-        content_map, transcript = enrich_content_map_evidence(
-            content_map, transcript)
-        summary_map = enrich_summary_map_evidence(
-            summary_map,
-            notes_text,
-            content_map,
-            briefing_text,
-        )
-        summary_map["transcript_basis"] = _transcript_basis(folder)
-        save_json(content_map_path, content_map)
-        save_json(summary_path, summary_map)
+        if not writing_ready:
+            content_map, transcript = enrich_content_map_evidence(
+                content_map, transcript)
+            summary_map = enrich_summary_map_evidence(
+                summary_map,
+                notes_text,
+                content_map,
+                briefing_text,
+            )
+            summary_map["transcript_basis"] = _transcript_basis(folder)
+            save_json(content_map_path, content_map)
+            summary_map["writing_inputs_version"] = WRITING_INPUTS_VERSION
+            summary_map["writing_inputs"] = _writing_input_hashes(folder)
+            save_json(summary_path, summary_map)
         errors, warnings = validate_content_map(content_map, transcript)
         summary_errors = validate_summary_map(
             summary_map,
@@ -932,6 +1071,7 @@ notes_claim_ids、notes_number_ids、notes_example_ids，只能列入中文完�
                 "normalization_changes": normalization_changes,
                 "tts_lexicon_entries": tts_readiness["entries"],
                 "tts_lexicon_repaired": tts_readiness["repaired"],
+                "semantic_prose_reused": writing_ready,
             })
 
     sync_episode_state(folder)

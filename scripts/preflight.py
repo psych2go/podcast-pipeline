@@ -67,6 +67,18 @@ def quality_gate(
         return True
 
     try:
+        from source_relevance import refresh_source_relevance_cache
+    except ImportError:
+        from scripts.source_relevance import refresh_source_relevance_cache
+    try:
+        refresh_source_relevance_cache(folder)
+    except Exception as exc:
+        print(
+            f"[质量门][警告] 来源相关性缓存刷新失败，将按现有缓存校验: {exc}",
+            flush=True,
+        )
+
+    try:
         from quality_report import build_quality_report
     except ImportError:
         from scripts.quality_report import build_quality_report
@@ -93,8 +105,22 @@ def quality_gate(
         report = build_quality_report(folder, strict=True)
         atomic_write_json(out, report)
 
+    source_warning_counts = {}
     for warning in report.get("warnings", []):
+        marker = "外部来源缓存暂时不可用，终审仍须独立核查: "
+        if str(warning).startswith(marker):
+            detail = str(warning)[len(marker):]
+            category = detail.split(":", 1)[0]
+            source_warning_counts[category] = (
+                source_warning_counts.get(category, 0) + 1)
+            continue
         print(f"[质量门][警告] {warning}", flush=True)
+    for category, count in sorted(source_warning_counts.items()):
+        print(
+            f"[质量门][警告] 外部来源缓存 {category}: {count} 项；"
+            "终审仍须独立核查",
+            flush=True,
+        )
     if not report.get("passed", False):
         for error in report.get("errors", []):
             print(f"[质量门][阻断] {error}", flush=True)

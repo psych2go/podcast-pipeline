@@ -10,6 +10,7 @@ from html.parser import HTMLParser
 import subprocess
 import tempfile
 import time
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -249,10 +250,17 @@ def extract_title_from_url(url):
 
 
 def _slug_tokens(value):
-    """将 URL/title 转成用于 episode 匹配的稳定 token 集合。"""
-    value = re.sub(r"https?://", "", value.lower())
-    tokens = re.findall(r"[a-z0-9]{3,}", value)
-    ignored = {"www", "com", "html", "transcript", "episode", "podcast"}
+    """Return distinctive episode tokens; URL hosts and podcast paths are ignored."""
+    text = str(value or "").casefold()
+    if text.startswith(("http://", "https://")):
+        path = urlsplit(text).path.rstrip("/")
+        text = path.rsplit("/", 1)[-1]
+    tokens = re.findall(r"[a-z0-9]{3,}", text)
+    ignored = {
+        "www", "com", "html", "transcript", "episode", "podcast",
+        "the", "and", "with", "for", "from", "into", "about", "this",
+        "that", "state", "future", "full",
+    }
     return {token for token in tokens if token not in ignored}
 
 
@@ -271,19 +279,59 @@ def _rss_entry_matches_url(entry, url):
         fields.append(link.get("href", ""))
     candidate = set().union(*(_slug_tokens(value) for value in fields))
     overlap = target & candidate
-    # URL slug 通常包含 3 个以上有意义 token；短标题则至少匹配两个。
-    threshold = 2 if len(target) <= 5 else 3
-    return len(overlap) >= threshold
+    if len(target) <= 3:
+        return len(overlap) == len(target) and len(overlap) >= 2
+    return len(overlap) >= 3 and len(overlap) / len(target) >= 0.6
+
+
+_KNOWN_PODCAST_FEEDS = {
+    "all-in": "https://feeds.supercast.com/supercast_all_in_all",
+    "huberman-lab": "https://feeds.megaphone.fm/hubermanlab",
+    "naval": "https://nav.al/feed.xml",
+}
+
+
+def discover_official_episode_url(url):
+    """Return an RSS-matched official episode URL, or None when uncertain."""
+    try:
+        import feedparser
+    except ImportError:
+        return None
+    source = str(url or "")
+    for key, feed_url in _KNOWN_PODCAST_FEEDS.items():
+        if key not in source.casefold():
+            continue
+        try:
+            feed = feedparser.parse(feed_url)
+            matches = [
+                entry for entry in feed.entries
+                if _rss_entry_matches_url(entry, source)
+            ]
+        except Exception:
+            return None
+        if len(matches) != 1:
+            return None
+        entry = matches[0]
+        candidates = [entry.get("link", "")]
+        candidates.extend(
+            link.get("href", "")
+            for link in entry.get("links", [])
+            if link.get("rel") in {"alternate", None, ""}
+        )
+        for candidate in candidates:
+            candidate = str(candidate or "").strip()
+            if (
+                    candidate.startswith(("http://", "https://"))
+                    and source_host(candidate) != "podscripts.co"):
+                return candidate
+        return None
+    return None
 
 
 def _try_rss_transcript(url):
     try:
         import feedparser
-        known_feeds = {
-            "all-in": "https://feeds.supercast.com/supercast_all_in_all",
-            "naval": "https://nav.al/feed.xml",
-        }
-        for key, feed_url in known_feeds.items():
+        for key, feed_url in _KNOWN_PODCAST_FEEDS.items():
             if key not in url.lower():
                 continue
             feed = feedparser.parse(feed_url)

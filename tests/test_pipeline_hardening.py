@@ -18,16 +18,119 @@ from content_finalizer import (
     ContentFinalizationError,
     finalize_content_artifacts,
     generate_safe_tts_lexicon,
+    validate_tts_lexicon_semantics,
     validate_tts_readiness,
 )
 from content_map import (
+    apply_claim_evidence_mapping,
     body_sha256,
+    canonicalize_claim_evidence_order,
     enrich_content_map_evidence,
     enrich_summary_map_evidence,
     validate_content_map,
     validate_summary_map,
 )
 from validator import integer_to_chinese, normalize_briefing_artifacts
+
+
+class DeterministicPreReviewTests(unittest.TestCase):
+    def test_claim_evidence_is_canonicalized_to_transcript_order(self):
+        transcript = {
+            "segments": [
+                {"id": "S0001", "text": "first"},
+                {"id": "S0002", "text": "second"},
+                {"id": "S0003", "text": "third"},
+            ],
+        }
+        content_map = {
+            "schema_version": 3,
+            "units": [{
+                "id": "U0001",
+                "claims": ["claim"],
+                "evidence": {
+                    "segment_ids": ["S0001", "S0002", "S0003"],
+                },
+            }],
+        }
+        mapped, _transcript = apply_claim_evidence_mapping(
+            content_map,
+            transcript,
+            [{
+                "claim_id": "U0001-C01",
+                "segment_ids": ["S0003", "S0001", "S0002"],
+                "primary_segment_ids": ["S0003", "S0002"],
+                "context_segment_ids": ["S0001"],
+                "confidence": "high",
+                "rationale": "All three ordered segments support the claim.",
+            }],
+        )
+        unit = mapped["units"][0]
+        self.assertEqual(
+            unit["claim_evidence"]["C01"],
+            ["S0001", "S0002", "S0003"],
+        )
+        self.assertEqual(
+            unit["claim_evidence_roles"]["C01"]["primary_segment_ids"],
+            ["S0002", "S0003"],
+        )
+        self.assertEqual(
+            unit["claim_evidence_roles"]["C01"]["context_segment_ids"],
+            ["S0001"],
+        )
+
+    def test_canonicalizer_repairs_existing_order_and_hash(self):
+        transcript = {
+            "segments": [
+                {"id": "S0001", "text": "first"},
+                {"id": "S0002", "text": "second"},
+            ],
+        }
+        content_map = {"units": [{
+            "claim_evidence": {"C01": ["S0002", "S0001"]},
+            "claim_evidence_sha256": {"C01": "stale"},
+        }]}
+        canonicalize_claim_evidence_order(content_map, transcript)
+        unit = content_map["units"][0]
+        self.assertEqual(unit["claim_evidence"]["C01"], ["S0001", "S0002"])
+        self.assertNotEqual(unit["claim_evidence_sha256"]["C01"], "stale")
+
+    def test_canonicalizer_does_not_promote_missing_context_to_primary(self):
+        transcript = {
+            "segments": [
+                {"id": "S0001", "text": "first"},
+                {"id": "S0002", "text": "second"},
+            ],
+        }
+        content_map = {"units": [{
+            "claim_evidence": {"C01": ["S0002", "S0001"]},
+            "claim_evidence_roles": {"C01": {
+                "primary_segment_ids": ["S0002"],
+                "context_segment_ids": [],
+            }},
+            "claim_evidence_sha256": {"C01": "stale"},
+        }]}
+        canonicalize_claim_evidence_order(content_map, transcript)
+        role = content_map["units"][0]["claim_evidence_roles"]["C01"]
+        self.assertEqual(role["primary_segment_ids"], ["S0002"])
+        self.assertEqual(role["context_segment_ids"], [])
+
+    def test_tts_fraction_semantics_and_math_symbols_fail_fast(self):
+        self.assertTrue(validate_tts_lexicon_semantics({
+            "Spin-3/二 matter": "自旋三分之二物质",
+        }))
+        self.assertTrue(validate_tts_lexicon_semantics({
+            "3/2": "三比二",
+        }))
+        self.assertTrue(validate_tts_lexicon_semantics({
+            "3/2 and 5/4": "二分之三和五比四",
+        }))
+        self.assertEqual(validate_tts_lexicon_semantics({
+            "Spin-3/二 matter": "自旋二分之三物质",
+        }), [])
+        self.assertTrue(any(
+            "难读符号" in issue
+            for issue in validate_tts_readiness("由虚 W− 介导", {})
+        ))
 
 
 class SubagentRecoveryTests(unittest.TestCase):

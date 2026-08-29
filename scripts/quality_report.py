@@ -865,6 +865,7 @@ def build_quality_report(folder, strict=True, *, today=None):
                 "source relevance cache 抓取失败:",
                 "source relevance cache 缺少内容哈希:",
                 "source relevance cache 缺少标题或摘录:",
+                "source relevance cache 语义相关性未确认:",
             )
             relevance_warnings = [
                 error for error in relevance_errors

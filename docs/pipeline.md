@@ -88,6 +88,9 @@ custom provider 的环境仍可认证，同时不会加载用户自动化扩展�
 ### `fetcher.py`
 
 - Podscripts：只提取带时间点的 transcript 文本，排除页面导航和相关推荐。
+- 当输入是 Podscripts 且用户未传 `--official-url` 时，已知播客会通过 RSS 进行
+  唯一匹配；只有恰好一个 episode 命中且提供非 Podscripts 链接时才记录官方 URL，
+  多个候选或低置信度一律保持为空。
 - 网页：按结构化提取、HTTP 降级策略抓取。
 - 音频：faster-whisper，支持 `fast`、`balanced`、`max` 质量预设。
 - `balanced` 默认 `large-v3-turbo`；`max` 使用 `large-v3` 作为显式复核档。
@@ -231,7 +234,9 @@ evidence v3 的约束：
 - `condensed` 的实质 claim 必须进入中文完整笔记，但进入讲稿可选；`included` high/medium claim 仍必须进入讲稿，不能借 condensed 降低既有覆盖要求。
 - 广告和无意义闲谈保留在转录与纠错 evidence 中，可在 content map 使用 `advertisement`、`housekeeping`、`banter` 等 `exclusion_type` 排除；summary map 不得引用 excluded unit。
 - unit 的 evidence 绑定 segment ID、时间范围和源文本 SHA-256。
-- 每个 claim 通过 `claim_evidence` 绑定最小 segment 集合。
+- 每个 claim 通过 `claim_evidence` 绑定最小 segment 集合；新产物的 ID 数组、
+  primary/context 角色数组均按 immutable transcript 顺序规范化，随后再计算哈希。
+  旧产物的非规范顺序只产生迁移告警，新合同产物顺序漂移会在 AI 终审前直接阻断。
 - 每个 claim 的 segment 集合有独立 SHA-256、置信度和选择理由。
 - 有时间戳来源使用 `evidence_mode=timestamp`；无时间戳来源使用
   `evidence_mode=text_anchor`，通过 segment ID 和源文本哈希定位，不伪造时间。
@@ -253,6 +258,15 @@ evidence v3 的约束：
 `enrich-evidence` 不再为多 claim 单元猜测证据。新内容应在生成
 `content_map.json` 时直接填写精确映射；`claim_evidence.py` 主要用于按 unit
 迁移历史数据。超过 60 个 segment 的 unit 会产生结构告警。
+
+预写作事实核查按 claim 数和输入字符双重上限分批，默认三批并行。每批以
+content-map hash、转录基准、模型、effort 和 claim 清单生成指纹并保存到
+`editorial_fact_check_batches/`；`prewrite_fact_checks_progress.json` 记录完成、失败和
+待处理批次。单批失败不会丢弃同轮其他成功结果，恢复时只重跑失效批次。
+
+`summary_map.json.writing_inputs` 绑定写作所用的语义 content map、规范实体表、
+预写作事实台账和转录基准。TTS 词典、证据数组顺序等机械变化不会重写正文；上述
+语义输入发生变化时才重新进入笔记和讲稿写作。
 
 ### `ai_review.py`
 
@@ -335,6 +349,12 @@ TTS manifest 的 section fingerprint 包含：
 - 不覆盖已有最终 MP3
 - manifest 记录失败章节
 
+`TTS_CONCURRENCY` 是全局 chunk 并发预算，默认 4；
+`TTS_SECTION_CONCURRENCY` 控制同时工作的章节数，默认 2。预算在章节与章内 chunk
+之间分配，限制总 API 并发。成功章节即使同轮其他章节失败也保留可验证缓存，恢复时
+只重跑失败章节。TTS 预检还会验证词典分数语义，例如 `3/2` 必须读作“二分之三”，
+并阻断未映射数学负号等有歧义符号。
+
 全部完成后合并到临时文件并原子替换最终 MP3。发布前会再次验证最终文件大小和 SHA-256。
 manifest 同时记录实际 API 请求数、重试数、合成 chunk 数和合成字符数。
 
@@ -344,6 +364,14 @@ manifest 同时记录实际 API 请求数、重试数、合成 chunk 数和合�
 AI review 之后，`process.py` 的 TTS/HTML 路径只读验证讲稿和 summary map。
 任何仍需规范化、拆章或刷新哈希的情况都会阻断，必须回到
 `content_finalizer.py`，再重新生成证据绑定并独立复审。
+
+来源相关性缓存按规范化 URL 增量维护：移除 fragment 和明确跟踪参数，成功项有
+七天刷新 TTL，失败项在二十四小时内不重复请求，首次抓取最多并发八个 URL。缓存
+记录预期实体/纠正词与页面标题、摘录的词汇匹配状态；跨语言或页面结构导致无法确认
+时只产生汇总告警，并要求终审独立核查。缓存内容未变化时不会重写文件或令审查过期。
+
+`run_report.json` 在阶段开始时立即持久化 running 状态，并输出单行 JSON 进度事件；
+设置 `PIPELINE_PROGRESS_EVENTS=0` 可关闭标准输出事件，持久报告仍保留。
 
 已有音频只能用 `--backfill-manifest` 登记文件清单，结果会标记为
 `legacy_unverified`，不会被严格发布接受，因为仅凭 MP3 无法证明它与当前文本对应。

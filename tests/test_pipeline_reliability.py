@@ -32,6 +32,7 @@ import claim_evidence
 from rebuild_plan import build_rebuild_plan
 from source_relevance import (
     expected_source_references,
+    normalize_source_url,
     refresh_source_relevance_cache,
     validate_source_relevance_cache,
 )
@@ -444,7 +445,7 @@ class ClaimEvidenceRoleTests(unittest.TestCase):
 
 
 class RebuildPlanTests(unittest.TestCase):
-    def test_transcript_basis_change_is_planned_in_shadow_mode(self):
+    def test_transcript_basis_change_is_planned_in_active_mode(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
             for name in (
@@ -463,7 +464,8 @@ class RebuildPlanTests(unittest.TestCase):
             plan = build_rebuild_plan(folder)
         self.assertTrue(plan["needs_content"])
         self.assertIn("stale:transcript_basis", plan["reasons"])
-        self.assertEqual(plan["mode"], "shadow")
+        self.assertEqual(plan["mode"], "active")
+        self.assertEqual(plan["schema_version"], 2)
         self.assertIn("ai_review", plan["stages"])
 
 
@@ -619,6 +621,48 @@ class SourceRelevanceTests(unittest.TestCase):
         entry = payload["entries"]["https://example.com/study"]
         self.assertEqual(entry["source_ids"], ["EC0001"])
         self.assertEqual(entry["title"], "Relationship study")
+
+    def test_tracking_parameters_are_removed_from_cache_identity(self):
+        self.assertEqual(
+            normalize_source_url(
+                "HTTPS://Example.COM/report.pdf?utm_source=x&cid=abc#page=2"),
+            "https://example.com/report.pdf",
+        )
+
+        self.assertEqual(
+            normalize_source_url(
+                "https://example.com/data?source=primary&utm_medium=email"),
+            "https://example.com/data?source=primary",
+        )
+
+    def test_recent_fetch_error_is_reused_until_retry_ttl(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "editorial_corrections.json").write_text(json.dumps({
+                "schema_version": 1,
+                "corrections": [{
+                    "correction_id": "EC0001",
+                    "source_urls": ["https://example.com/unavailable"],
+                }],
+            }), encoding="utf-8")
+            attempts = []
+
+            def fetcher(url):
+                attempts.append(url)
+                raise TimeoutError("temporary timeout")
+
+            first = refresh_source_relevance_cache(folder, fetcher=fetcher)
+            first_text = (folder / "source_relevance_cache.json").read_text(
+                encoding="utf-8")
+            second = refresh_source_relevance_cache(folder, fetcher=fetcher)
+            second_text = (folder / "source_relevance_cache.json").read_text(
+                encoding="utf-8")
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(first_text, second_text)
+        self.assertEqual(first["entries"], second["entries"])
+        entry = second["entries"]["https://example.com/unavailable"]
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["error_kind"], "TimeoutError")
 
     def test_cache_rejects_failed_or_unreferenced_entries(self):
         refs = {"https://example.com/study": ["EC0001"]}

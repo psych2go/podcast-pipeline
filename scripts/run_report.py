@@ -67,10 +67,20 @@ def _error_text(error):
     return str(error) or type(error).__name__
 
 
+def _emit_progress(event):
+    if os.environ.get("PIPELINE_PROGRESS_EVENTS", "1") == "0":
+        return
+    print(
+        "[进度] " + json.dumps(event, ensure_ascii=False, sort_keys=True),
+        flush=True,
+    )
+
+
 class RunStage:
     def __init__(self, report, name, metrics=None):
         self.report = report
         self.payload = {
+            "id": uuid.uuid4().hex,
             "name": name,
             "started_at": _utc_now(),
             "status": "running",
@@ -78,6 +88,13 @@ class RunStage:
         }
         self._started = time.monotonic()
         self._closed = False
+        self.report._start_stage(self.payload)
+        _emit_progress({
+            "run_id": self.report.run["id"],
+            "stage": name,
+            "status": "running",
+            "started_at": self.payload["started_at"],
+        })
 
     @property
     def metrics(self):
@@ -98,7 +115,14 @@ class RunStage:
         self.payload["status"] = status
         if error:
             self.payload["error"] = error
-        self.report._append_stage(self.payload)
+        self.report._update_stage(self.payload)
+        _emit_progress({
+            "run_id": self.report.run["id"],
+            "stage": self.payload["name"],
+            "status": status,
+            "duration_seconds": self.payload["duration_seconds"],
+            "completed_at": self.payload["completed_at"],
+        })
         self._closed = True
 
 
@@ -135,8 +159,18 @@ class RunReport:
             _write_report(self.path, payload)
             self.payload = payload
 
-    def _append_stage(self, stage):
+    def _start_stage(self, stage):
         self.run["stages"].append(stage)
+        self._persist()
+
+    def _update_stage(self, stage):
+        stage_id = stage.get("id")
+        for index, existing in enumerate(self.run["stages"]):
+            if existing.get("id") == stage_id:
+                self.run["stages"][index] = stage
+                break
+        else:
+            self.run["stages"].append(stage)
         self._persist()
 
     @contextmanager
@@ -144,7 +178,7 @@ class RunReport:
         stage = RunStage(self, name, metrics)
         try:
             yield stage
-        except Exception as exc:
+        except BaseException as exc:
             stage.fail(exc)
             raise
         else:
@@ -163,3 +197,10 @@ class RunReport:
             self.run["metrics"] = dict(metrics)
         self._finished = True
         self._persist()
+        _emit_progress({
+            "run_id": self.run["id"],
+            "command": self.run["command"],
+            "status": self.run["status"],
+            "duration_seconds": self.run["duration_seconds"],
+            "completed_at": self.run["completed_at"],
+        })

@@ -209,6 +209,12 @@ strict 模式下 claim evidence runner 失败会按单 unit 重试，仍失败�
 质量门会识别 `deterministic-fallback` 并阻断发布，不能用它降低 evidence v3
 或逐 claim 证据要求。
 
+claim evidence 的 segment ID 和 primary/context 角色数组必须按 immutable transcript
+顺序规范化；新合同通过 `claim_evidence_order_version=1` 强制执行。预写作事实核查
+分批结果写入 `editorial_fact_check_batches/` 并可断点恢复，成功批次不得因同轮其他
+批次失败而丢失。`summary_map.writing_inputs` 绑定语义 content map、规范实体表、
+事实台账和转录基准，只有这些语义输入变化才重写笔记和讲稿。
+
 已经发布的 evidence v2 单集只有同时满足以下条件才能暂时兼容：
 
 - `episode.json.quality.claim_evidence_mode=legacy_broad` 是冻结前已有标记；

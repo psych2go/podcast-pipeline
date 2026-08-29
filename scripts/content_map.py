@@ -86,6 +86,17 @@ def content_map_evidence_mode(payload, transcript=None):
     return "timestamp"
 
 
+def canonical_segment_ids(segments, segment_ids):
+    """Return unique segment IDs in immutable transcript order."""
+    order = {
+        str(segment.get("id")): index
+        for index, segment in enumerate(segments or [])
+        if isinstance(segment, dict) and segment.get("id")
+    }
+    unique = list(dict.fromkeys(str(value) for value in segment_ids or []))
+    return sorted(unique, key=lambda value: (order.get(value, len(order)), value))
+
+
 def segment_evidence_sha256(segments, segment_ids):
     wanted = set(segment_ids)
     lines = [
@@ -202,7 +213,7 @@ def enrich_content_map_evidence(content_map, transcript):
                     isinstance(existing, list)
                     and existing
                     and set(existing).issubset(set(segment_ids))):
-                selected_ids = list(dict.fromkeys(existing))
+                selected_ids = canonical_segment_ids(segments, existing)
             elif len(claims) == 1:
                 selected_ids = segment_ids
             else:
@@ -223,7 +234,52 @@ def enrich_content_map_evidence(content_map, transcript):
         unit["claim_evidence_sha256"] = claim_hashes
         unit["claim_evidence_notes"] = claim_notes
     content_map["schema_version"] = CONTENT_MAP_SCHEMA_VERSION
-    return content_map, transcript
+    return canonicalize_claim_evidence_order(content_map, transcript), transcript
+
+
+def canonicalize_claim_evidence_order(content_map, transcript):
+    """Normalize claim evidence arrays, role arrays, and hashes deterministically."""
+    transcript = ensure_segment_ids(transcript)
+    segments = transcript.get("segments", [])
+    for unit in content_map.get("units", []) or []:
+        if not isinstance(unit, dict):
+            continue
+        evidence = unit.get("claim_evidence")
+        if not isinstance(evidence, dict):
+            continue
+        roles = unit.get("claim_evidence_roles")
+        roles = roles if isinstance(roles, dict) else {}
+        hashes = unit.get("claim_evidence_sha256")
+        hashes = hashes if isinstance(hashes, dict) else {}
+        for claim_key, raw_ids in list(evidence.items()):
+            if not isinstance(raw_ids, list):
+                continue
+            ordered = canonical_segment_ids(segments, raw_ids)
+            evidence[claim_key] = ordered
+            hashes[claim_key] = segment_evidence_sha256(segments, ordered)
+            role = roles.get(claim_key)
+            if not isinstance(role, dict):
+                continue
+            primary = canonical_segment_ids(
+                segments, role.get("primary_segment_ids", []))
+            primary_set = set(primary)
+            context = canonical_segment_ids(
+                segments,
+                [
+                    value for value in role.get("context_segment_ids", [])
+                    if str(value) not in primary_set
+                ],
+            )
+            roles[claim_key] = {
+                "primary_segment_ids": primary,
+                "context_segment_ids": context,
+            }
+        unit["claim_evidence"] = evidence
+        unit["claim_evidence_sha256"] = hashes
+        if roles:
+            unit["claim_evidence_roles"] = roles
+    content_map["claim_evidence_order_version"] = 1
+    return content_map
 
 
 def apply_claim_evidence_mapping(
@@ -251,7 +307,8 @@ def apply_claim_evidence_mapping(
             key = f"C{index:02d}"
             full_id = f"{unit_id}-{key}"
             item = mapping_by_id.get(full_id, {})
-            segment_ids = list(dict.fromkeys(item.get("segment_ids", [])))
+            segment_ids = canonical_segment_ids(
+                segments, item.get("segment_ids", []))
             if not segment_ids:
                 raise ValueError(f"{full_id}: 未返回 claim 证据")
             if not set(segment_ids).issubset(unit_segments):
@@ -263,17 +320,20 @@ def apply_claim_evidence_mapping(
             if not rationale:
                 raise ValueError(f"{full_id}: 缺少 evidence rationale")
             evidence[key] = segment_ids
-            primary = list(dict.fromkeys(
-                item.get("primary_segment_ids", segment_ids)))
-            context = [
-                segment_id
-                for segment_id in dict.fromkeys(
-                    item.get("context_segment_ids", []))
-                if segment_id not in set(primary)
-            ]
+            primary = canonical_segment_ids(
+                segments, item.get("primary_segment_ids", segment_ids))
+            primary_set = set(primary)
+            context = canonical_segment_ids(
+                segments,
+                [
+                    segment_id
+                    for segment_id in item.get("context_segment_ids", [])
+                    if str(segment_id) not in primary_set
+                ],
+            )
             if not primary:
                 raise ValueError(f"{full_id}: primary_segment_ids 不能为空")
-            if primary + context != segment_ids:
+            if set(primary) | set(context) != set(segment_ids):
                 raise ValueError(f"{full_id}: primary/context 与 claim 证据不一致")
             roles[key] = {
                 "primary_segment_ids": primary,
@@ -291,7 +351,7 @@ def apply_claim_evidence_mapping(
     content_map["schema_version"] = CONTENT_MAP_SCHEMA_VERSION
     content_map["claim_evidence_refined_at"] = datetime.now(
         timezone.utc).isoformat()
-    return content_map, transcript
+    return canonicalize_claim_evidence_order(content_map, transcript), transcript
 
 
 def enrich_summary_map_evidence(
@@ -705,6 +765,49 @@ def validate_content_map(payload, transcript=None):
                         if len(claim_segments) != len(set(claim_segments)):
                             errors.append(
                                 f"{display_id}-{claim_key}: claim 证据存在重复片段")
+                        canonical_claim_segments = canonical_segment_ids(
+                            transcript_segments, claim_segments)
+                        if claim_segments != canonical_claim_segments:
+                            message = (
+                                f"{display_id}-{claim_key}: "
+                                "claim 证据未按转录顺序排列")
+                            if payload.get("claim_evidence_order_version") == 1:
+                                errors.append(message)
+                            else:
+                                warnings.append(message + "（旧产物兼容）")
+                        claim_roles = unit.get("claim_evidence_roles", {})
+                        role = (
+                            claim_roles.get(claim_key)
+                            if isinstance(claim_roles, dict) else None
+                        )
+                        if isinstance(role, dict):
+                            primary = role.get("primary_segment_ids", [])
+                            context = role.get("context_segment_ids", [])
+                            if (
+                                    not isinstance(primary, list)
+                                    or not primary
+                                    or not isinstance(context, list)):
+                                errors.append(
+                                    f"{display_id}-{claim_key}: claim evidence role 无效")
+                            elif set(primary) & set(context):
+                                errors.append(
+                                    f"{display_id}-{claim_key}: primary/context 证据重叠")
+                            elif set(primary) | set(context) != set(claim_segments):
+                                errors.append(
+                                    f"{display_id}-{claim_key}: primary/context 与 claim 证据不一致")
+                            elif (
+                                    primary != canonical_segment_ids(
+                                        transcript_segments, primary)
+                                    or context != canonical_segment_ids(
+                                        transcript_segments, context)):
+                                message = (
+                                    f"{display_id}-{claim_key}: "
+                                    "claim evidence role 未按转录顺序排列")
+                                if payload.get(
+                                        "claim_evidence_order_version") == 1:
+                                    errors.append(message)
+                                else:
+                                    warnings.append(message + "（旧产物兼容）")
                         claim_sets.append(tuple(claim_segments))
                         if payload.get(
                                 "schema_version", 1) >= CONTENT_MAP_SCHEMA_VERSION:

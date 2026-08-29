@@ -54,6 +54,7 @@ from fetcher import (
     load_transcript_from_file,
     extract_title_from_url,
     detect_source_warnings,
+    discover_official_episode_url,
     apply_content_policy,
     chunk_plain_transcript,
 )
@@ -1157,6 +1158,15 @@ def main():
         sys.exit(1)
     name = sanitize_title(raw_title)
     print(f"[命名] {name}", flush=True)
+    official_url = args.official_url
+    if (
+            not official_url
+            and source
+            and str(source).startswith("http")
+            and "podscripts.co" in str(source).casefold()):
+        official_url = discover_official_episode_url(source)
+        if official_url:
+            print(f"[来源] RSS 匹配官方单集: {official_url}", flush=True)
     if args.upgrade_asr:
         candidates = original_audio_files(BASE_DIR / name)
         if not candidates:
@@ -1196,7 +1206,7 @@ def main():
         auto_ai_review=not args.skip_ai_review,
         allow_legacy=args.allow_legacy_quality,
         display_title=raw_title,
-        official_url=args.official_url,
+        official_url=official_url,
         force_refetch=args.force_refetch,
         asr_language=(
             None if args.asr_language.lower() == "auto"

@@ -54,7 +54,8 @@ API_URL = "https://api.fish.audio/v1/tts"
 MAX_CHUNK_CHARS = 800
 MAX_RETRIES = TTS_MAX_RETRIES
 RETRY_BACKOFF = API_RETRY_BACKOFF
-DEFAULT_CONCURRENCY = 3
+DEFAULT_CONCURRENCY = 4
+DEFAULT_SECTION_CONCURRENCY = 2
 SECTION_SILENCE_SECONDS = 0.8  # 章节之间的静音时长
 TTS_MANIFEST_SCHEMA_VERSION = 1
 
@@ -574,7 +575,7 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
         speed: 语速，默认 1.0
         fresh: True 则清空旧音频重新生成；False（默认）断点续传
         read_titles: 是否在每节正文前朗读章节标题，默认 True
-        concurrency: 单节内 chunk 并发数（默认读 TTS_CONCURRENCY 或 3）
+        concurrency: 全局 chunk 并发预算（默认读 TTS_CONCURRENCY 或 4）
 
     返回:
         TTSResult。任何章节失败时 ok=False，且不会覆盖最终 MP3。
@@ -617,9 +618,14 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
 
     if concurrency is None:
         try:
-            concurrency = max(1, int(os.environ.get("TTS_CONCURRENCY", DEFAULT_CONCURRENCY)))
+            concurrency = int(os.environ.get(
+                "TTS_CONCURRENCY", DEFAULT_CONCURRENCY))
         except ValueError:
             concurrency = DEFAULT_CONCURRENCY
+    else:
+        concurrency = int(concurrency)
+    if concurrency < 1:
+        raise ValueError("TTS concurrency 必须 >= 1")
 
     previous = {} if fresh else _load_manifest(manifest_path)
     previous_sections = {
@@ -639,6 +645,7 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
             "speed": speed,
             "read_titles": read_titles,
             "max_chunk_chars": MAX_CHUNK_CHARS,
+            "global_concurrency": concurrency,
         },
         "expected_sections": len(intended),
         "sections": [],
@@ -647,88 +654,137 @@ def run_tts(folder, briefing_file, merged_name, speed=1.0,
     usage = TTSUsage()
 
     total_kb = 0
-    with httpx.Client() as client:
-        for item in tqdm(intended, desc="[TTS] 章节", unit="个"):
-            fname = item["filename"]
-            output_path = os.path.join(audio_dir, fname)
-            previous_item = previous_sections.get(fname, {})
-            cached = (
-                not fresh
-                and previous_item.get("status") == "complete"
-                and previous_item.get("fingerprint") == item["fingerprint"]
-                and os.path.exists(output_path)
-                and os.path.getsize(output_path) > 1024
-            )
-            if cached:
-                output_sha256 = _sha256_file(output_path)
-                cached = previous_item.get("output_sha256") == output_sha256
-            if cached:
-                size = os.path.getsize(output_path)
-                total_kb += size // 1024
-                manifest["sections"].append({
-                    "filename": fname,
-                    "fingerprint": item["fingerprint"],
-                    "display_sha256": item["display_sha256"],
-                    "spoken_sha256": item["spoken_sha256"],
-                    "output_sha256": output_sha256,
-                    "size": size,
-                    "status": "complete",
-                    "cached": True,
-                })
-                tqdm.write(f"  [TTS] 跳过(指纹一致) {fname} ({size // 1024}KB)")
-                continue
+    section_entries = {}
+    pending = []
+    for item in intended:
+        fname = item["filename"]
+        output_path = os.path.join(audio_dir, fname)
+        previous_item = previous_sections.get(fname, {})
+        cached = (
+            not fresh
+            and previous_item.get("status") == "complete"
+            and previous_item.get("fingerprint") == item["fingerprint"]
+            and os.path.exists(output_path)
+            and os.path.getsize(output_path) > 1024
+        )
+        if cached:
+            output_sha256 = _sha256_file(output_path)
+            cached = previous_item.get("output_sha256") == output_sha256
+        if cached:
+            size = os.path.getsize(output_path)
+            total_kb += size // 1024
+            section_entries[fname] = {
+                "filename": fname,
+                "fingerprint": item["fingerprint"],
+                "display_sha256": item["display_sha256"],
+                "spoken_sha256": item["spoken_sha256"],
+                "output_sha256": output_sha256,
+                "size": size,
+                "status": "complete",
+                "cached": True,
+            }
+            tqdm.write(f"  [TTS] 跳过(指纹一致) {fname} ({size // 1024}KB)")
+        else:
+            pending.append(item)
 
-            chunks = smart_chunk(item["text"], max_chars=MAX_CHUNK_CHARS)
+    try:
+        section_concurrency = max(1, int(os.environ.get(
+            "TTS_SECTION_CONCURRENCY", DEFAULT_SECTION_CONCURRENCY)))
+    except ValueError:
+        section_concurrency = DEFAULT_SECTION_CONCURRENCY
+    section_concurrency = max(
+        1, min(section_concurrency, concurrency, len(pending) or 1))
+    chunk_concurrency = max(1, concurrency // section_concurrency)
 
-            try:
-                ordered = synth_chunks_concurrent(
-                    client, chunks, speed, concurrency, usage)
-                with atomic_output_path(output_path) as tmp_path:
-                    with tmp_path.open("wb") as handle:
-                        for audio in ordered:
-                            handle.write(audio)
-                    if tmp_path.stat().st_size <= 1024:
-                        raise RuntimeError("生成的章节音频体积异常")
-                size = os.path.getsize(output_path)
-                output_sha256 = _sha256_file(output_path)
-                total_kb += size // 1024
-                manifest["sections"].append({
-                    "filename": fname,
-                    "fingerprint": item["fingerprint"],
-                    "display_sha256": item["display_sha256"],
-                    "spoken_sha256": item["spoken_sha256"],
-                    "output_sha256": output_sha256,
-                    "size": size,
-                    "status": "complete",
-                    "cached": False,
-                })
-                tqdm.write(f"  [TTS] {fname} ({size // 1024}KB, {len(chunks)}片)")
-            except Exception as e:
-                tqdm.write(f"  [TTS] 失败 {fname}: {e}")
-                manifest["sections"].append({
-                    "filename": fname,
-                    "fingerprint": item["fingerprint"],
-                    "display_sha256": item["display_sha256"],
-                    "spoken_sha256": item["spoken_sha256"],
-                    "status": "failed",
-                    "error": str(e),
-                })
-                manifest["failed_sections"].append(fname)
-                manifest["usage"] = usage.as_dict()
-                _write_manifest(manifest_path, manifest)
-                return TTSResult(
-                    False,
-                    f"ABORTED (章节失败: {fname})",
-                    expected_sections=len(intended),
-                    completed_sections=sum(
-                        section.get("status") == "complete"
-                        for section in manifest["sections"]
-                    ),
-                    failed_sections=[fname],
-                    manifest_path=manifest_path,
-                )
+    def synthesize_section(item):
+        fname = item["filename"]
+        output_path = os.path.join(audio_dir, fname)
+        chunks = smart_chunk(item["text"], max_chars=MAX_CHUNK_CHARS)
+        with httpx.Client() as client:
+            ordered = synth_chunks_concurrent(
+                client, chunks, speed, chunk_concurrency, usage)
+        with atomic_output_path(output_path) as tmp_path:
+            with tmp_path.open("wb") as handle:
+                for audio in ordered:
+                    handle.write(audio)
+            if tmp_path.stat().st_size <= 1024:
+                raise RuntimeError("生成的章节音频体积异常")
+        size = os.path.getsize(output_path)
+        return {
+            "filename": fname,
+            "fingerprint": item["fingerprint"],
+            "display_sha256": item["display_sha256"],
+            "spoken_sha256": item["spoken_sha256"],
+            "output_sha256": _sha256_file(output_path),
+            "size": size,
+            "status": "complete",
+            "cached": False,
+            "chunk_count": len(chunks),
+        }
 
-            time.sleep(0.3)
+    failures = {}
+    if pending:
+        with ThreadPoolExecutor(max_workers=section_concurrency) as executor:
+            futures = {
+                executor.submit(synthesize_section, item): item
+                for item in pending
+            }
+            with tqdm(
+                    total=len(pending), desc="[TTS] 章节", unit="个") as progress:
+                for future in as_completed(futures):
+                    item = futures[future]
+                    fname = item["filename"]
+                    try:
+                        entry = future.result()
+                        total_kb += entry["size"] // 1024
+                        chunk_count = entry.pop("chunk_count")
+                        section_entries[fname] = entry
+                        tqdm.write(
+                            f"  [TTS] {fname} "
+                            f"({entry['size'] // 1024}KB, {chunk_count}片)")
+                    except Exception as exc:
+                        failures[fname] = str(exc)
+                        section_entries[fname] = {
+                            "filename": fname,
+                            "fingerprint": item["fingerprint"],
+                            "display_sha256": item["display_sha256"],
+                            "spoken_sha256": item["spoken_sha256"],
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                        tqdm.write(f"  [TTS] 失败 {fname}: {exc}")
+                    manifest["sections"] = [
+                        section_entries[planned["filename"]]
+                        for planned in intended
+                        if planned["filename"] in section_entries
+                    ]
+                    manifest["failed_sections"] = sorted(failures)
+                    manifest["usage"] = usage.as_dict()
+                    _write_manifest(manifest_path, manifest)
+                    progress.update(1)
+
+    manifest["sections"] = [
+        section_entries[item["filename"]] for item in intended
+    ]
+    manifest["failed_sections"] = [
+        item["filename"]
+        for item in intended
+        if section_entries[item["filename"]].get("status") != "complete"
+    ]
+    if manifest["failed_sections"]:
+        manifest["usage"] = usage.as_dict()
+        _write_manifest(manifest_path, manifest)
+        return TTSResult(
+            False,
+            f"ABORTED (章节失败: {manifest['failed_sections']})",
+            expected_sections=len(intended),
+            completed_sections=sum(
+                section.get("status") == "complete"
+                for section in manifest["sections"]
+            ),
+            failed_sections=manifest["failed_sections"],
+            manifest_path=manifest_path,
+        )
 
     # 只按本次 intended 顺序合并；任何缺失都阻断，绝不使用额外或旧文件。
     all_mp3s = [
@@ -806,7 +862,7 @@ def cli_main():
     parser.add_argument("--fresh", action="store_true", help="清空旧音频重新生成（默认断点续传）")
     parser.add_argument("--no-titles", action="store_true", help="不在音频中朗读章节标题")
     parser.add_argument("--concurrency", type=int, default=None,
-                        help="单节内 chunk 并发数（默认读 TTS_CONCURRENCY 或 3）")
+                        help="全局 chunk 并发预算（默认读 TTS_CONCURRENCY 或 4）")
     parser.add_argument(
         "--backfill-manifest",
         action="store_true",
