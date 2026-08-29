@@ -1,5 +1,6 @@
 """Pre-writing fact-check ledger for source-faithful podcast drafting."""
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +18,8 @@ except ImportError:
 
 FILENAME = "editorial_fact_checks.json"
 SCHEMA_VERSION = 1
+DEFAULT_BATCH_CLAIMS = 24
+DEFAULT_CONCURRENCY = 3
 RISK_LEVELS = ("low", "medium", "high")
 RISK_DOMAINS = ("general", "medical", "legal", "financial", "political", "safety")
 ASSERTION_TYPES = (
@@ -302,7 +305,8 @@ def _prompt(folder, inventory, content_map_sha256, transcript_basis):
 5. issue_inventory 必须一次性穷尽列出所有 critical/high/medium/low 问题；不得发现第一个高风险问题后停止。
 6. 每个 critical/high/medium issue 必须有明确 recommendation；联网问题必须有 source_urls。
 7. summary 数字必须与实际数组一致，exhaustive_inventory_completed 必须为 true。
-8. 返回符合 schema 的 JSON，不要输出解释文字。
+8. requires_web=true 时至少一个 check 必须提供实际 source_urls；如果检索后仍找不到可审计来源，必须设为 requires_web=false、verdict=uncertain、verification_mode=transcript_attribution，清空 editorial_correction，并注明公开稿只能保留节目归因。
+9. 返回符合 schema 的 JSON，不要输出解释文字。
 """
 
 
@@ -329,6 +333,31 @@ def _sanitize_unsourced_corrections(payload):
     return payload
 
 
+def _sanitize_unsourced_web_requirements(payload):
+    """Keep unsourced research results only as explicitly uncertain attribution."""
+    for record in payload.get("claims", []) or []:
+        if not isinstance(record, dict) or record.get("requires_web") is not True:
+            continue
+        checks = [
+            check for check in record.get("checks", []) or []
+            if isinstance(check, dict)
+        ]
+        if any(check.get("source_urls") for check in checks):
+            continue
+        record["requires_web"] = False
+        for check in checks:
+            check["editorial_correction"] = ""
+            check["verdict"] = "uncertain"
+            check["verification_mode"] = "transcript_attribution"
+            note = str(check.get("notes", "")).strip()
+            suffix = (
+                "网页核查未返回可审计来源；不得作为独立验证事实，"
+                "公开稿只能保留节目归因。"
+            )
+            check["notes"] = f"{note} {suffix}".strip()
+    return payload
+
+
 def _normalize_subclaim_ids(payload):
     """Assign pipeline-owned Fxx IDs while preserving model check order."""
     for record in payload.get("claims", []) or []:
@@ -341,7 +370,59 @@ def _normalize_subclaim_ids(payload):
     return payload
 
 
-def run_prewrite_fact_checks(folder, *, model=None, effort="high"):
+def _claim_batches(inventory, max_claims=DEFAULT_BATCH_CLAIMS):
+    if max_claims < 1:
+        raise ValueError("max_claims 必须大于 0")
+    return [
+        inventory[index:index + max_claims]
+        for index in range(0, len(inventory), max_claims)
+    ]
+
+
+def _batch_pairs(payload):
+    return [
+        (str(item.get("parent_claim_id", "")), str(item.get("source_claim", "")))
+        for item in payload.get("claims", []) or []
+        if isinstance(item, dict)
+    ]
+
+
+def _run_fact_check_batch(
+        folder, inventory, content_map_sha256, transcript_basis,
+        model, effort, batch_index):
+    expected_pairs = [
+        (item["parent_claim_id"], item["source_claim"])
+        for item in inventory
+    ]
+    task = _prompt(
+        folder, inventory, content_map_sha256, transcript_basis)
+    task += (
+        f"\n这是第 {batch_index} 批，只核查本批 {len(inventory)} 条 claim；"
+        "claims 和 summary.claim_count 必须只覆盖本批。"
+        f"\n本次核查 effort={effort}。"
+    )
+    last_error = None
+    for attempt in range(1, 3):
+        result = run_json_task(
+            folder,
+            task,
+            LEDGER_SCHEMA,
+            task_name=f"prewrite_fact_checks_{batch_index:03d}_{attempt}",
+            enable_search=True,
+            model=model or None,
+            timeout=1800,
+        )
+        if _batch_pairs(result["payload"]) == expected_pairs:
+            return result
+        last_error = RuntimeError(
+            f"预写作事实台账第 {batch_index} 批未完整覆盖输入 claim")
+    raise last_error
+
+
+def run_prewrite_fact_checks(
+        folder, *, model=None, effort="high",
+        max_batch_claims=DEFAULT_BATCH_CLAIMS,
+        concurrency=DEFAULT_CONCURRENCY):
     """Generate and persist a complete pre-writing fact-check ledger."""
     folder = Path(folder).resolve()
     content_map_path = folder / "content_map.json"
@@ -349,26 +430,59 @@ def run_prewrite_fact_checks(folder, *, model=None, effort="high"):
     inventory = claim_inventory(content_map)
     map_hash = sha256_file(content_map_path)
     basis = _transcript_basis(folder)
-    result = run_json_task(
-        folder,
-        _prompt(folder, inventory, map_hash, basis)
-        + f"\n本次核查 effort={effort}。",
-        LEDGER_SCHEMA,
-        task_name="prewrite_fact_checks",
-        enable_search=True,
-        model=model or None,
-        timeout=1800,
-    )
-    payload = result["payload"]
-    # Binding fields are pipeline-owned; the research model cannot choose
-    # which semantic revision its findings authorize.
-    payload["schema_version"] = SCHEMA_VERSION
-    payload["generated_at"] = datetime.now(timezone.utc).isoformat()
-    payload["content_map_sha256"] = map_hash
-    payload["transcript_basis"] = basis
-    # Subclaim IDs are mechanical bindings owned by the pipeline, not a
-    # research-model choice. Preserve returned order and normalize IDs.
+    batches = _claim_batches(inventory, max_batch_claims)
+    results = [None] * len(batches)
+    with ThreadPoolExecutor(
+            max_workers=max(1, min(concurrency, len(batches) or 1))) as pool:
+        futures = {
+            pool.submit(
+                _run_fact_check_batch,
+                folder,
+                batch,
+                map_hash,
+                basis,
+                model,
+                effort,
+                index,
+            ): index
+            for index, batch in enumerate(batches, start=1)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            results[index - 1] = future.result()
+
+    claims = []
+    issues = []
+    duration_ms = 0
+    exhaustive = True
+    for result in results:
+        payload = result["payload"]
+        claims.extend(payload.get("claims", []) or [])
+        issues.extend(payload.get("issue_inventory", []) or [])
+        duration_ms += result.get("duration_ms") or 0
+        exhaustive = exhaustive and (
+            payload.get("summary", {}).get("exhaustive_inventory_completed")
+            is True
+        )
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "content_map_sha256": map_hash,
+        "transcript_basis": basis,
+        "claims": claims,
+        "issue_inventory": issues,
+        "summary": {
+            "claim_count": len(claims),
+            "checked_subclaim_count": sum(
+                len(item.get("checks", []) or []) for item in claims),
+            "issue_count": len(issues),
+            "exhaustive_inventory_completed": exhaustive,
+        },
+    }
+    # Binding fields and IDs are pipeline-owned; research batches cannot choose
+    # which semantic revision their findings authorize.
     _sanitize_unsourced_corrections(payload)
+    _sanitize_unsourced_web_requirements(payload)
     _normalize_subclaim_ids(payload)
     errors = validate_ledger(folder, payload)
     if errors:
@@ -379,5 +493,6 @@ def run_prewrite_fact_checks(folder, *, model=None, effort="high"):
         "checked_subclaim_count": payload.get("summary", {}).get(
             "checked_subclaim_count", 0),
         "issue_count": len(payload.get("issue_inventory", [])),
-        "duration_ms": result.get("duration_ms"),
+        "batch_count": len(batches),
+        "duration_ms": duration_ms,
     }

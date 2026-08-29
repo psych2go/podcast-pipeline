@@ -87,6 +87,82 @@ class PrewriteFactCheckTests(unittest.TestCase):
         )
         self.assertEqual(inventory[0]["source_claim"], "嘉宾称公司估值为十亿美元。")
 
+    def test_claim_batches_preserve_order_and_bound_size(self):
+        inventory = [
+            {"parent_claim_id": f"U0001-C{index:02d}"}
+            for index in range(1, 6)
+        ]
+        batches = prewrite_fact_checks._claim_batches(inventory, max_claims=2)
+        self.assertEqual([len(batch) for batch in batches], [2, 2, 1])
+        self.assertEqual(
+            [item["parent_claim_id"] for batch in batches for item in batch],
+            [item["parent_claim_id"] for item in inventory],
+        )
+
+    def test_run_batches_and_merges_in_source_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder, content_map = self._folder(td)
+
+            def batch_result(
+                    _folder, batch, _map_hash, _basis,
+                    _model, _effort, batch_index):
+                claims = []
+                for item in batch:
+                    claims.append({
+                        **item,
+                        "risk_level": "low",
+                        "risk_domains": ["general"],
+                        "requires_web": False,
+                        "checks": [{
+                            "subclaim_id": item["parent_claim_id"] + "-bad",
+                            "statement": item["source_claim"],
+                            "claim_origin": "speaker_reported",
+                            "assertion_type": "opinion",
+                            "verification_mode": "transcript_attribution",
+                            "risk_domain": "general",
+                            "verdict": "faithfully_attributed",
+                            "editorial_correction": "",
+                            "source_urls": [],
+                            "checked_at": "2026-08-29",
+                            "notes": "transcript attribution",
+                        }],
+                    })
+                return {
+                    "payload": {
+                        "claims": claims,
+                        "issue_inventory": [],
+                        "summary": {
+                            "exhaustive_inventory_completed": True,
+                        },
+                    },
+                    "duration_ms": batch_index * 10,
+                }
+
+            with patch.object(
+                    prewrite_fact_checks,
+                    "_run_fact_check_batch",
+                    side_effect=batch_result):
+                metrics = prewrite_fact_checks.run_prewrite_fact_checks(
+                    folder, max_batch_claims=1, concurrency=2)
+            ledger = json.loads(
+                (folder / prewrite_fact_checks.FILENAME).read_text(
+                    encoding="utf-8"))
+        expected_ids = [
+            item["parent_claim_id"]
+            for item in prewrite_fact_checks.claim_inventory(content_map)
+        ]
+        self.assertEqual(
+            [item["parent_claim_id"] for item in ledger["claims"]],
+            expected_ids,
+        )
+        self.assertEqual(metrics["batch_count"], 2)
+        self.assertEqual(metrics["duration_ms"], 30)
+        self.assertEqual(ledger["summary"]["claim_count"], 2)
+        self.assertEqual(
+            ledger["claims"][0]["checks"][0]["subclaim_id"],
+            "U0001-C01-F01",
+        )
+
     def test_ledger_freshness_binds_content_map_and_transcript(self):
         with tempfile.TemporaryDirectory() as td:
             folder, content_map = self._folder(td)
@@ -118,6 +194,49 @@ class PrewriteFactCheckTests(unittest.TestCase):
         self.assertEqual(check["verdict"], "uncertain")
         self.assertEqual(check["verification_mode"], "transcript_attribution")
         self.assertIn("已由流水线丢弃", check["notes"])
+
+    def test_unsourced_web_requirement_is_downgraded_to_attribution(self):
+        payload = {
+            "claims": [{
+                "parent_claim_id": "U0001-C01",
+                "requires_web": True,
+                "checks": [{
+                    "claim_origin": "speaker_firsthand",
+                    "verification_mode": "web_required",
+                    "verdict": "supported",
+                    "editorial_correction": "",
+                    "source_urls": [],
+                    "notes": "search found no auditable source",
+                }],
+            }],
+        }
+        prewrite_fact_checks._sanitize_unsourced_web_requirements(payload)
+        record = payload["claims"][0]
+        check = record["checks"][0]
+        self.assertFalse(record["requires_web"])
+        self.assertEqual(check["verdict"], "uncertain")
+        self.assertEqual(check["verification_mode"], "transcript_attribution")
+        self.assertEqual(check["editorial_correction"], "")
+        self.assertIn("只能保留节目归因", check["notes"])
+
+    def test_sourced_web_requirement_remains_required(self):
+        payload = {
+            "claims": [{
+                "parent_claim_id": "U0001-C01",
+                "requires_web": True,
+                "checks": [{
+                    "verification_mode": "web_required",
+                    "verdict": "supported",
+                    "editorial_correction": "",
+                    "source_urls": ["https://example.com/source"],
+                    "notes": "verified",
+                }],
+            }],
+        }
+        prewrite_fact_checks._sanitize_unsourced_web_requirements(payload)
+        self.assertTrue(payload["claims"][0]["requires_web"])
+        self.assertEqual(
+            payload["claims"][0]["checks"][0]["verdict"], "supported")
 
     def test_subclaim_ids_are_pipeline_owned_and_normalized(self):
         payload = {
@@ -174,6 +293,8 @@ class PrewriteFactCheckTests(unittest.TestCase):
         self.assertIn("不得把外部纠正写回 content_map", prompt)
         self.assertIn("不得发现第一个高风险问题后停止", prompt)
         self.assertIn("每一条 source claim", prompt)
+        self.assertIn("requires_web=true", prompt)
+        self.assertIn("公开稿只能保留节目归因", prompt)
 
 
 class ExactEntityRepairTests(unittest.TestCase):
