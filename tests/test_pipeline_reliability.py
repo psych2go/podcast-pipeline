@@ -661,7 +661,7 @@ class SourceRelevanceTests(unittest.TestCase):
     class _FakeClient:
         def __init__(self, responses):
             self.responses = list(responses)
-            self.urls = []
+            self.requests = []
 
         def __enter__(self):
             return self
@@ -669,8 +669,12 @@ class SourceRelevanceTests(unittest.TestCase):
         def __exit__(self, exc_type, exc, traceback):
             return False
 
-        def stream(self, method, url):
-            self.urls.append(url)
+        def stream(self, method, url, **kwargs):
+            self.requests.append({
+                "method": method,
+                "url": url,
+                **kwargs,
+            })
             return self.responses.pop(0)
 
     def test_private_and_resolved_private_source_urls_are_rejected(self):
@@ -704,7 +708,40 @@ class SourceRelevanceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "非公网地址"):
                 source_relevance._fetch_source(
                     "http://93.184.216.34/start")
-        self.assertEqual(client.urls, ["http://93.184.216.34/start"])
+        self.assertEqual(
+            client.requests[0]["url"],
+            "http://93.184.216.34:80/start",
+        )
+
+    def test_hostname_connection_is_pinned_to_validated_address(self):
+        client = self._FakeClient([
+            self._FakeResponse(
+                200,
+                "https://93.184.216.34:443/article",
+                headers={"content-type": "text/plain"},
+                chunks=[b"public source"],
+            ),
+        ])
+        public_resolution = [(
+            source_relevance.socket.AF_INET,
+            source_relevance.socket.SOCK_STREAM,
+            6,
+            "",
+            ("93.184.216.34", 443),
+        )]
+        with mock.patch.object(
+                source_relevance.socket, "getaddrinfo",
+                return_value=public_resolution), mock.patch.object(
+                source_relevance.httpx, "Client", return_value=client) as factory:
+            result = source_relevance._fetch_source(
+                "https://source.example/article")
+        request = client.requests[0]
+        self.assertEqual(request["url"], "https://93.184.216.34:443/article")
+        self.assertEqual(request["headers"], {"Host": "source.example"})
+        self.assertEqual(
+            request["extensions"], {"sni_hostname": "source.example"})
+        self.assertEqual(result["final_url"], "https://source.example/article")
+        self.assertFalse(factory.call_args.kwargs["trust_env"])
 
     def test_source_response_body_is_stream_bounded(self):
         client = self._FakeClient([

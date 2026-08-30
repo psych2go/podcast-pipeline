@@ -189,40 +189,71 @@ def _annotate_relevance(entry, expected_terms):
     return entry
 
 
-def _validate_public_source_url(url):
-    """Reject source URLs that can address local or non-public networks."""
+def _resolve_public_source_url(url):
+    """Resolve a source URL once and return only approved public addresses."""
     value = str(url or "").strip()
     try:
         parts = urlsplit(value)
         port = parts.port
     except ValueError as exc:
         raise ValueError(f"source URL 无效: {value}") from exc
-    if parts.scheme.casefold() not in {"http", "https"}:
+    scheme = parts.scheme.casefold()
+    if scheme not in {"http", "https"}:
         raise ValueError(f"source URL 只允许 HTTP(S): {value}")
     if not parts.hostname or parts.username is not None or parts.password is not None:
         raise ValueError(f"source URL host 或认证信息无效: {value}")
-    port = port or (443 if parts.scheme.casefold() == "https" else 80)
+    port = port or (443 if scheme == "https" else 80)
     try:
         literal = ipaddress.ip_address(parts.hostname)
-        addresses = {literal}
+        addresses = [literal]
     except ValueError:
         try:
             resolved = socket.getaddrinfo(
                 parts.hostname, port, type=socket.SOCK_STREAM)
         except socket.gaierror as exc:
             raise ValueError(f"source URL host 无法解析: {parts.hostname}") from exc
-        addresses = {
-            ipaddress.ip_address(item[4][0])
-            for item in resolved
-            if item and len(item) > 4 and item[4]
-        }
+        addresses = []
+        for item in resolved:
+            if not item or len(item) <= 4 or not item[4]:
+                continue
+            address = ipaddress.ip_address(item[4][0])
+            if address not in addresses:
+                addresses.append(address)
     if not addresses:
         raise ValueError(f"source URL host 没有可用地址: {parts.hostname}")
     blocked = sorted(str(address) for address in addresses if not address.is_global)
     if blocked:
         raise ValueError(
             f"source URL 指向非公网地址: {parts.hostname}: {blocked}")
+    addresses.sort(key=lambda address: (address.version != 4, str(address)))
+    return value, parts, addresses
+
+
+def _validate_public_source_url(url):
+    """Reject source URLs that can address local or non-public networks."""
+    value, _parts, _addresses = _resolve_public_source_url(url)
     return value
+
+
+def _pinned_source_request(parts, address):
+    scheme = parts.scheme.casefold()
+    port = parts.port or (443 if scheme == "https" else 80)
+    address_text = str(address)
+    address_host = f"[{address_text}]" if address.version == 6 else address_text
+    pinned_url = urlunsplit((
+        scheme,
+        f"{address_host}:{port}",
+        parts.path or "/",
+        parts.query,
+        "",
+    ))
+    default_port = 443 if scheme == "https" else 80
+    original_host = parts.hostname
+    host_value = (
+        f"[{original_host}]" if ":" in original_host else original_host)
+    if port != default_port:
+        host_value = f"{host_value}:{port}"
+    return pinned_url, host_value, original_host
 
 
 def _read_limited_body(response):
@@ -239,10 +270,18 @@ def _read_limited_body(response):
 
 def _fetch_source(url):
     current_url = str(url)
-    with httpx.Client(timeout=30, follow_redirects=False) as client:
-        for redirect_count in range(MAX_REDIRECTS + 1):
-            _validate_public_source_url(current_url)
-            with client.stream("GET", current_url) as response:
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        current_url, parts, addresses = _resolve_public_source_url(current_url)
+        pinned_url, host_header, sni_hostname = _pinned_source_request(
+            parts, addresses[0])
+        with httpx.Client(
+                timeout=30, follow_redirects=False, trust_env=False) as client:
+            with client.stream(
+                    "GET",
+                    pinned_url,
+                    headers={"Host": host_header},
+                    extensions={"sni_hostname": sni_hostname},
+            ) as response:
                 if response.status_code in REDIRECT_STATUSES:
                     location = response.headers.get("location", "").strip()
                     if not location:
@@ -256,11 +295,11 @@ def _fetch_source(url):
                 body = _read_limited_body(response)
                 content_type = response.headers.get("content-type", "")
                 encoding = response.charset_encoding or "utf-8"
-                final_url = str(response.url)
+                final_url = current_url
                 status_code = response.status_code
                 break
-        else:  # pragma: no cover - loop is bounded by explicit redirect handling
-            raise ValueError("source URL 重定向次数过多")
+    else:  # pragma: no cover - loop is bounded by explicit redirect handling
+        raise ValueError("source URL 重定向次数过多")
     title = ""
     excerpt = ""
     if "html" in content_type.casefold() or body.lstrip().startswith(b"<"):
