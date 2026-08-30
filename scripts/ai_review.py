@@ -69,7 +69,9 @@ REVIEW_FILES = (
 )
 OPTIONAL_REVIEW_FILES = (
     "转录_纠错.txt", "tts_lexicon.json", "editorial_corrections.json",
-    "canonical_entities.json", "source_relevance_cache.json")
+    "canonical_entities.json", "source_relevance_cache.json",
+    "editorial_fact_checks.json",
+)
 
 REVIEW_SCHEMA = {
     "type": "object",
@@ -80,6 +82,18 @@ REVIEW_SCHEMA = {
         },
         "passed": {"type": "boolean"},
         "summary": {"type": "string"},
+        "audit_completion": {
+            "type": "object",
+            "properties": {
+                "transcript": {"type": "boolean"},
+                "entities": {"type": "boolean"},
+                "factuality_numbers": {"type": "boolean"},
+                "attribution_evidence": {"type": "boolean"},
+                "coverage": {"type": "boolean"},
+                "tts": {"type": "boolean"},
+                "exhaustive_inventory_completed": {"type": "boolean"},
+            },
+        },
         "transcript_quality": {
             "type": "object",
             "properties": {
@@ -221,12 +235,25 @@ REVIEW_SCHEMA = {
                     },
                     "checked_at": {"type": "string"},
                     "recommendation": {"type": "string"},
+                    "repair_kind": {
+                        "type": "string",
+                        "enum": [
+                            "manual", "exact_entity", "safe_tts",
+                            "summary_map", "claim_evidence",
+                        ],
+                    },
+                    "replacement_from": {"type": "string"},
+                    "replacement_to": {"type": "string"},
+                    "allowed_files": {
+                        "type": "array", "items": {"type": "string"},
+                    },
                 },
                 "required": [
                     "severity", "category", "file", "statement",
                     "source_evidence", "evidence_type",
                     "evidence_segment_ids", "source_urls", "checked_at",
-                    "recommendation",
+                    "recommendation", "repair_kind",
+                    "replacement_from", "replacement_to", "allowed_files",
                 ],
             },
         },
@@ -519,10 +546,11 @@ def _prompt(folder, scope=None):
 {folder}
 {scope_instruction}{cache_instruction}
 
-必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt、tts_lexicon.json、editorial_corrections.json、canonical_entities.json 和 source_relevance_cache.json。editorial_corrections.json 只记录外部校正，不得把其中事实伪装成 transcript evidence；canonical_entities.json 是公开名称真源；source_relevance_cache.json 的网页标题和摘录必须与对应 claim/correction 语义相关，URL 可访问不等于来源支持主张。
+必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt、tts_lexicon.json、editorial_corrections.json、canonical_entities.json、source_relevance_cache.json 和 editorial_fact_checks.json。editorial_corrections.json 和 editorial_fact_checks.json 只记录外部校正，不得把其中事实伪装成 transcript evidence；canonical_entities.json 是写稿前的规范名称台账，允许写稿后的外部校正新增已正确拼写的实体；缺少条目本身只能作为库存完善建议，只有公开稿实际名称错误、主体错配或重要歧义时才能令 entity_accuracy 失败。source_relevance_cache.json 是非权威的抓取与相关性线索：通用索引、标题未出现实体名或暂时抓取失败本身不得单独形成 high/critical 或阻断发布；只有公开稿实际采用的事实缺少 fact_checks/editorial ledger 中的直接可靠来源，或来源与主张语义冲突时，才能令 factuality/publish 失败。预写作台账不是权威结论，必须独立复核其来源。
 
 审查目标：无需人工复核也能直接发布。请执行：
-1. 抽查所有章节和对应时间片，检查脑补、漏点、人物归属和逻辑链。
+1. 逐章检查全部章节和对应时间片，检查脑补、漏点、人物归属和逻辑链；不得用抽样代替最终发布判定。
+   返回前必须形成穷尽式 issue inventory：实体、转录、事实、数字、归因、覆盖和 TTS 全部完成，禁止发现第一个 high 问题后停止。
 2. 审查 content_map 中每个 claims/numbers/examples 是否被完整笔记或讲稿正确覆盖。
    content_map v3 的 evidence.segment_ids、claim_evidence、claim_evidence_sha256 和 source_sha256 是证据锚点；逐条 claim 必须引用对应的 Sxxxx 片段，不能只相信 summary_map 自报。
 3. fact_checks 必须是原子子主张。若一个 content_map claim 同时包含公开事实、说话人观点、第三方指控或编辑推论，必须拆成多条 fact_check：
@@ -581,6 +609,8 @@ def _prompt(folder, scope=None):
    也不得为此创建 issue。只要必读内容文件达到发布标准，publish.passed 必须为 true。
 
 证据输出要求：
+- audit_completion 的七个布尔值只有在对应专项已经完成后才能为 true；返回前必须全部为 true。
+- 每个 issue 都必须填写 repair_kind、replacement_from、replacement_to 和 allowed_files。只有官方或一手来源确认的纯实体名称错误可使用 exact_entity；医学结论、数字、归因、范围和因果关系必须使用 manual 并留空 replacement 字段。
 - 每个 issue 都必须填写 evidence_type、evidence_segment_ids、source_urls 和 checked_at。
 - 联网事实核查必须把最终采用的网页 URL 写入 source_urls；只引用转录时 source_urls 可为空。
 - 每条 fact_checks 必须填写 parent_claim_id、唯一 subclaim_id、claim_origin、speaker_role、assertion_type、verification_mode、risk_domain 和派生兼容 claim_type。
@@ -772,6 +802,7 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
     assert_review_snapshot(folder, input_snapshot, context_snapshot)
 
     review["schema_version"] = AI_REVIEW_SCHEMA_VERSION
+    review["audit_contract_version"] = 1
     review["reviewed_at"] = datetime.now(timezone.utc).isoformat()
     review["reviewer"] = {
         "command": result.get("command", "codex exec"),

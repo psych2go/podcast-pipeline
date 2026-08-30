@@ -23,7 +23,15 @@ except ImportError:
     from scripts.sections import chapter_body_map
 
 
-STATUS_VALUES = {"pending", "included", "condensed", "excluded", "needs_review", "unsupported"}
+STATUS_VALUES = {
+    "pending", "included", "condensed", "excluded", "unresolved",
+    "needs_review", "unsupported",
+}
+EXCLUSION_TYPES = {
+    "advertisement", "housekeeping", "banter", "non_speech",
+    "duplicate", "technical_noise", "other",
+}
+SOURCE_ACCOUNTABILITY_VERSION = 1
 IMPORTANCE_VALUES = {"high", "medium", "low"}
 CONTENT_MAP_SCHEMA_VERSION = 3
 SUMMARY_MAP_SCHEMA_VERSION = 2
@@ -78,6 +86,17 @@ def content_map_evidence_mode(payload, transcript=None):
     return "timestamp"
 
 
+def canonical_segment_ids(segments, segment_ids):
+    """Return unique segment IDs in immutable transcript order."""
+    order = {
+        str(segment.get("id")): index
+        for index, segment in enumerate(segments or [])
+        if isinstance(segment, dict) and segment.get("id")
+    }
+    unique = list(dict.fromkeys(str(value) for value in segment_ids or []))
+    return sorted(unique, key=lambda value: (order.get(value, len(order)), value))
+
+
 def segment_evidence_sha256(segments, segment_ids):
     wanted = set(segment_ids)
     lines = [
@@ -107,8 +126,21 @@ def _segments_for_timestamps(segments, timestamps):
         if start is None:
             continue
         end = end if end is not None else start
-        for window_start, window_end in timestamps or []:
-            if end >= window_start and start <= window_end:
+        for window in timestamps or []:
+            if not isinstance(window, list) or len(window) != 2:
+                continue
+            window_start, window_end = window
+            if window_start is None or window_end is None:
+                continue
+            segment_point = end == start
+            window_point = window_end == window_start
+            if segment_point:
+                overlaps = window_start <= start <= window_end
+            elif window_point:
+                overlaps = start <= window_start < end
+            else:
+                overlaps = end > window_start and start < window_end
+            if overlaps:
                 selected.append(segment)
                 break
     return selected
@@ -132,8 +164,29 @@ def enrich_content_map_evidence(content_map, transcript):
                 if segment.get("id") in existing_ids
             ]
         else:
+            open_anchor_starts = {
+                segment.get("start")
+                for segment in segments
+                if segment.get("start") is not None
+                and segment.get("end") is None
+            }
+            normalized_timestamps = []
+            for timestamp in unit.get("timestamps", []):
+                if not isinstance(timestamp, list) or len(timestamp) != 2:
+                    normalized_timestamps.append(timestamp)
+                    continue
+                start, end = timestamp
+                normalized_timestamps.append(
+                    [start, start]
+                    if (
+                        start is not None and end is None
+                        and start in open_anchor_starts
+                    )
+                    else [start, end]
+                )
+            unit["timestamps"] = normalized_timestamps
             selected = _segments_for_timestamps(
-                segments, unit.get("timestamps", []))
+                segments, normalized_timestamps)
         segment_ids = [
             segment["id"] for segment in selected if segment.get("id")]
         if not segment_ids:
@@ -160,7 +213,7 @@ def enrich_content_map_evidence(content_map, transcript):
                     isinstance(existing, list)
                     and existing
                     and set(existing).issubset(set(segment_ids))):
-                selected_ids = list(dict.fromkeys(existing))
+                selected_ids = canonical_segment_ids(segments, existing)
             elif len(claims) == 1:
                 selected_ids = segment_ids
             else:
@@ -181,7 +234,52 @@ def enrich_content_map_evidence(content_map, transcript):
         unit["claim_evidence_sha256"] = claim_hashes
         unit["claim_evidence_notes"] = claim_notes
     content_map["schema_version"] = CONTENT_MAP_SCHEMA_VERSION
-    return content_map, transcript
+    return canonicalize_claim_evidence_order(content_map, transcript), transcript
+
+
+def canonicalize_claim_evidence_order(content_map, transcript):
+    """Normalize claim evidence arrays, role arrays, and hashes deterministically."""
+    transcript = ensure_segment_ids(transcript)
+    segments = transcript.get("segments", [])
+    for unit in content_map.get("units", []) or []:
+        if not isinstance(unit, dict):
+            continue
+        evidence = unit.get("claim_evidence")
+        if not isinstance(evidence, dict):
+            continue
+        roles = unit.get("claim_evidence_roles")
+        roles = roles if isinstance(roles, dict) else {}
+        hashes = unit.get("claim_evidence_sha256")
+        hashes = hashes if isinstance(hashes, dict) else {}
+        for claim_key, raw_ids in list(evidence.items()):
+            if not isinstance(raw_ids, list):
+                continue
+            ordered = canonical_segment_ids(segments, raw_ids)
+            evidence[claim_key] = ordered
+            hashes[claim_key] = segment_evidence_sha256(segments, ordered)
+            role = roles.get(claim_key)
+            if not isinstance(role, dict):
+                continue
+            primary = canonical_segment_ids(
+                segments, role.get("primary_segment_ids", []))
+            primary_set = set(primary)
+            context = canonical_segment_ids(
+                segments,
+                [
+                    value for value in role.get("context_segment_ids", [])
+                    if str(value) not in primary_set
+                ],
+            )
+            roles[claim_key] = {
+                "primary_segment_ids": primary,
+                "context_segment_ids": context,
+            }
+        unit["claim_evidence"] = evidence
+        unit["claim_evidence_sha256"] = hashes
+        if roles:
+            unit["claim_evidence_roles"] = roles
+    content_map["claim_evidence_order_version"] = 1
+    return content_map
 
 
 def apply_claim_evidence_mapping(
@@ -209,7 +307,8 @@ def apply_claim_evidence_mapping(
             key = f"C{index:02d}"
             full_id = f"{unit_id}-{key}"
             item = mapping_by_id.get(full_id, {})
-            segment_ids = list(dict.fromkeys(item.get("segment_ids", [])))
+            segment_ids = canonical_segment_ids(
+                segments, item.get("segment_ids", []))
             if not segment_ids:
                 raise ValueError(f"{full_id}: 未返回 claim 证据")
             if not set(segment_ids).issubset(unit_segments):
@@ -221,17 +320,20 @@ def apply_claim_evidence_mapping(
             if not rationale:
                 raise ValueError(f"{full_id}: 缺少 evidence rationale")
             evidence[key] = segment_ids
-            primary = list(dict.fromkeys(
-                item.get("primary_segment_ids", segment_ids)))
-            context = [
-                segment_id
-                for segment_id in dict.fromkeys(
-                    item.get("context_segment_ids", []))
-                if segment_id not in set(primary)
-            ]
+            primary = canonical_segment_ids(
+                segments, item.get("primary_segment_ids", segment_ids))
+            primary_set = set(primary)
+            context = canonical_segment_ids(
+                segments,
+                [
+                    segment_id
+                    for segment_id in item.get("context_segment_ids", [])
+                    if str(segment_id) not in primary_set
+                ],
+            )
             if not primary:
                 raise ValueError(f"{full_id}: primary_segment_ids 不能为空")
-            if primary + context != segment_ids:
+            if set(primary) | set(context) != set(segment_ids):
                 raise ValueError(f"{full_id}: primary/context 与 claim 证据不一致")
             roles[key] = {
                 "primary_segment_ids": primary,
@@ -249,7 +351,7 @@ def apply_claim_evidence_mapping(
     content_map["schema_version"] = CONTENT_MAP_SCHEMA_VERSION
     content_map["claim_evidence_refined_at"] = datetime.now(
         timezone.utc).isoformat()
-    return content_map, transcript
+    return canonicalize_claim_evidence_order(content_map, transcript), transcript
 
 
 def enrich_summary_map_evidence(
@@ -325,7 +427,6 @@ def init_content_map(transcript_json, output, title=""):
             "topic": "",
             "speaker": segment.get("speaker"),
             "claims": [],
-            "claim_modalities": [],
             "reasoning": [],
             "examples": [],
             "numbers": [],
@@ -345,6 +446,7 @@ def init_content_map(transcript_json, output, title=""):
         })
     payload = {
         "schema_version": CONTENT_MAP_SCHEMA_VERSION,
+        "source_accountability_version": SOURCE_ACCOUNTABILITY_VERSION,
         "evidence_mode": mode,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "title": title,
@@ -354,6 +456,74 @@ def init_content_map(transcript_json, output, title=""):
     }
     save_json(output, payload)
     return payload
+
+
+def source_accountability_contract_required(transcript):
+    meta = (transcript or {}).get("meta", {}) or {}
+    value = meta.get("source_accountability_contract_version", 0)
+    if value in (None, ""):
+        return False
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(
+            "source_accountability_contract_version 必须是非负整数")
+    return value >= SOURCE_ACCOUNTABILITY_VERSION
+
+
+def source_segment_accountability(payload, transcript):
+    """Account for every nonempty source segment without forcing publication."""
+    transcript = ensure_segment_ids(transcript or {"segments": []})
+    source_ids = [
+        str(segment.get("id"))
+        for segment in transcript.get("segments", [])
+        if (segment.get("text") or "").strip()
+    ]
+    references = []
+    valid_references = []
+    invalid_unit_ids = []
+    status_counts = Counter()
+    for index, unit in enumerate(payload.get("units", []) or []):
+        if not isinstance(unit, dict):
+            invalid_unit_ids.append(f"units[{index}]")
+            continue
+        status = str(unit.get("status"))
+        status_counts[status] += 1
+        evidence = unit.get("evidence")
+        unit_references = (
+            [str(value) for value in evidence.get("segment_ids", [])]
+            if isinstance(evidence, dict) else []
+        )
+        references.extend(unit_references)
+        valid = status in {"included", "condensed"}
+        if status == "excluded":
+            valid = bool(unit.get("notes")) and unit.get(
+                "exclusion_type") in EXCLUSION_TYPES
+            if unit.get("exclusion_type") == "other":
+                valid = valid and len(re.sub(
+                    r"\s+", "", str(unit.get("notes", "")))) >= 10
+        if valid:
+            valid_references.extend(unit_references)
+        else:
+            invalid_unit_ids.append(str(unit.get("id") or f"units[{index}]"))
+    reference_counts = Counter(valid_references)
+    source_set = set(source_ids)
+    missing = [segment_id for segment_id in source_ids if segment_id not in reference_counts]
+    duplicates = sorted(
+        segment_id for segment_id, count in reference_counts.items()
+        if segment_id in source_set and count > 1
+    )
+    unknown = sorted(set(references) - source_set)
+    covered = len(source_ids) - len(missing)
+    return {
+        "total": len(source_ids),
+        "covered": covered,
+        "coverage": round(covered / len(source_ids), 4) if source_ids else 1.0,
+        "missing_ids": missing,
+        "duplicate_ids": duplicates,
+        "unknown_ids": unknown,
+        "invalid_unit_ids": sorted(set(invalid_unit_ids)),
+        "status_counts": dict(sorted(status_counts.items())),
+        "passed": not missing and not unknown and not invalid_unit_ids,
+    }
 
 
 def validate_content_map(payload, transcript=None):
@@ -388,6 +558,16 @@ def validate_content_map(payload, transcript=None):
                 f"{transcript_declared_mode!r}"
             )
         transcript_mode = transcript_evidence_mode(transcript)
+        try:
+            accountability_required = source_accountability_contract_required(
+                transcript)
+        except ValueError as exc:
+            accountability_required = True
+            errors.append(str(exc))
+        if accountability_required and payload.get(
+                "source_accountability_version") != SOURCE_ACCOUNTABILITY_VERSION:
+            errors.append(
+                "新 evidence revision 要求 source_accountability_version=1")
         if (
                 payload.get("evidence_mode")
                 and payload.get("evidence_mode") != transcript_mode
@@ -454,14 +634,11 @@ def validate_content_map(payload, transcript=None):
             errors.append(f"{display_id}: importance 必须是 {sorted(IMPORTANCE_VALUES)}")
         if status not in STATUS_VALUES:
             errors.append(f"{display_id}: status 必须是 {sorted(STATUS_VALUES)}")
-        if status in {"pending", "needs_review"}:
+        if status in {"pending", "needs_review", "unresolved"}:
             errors.append(f"{display_id}: status={status}，尚未完成核验")
         if not unit.get("topic"):
             errors.append(f"{display_id}: 缺少 topic")
-        if (
-                status != "excluded"
-                and importance in {"high", "medium"}
-                and not unit.get("claims")):
+        if importance in {"high", "medium"} and not unit.get("claims"):
             errors.append(f"{display_id}: {importance} 单元没有 claims")
         modalities = unit.get("claim_modalities")
         if modalities:
@@ -471,8 +648,7 @@ def validate_content_map(payload, transcript=None):
                 errors.append(
                     f"{display_id}: claim_modalities 数量必须与 claims 一致")
             else:
-                invalid_modalities = sorted(
-                    set(modalities) - CLAIM_MODALITIES)
+                invalid_modalities = sorted(set(modalities) - CLAIM_MODALITIES)
                 if invalid_modalities:
                     errors.append(
                         f"{display_id}: claim modality 无效: {invalid_modalities}")
@@ -508,8 +684,18 @@ def validate_content_map(payload, transcript=None):
         elif unit.get("timestamps"):
             errors.append(
                 f"{display_id}: text_anchor 模式不允许携带 timestamps")
-        if status == "excluded" and not unit.get("notes"):
-            errors.append(f"{display_id}: excluded 单元必须填写删除原因")
+        if status == "excluded":
+            if not unit.get("notes"):
+                errors.append(f"{display_id}: excluded 单元必须填写删除原因")
+            if payload.get("source_accountability_version", 0) >= 1:
+                exclusion_type = unit.get("exclusion_type")
+                if exclusion_type not in EXCLUSION_TYPES:
+                    errors.append(
+                        f"{display_id}: excluded 单元 exclusion_type 必须是 "
+                        f"{sorted(EXCLUSION_TYPES)}")
+                if exclusion_type == "other" and len(
+                        re.sub(r"\s+", "", str(unit.get("notes", "")))) < 10:
+                    errors.append(f"{display_id}: exclusion_type=other 需要具体说明")
         if status == "unsupported":
             errors.append(f"{display_id}: 存在 unsupported 内容单元")
         if payload.get("schema_version", 1) >= CONTENT_MAP_SCHEMA_VERSION:
@@ -579,33 +765,49 @@ def validate_content_map(payload, transcript=None):
                         if len(claim_segments) != len(set(claim_segments)):
                             errors.append(
                                 f"{display_id}-{claim_key}: claim 证据存在重复片段")
-                        claim_roles = unit.get("claim_evidence_roles")
-                        if isinstance(claim_roles, dict) and claim_key in claim_roles:
-                            role = claim_roles.get(claim_key)
-                            primary = (
-                                role.get("primary_segment_ids")
-                                if isinstance(role, dict) else None
-                            )
-                            context = (
-                                role.get("context_segment_ids")
-                                if isinstance(role, dict) else None
-                            )
-                            if not isinstance(primary, list) or not primary:
+                        canonical_claim_segments = canonical_segment_ids(
+                            transcript_segments, claim_segments)
+                        if claim_segments != canonical_claim_segments:
+                            message = (
+                                f"{display_id}-{claim_key}: "
+                                "claim 证据未按转录顺序排列")
+                            if payload.get("claim_evidence_order_version") == 1:
+                                errors.append(message)
+                            else:
+                                warnings.append(message + "（旧产物兼容）")
+                        claim_roles = unit.get("claim_evidence_roles", {})
+                        role = (
+                            claim_roles.get(claim_key)
+                            if isinstance(claim_roles, dict) else None
+                        )
+                        if isinstance(role, dict):
+                            primary = role.get("primary_segment_ids", [])
+                            context = role.get("context_segment_ids", [])
+                            if (
+                                    not isinstance(primary, list)
+                                    or not primary
+                                    or not isinstance(context, list)):
                                 errors.append(
-                                    f"{display_id}-{claim_key}: "
-                                    "primary_segment_ids 不能为空")
-                            elif not isinstance(context, list):
-                                errors.append(
-                                    f"{display_id}-{claim_key}: "
-                                    "context_segment_ids 必须是数组")
+                                    f"{display_id}-{claim_key}: claim evidence role 无效")
                             elif set(primary) & set(context):
                                 errors.append(
-                                    f"{display_id}-{claim_key}: "
-                                    "primary/context 证据不得重叠")
-                            elif primary + context != claim_segments:
+                                    f"{display_id}-{claim_key}: primary/context 证据重叠")
+                            elif set(primary) | set(context) != set(claim_segments):
                                 errors.append(
+                                    f"{display_id}-{claim_key}: primary/context 与 claim 证据不一致")
+                            elif (
+                                    primary != canonical_segment_ids(
+                                        transcript_segments, primary)
+                                    or context != canonical_segment_ids(
+                                        transcript_segments, context)):
+                                message = (
                                     f"{display_id}-{claim_key}: "
-                                    "primary/context 与 claim 证据不一致")
+                                    "claim evidence role 未按转录顺序排列")
+                                if payload.get(
+                                        "claim_evidence_order_version") == 1:
+                                    errors.append(message)
+                                else:
+                                    warnings.append(message + "（旧产物兼容）")
                         claim_sets.append(tuple(claim_segments))
                         if payload.get(
                                 "schema_version", 1) >= CONTENT_MAP_SCHEMA_VERSION:
@@ -659,6 +861,23 @@ def validate_content_map(payload, transcript=None):
                         f"{display_id}: 至少两条 claim 全量复用整个单元证据，"
                         "必须收窄到 claim 级最小片段")
 
+    if (
+            transcript is not None
+            and payload.get("source_accountability_version", 0) >= 1):
+        accountability = source_segment_accountability(payload, transcript)
+        if accountability["missing_ids"]:
+            errors.append(
+                "content map 缺少源 segment: "
+                f"{accountability['missing_ids']}")
+        if accountability["duplicate_ids"]:
+            warnings.append(
+                "content map 重复引用源 segment: "
+                f"{accountability['duplicate_ids']}")
+        if accountability["invalid_unit_ids"]:
+            errors.append(
+                "content map 存在未完成或无效分类单元: "
+                f"{accountability['invalid_unit_ids']}")
+
     return errors, warnings
 
 
@@ -682,7 +901,7 @@ def normalize_detail_items(content_map):
 def unit_detail_ids(content_map, detail_type, purpose="notes"):
     if detail_type not in {"number", "example"}:
         raise ValueError(f"未知 detail type: {detail_type}")
-    if purpose != "notes":
+    if purpose not in {"notes", "notes_allowed"}:
         raise ValueError(f"未知 detail coverage purpose: {purpose}")
     field = "number_items" if detail_type == "number" else "example_items"
     prefix = "N" if detail_type == "number" else "E"
@@ -692,7 +911,9 @@ def unit_detail_ids(content_map, detail_type, purpose="notes"):
             continue
         if unit.get("status") not in {"included", "condensed"}:
             continue
-        if unit.get("importance") not in {"high", "medium"}:
+        if (
+                purpose == "notes"
+                and unit.get("importance") not in {"high", "medium"}):
             continue
         unit_id = unit.get("id")
         for index, item in enumerate(unit.get(field, []) or [], start=1):
@@ -801,6 +1022,15 @@ def validate_summary_map(
             errors.append(f"讲稿存在未映射章节: {missing}")
         if extra:
             errors.append(f"summary_map 存在讲稿中不存在的章节: {extra}")
+    excluded_unit_ids = {
+        str(unit.get("id"))
+        for unit in (content_map or {}).get("units", [])
+        if isinstance(unit, dict) and unit.get("status") == "excluded"
+    }
+    excluded_references = sorted(seen_units & excluded_unit_ids)
+    if excluded_references:
+        errors.append(
+            f"summary_map 不得引用 excluded 单元: {excluded_references}")
     if (
             content_map is not None
             and payload.get("schema_version", 1) >= SUMMARY_MAP_SCHEMA_VERSION):
@@ -828,13 +1058,15 @@ def validate_summary_map(
                     ("notes_example_ids", "example", "例子")):
                 expected_details = set(unit_detail_ids(
                     content_map, detail_type, purpose="notes"))
+                allowed_details = set(unit_detail_ids(
+                    content_map, detail_type, purpose="notes_allowed"))
                 values = payload.get(field)
                 if not isinstance(values, list):
                     errors.append(f"summary_map.{field} 必须是数组")
                     continue
                 actual_details = set(values)
                 missing_details = sorted(expected_details - actual_details)
-                unknown_details = sorted(actual_details - expected_details)
+                unknown_details = sorted(actual_details - allowed_details)
                 if missing_details:
                     errors.append(f"完整笔记缺少{label}映射: {missing_details}")
                 if unknown_details:
@@ -842,7 +1074,7 @@ def validate_summary_map(
     return errors
 
 
-def coverage_report(content_map, summary_map):
+def coverage_report(content_map, summary_map, transcript=None):
     units = content_map.get("units", [])
     chapters = summary_map.get("chapters", [])
     unit_by_id = {unit.get("id"): unit for unit in units}
@@ -896,18 +1128,32 @@ def coverage_report(content_map, summary_map):
         if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
         else set()
     )
+    allowed_number_ids = (
+        set(unit_detail_ids(content_map, "number", purpose="notes_allowed"))
+        if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
+        else set()
+    )
     expected_example_ids = (
         set(unit_detail_ids(content_map, "example", purpose="notes"))
+        if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
+        else set()
+    )
+    allowed_example_ids = (
+        set(unit_detail_ids(content_map, "example", purpose="notes_allowed"))
         if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION
         else set()
     )
     notes_number_ids = set(summary_map.get("notes_number_ids", []) or [])
     notes_example_ids = set(summary_map.get("notes_example_ids", []) or [])
     missing_number_ids = sorted(expected_number_ids - notes_number_ids)
-    unknown_number_ids = sorted(notes_number_ids - expected_number_ids)
+    unknown_number_ids = sorted(notes_number_ids - allowed_number_ids)
     missing_example_ids = sorted(expected_example_ids - notes_example_ids)
-    unknown_example_ids = sorted(notes_example_ids - expected_example_ids)
+    unknown_example_ids = sorted(notes_example_ids - allowed_example_ids)
 
+    accountability = (
+        source_segment_accountability(content_map, transcript)
+        if transcript is not None else None
+    )
     return {
         "chapter_count": len(chapters),
         "unit_count": len(units),
@@ -958,6 +1204,7 @@ def coverage_report(content_map, summary_map):
         "notes_unknown_example_ids": unknown_example_ids,
         "unsupported_units": sorted(unsupported),
         "excluded_without_reason": explicit_exclusion_missing_reason,
+        "source_segment_coverage": accountability,
         "passed": not (
             unknown or high_missing or medium_missing or unknown_claims
             or missing_claims or duplicate_claims or unsupported
@@ -970,6 +1217,7 @@ def coverage_report(content_map, summary_map):
                     or missing_example_ids or unknown_example_ids
                 )
             )
+            or (accountability is not None and not accountability["passed"])
         ),
     }
 

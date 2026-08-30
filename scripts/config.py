@@ -68,6 +68,14 @@ def _env_float(key, default, minimum=0.0):
     return value
 
 
+def _env_choice(key, default, choices):
+    value = os.environ.get(key, default).strip().lower()
+    if value not in choices:
+        raise RuntimeError(
+            f"{key} 必须是 {sorted(choices)} 之一，当前值: {value!r}")
+    return value
+
+
 def require_fish_key() -> str:
     return _require("FISH_KEY", "Fish Audio API key, 参考 .env.example")
 
@@ -98,6 +106,8 @@ ASR_MODEL_CACHE = os.environ.get("ASR_MODEL_CACHE", "")
 ASR_DEVICE = os.environ.get("ASR_DEVICE", "auto")
 ASR_COMPUTE_TYPE = os.environ.get("ASR_COMPUTE_TYPE", "auto")
 ASR_REFINE_MAX_RANGES = _env_int("ASR_REFINE_MAX_RANGES", 8)
+ASR_COMPLETENESS_MODE = _env_choice(
+    "ASR_COMPLETENESS_MODE", "report_only", {"report_only", "enforce"})
 ALIGNMENT_MODE = os.environ.get("ALIGNMENT_MODE", "auto")
 ALIGNMENT_DEVICE = os.environ.get("ALIGNMENT_DEVICE", "cpu")
 ALIGNMENT_MODEL = os.environ.get("ALIGNMENT_MODEL", "")

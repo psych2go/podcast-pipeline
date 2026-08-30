@@ -65,6 +65,8 @@ content map 和 AI review 依靠 SHA-256 自动失效，不跨 revision 猜测�
 
 每期最多重解码区间数由 `ASR_REFINE_MAX_RANGES` 控制，默认 8。
 
+新本地 ASR revision 另外以有重叠的有界音频分块执行敏感 Silero VAD pass，并把音频时长、语音区间覆盖、首尾差值、未覆盖区间和时间轴错误写入 `meta.completeness`，避免为多小时音频再加载一份完整 PCM。阈值与指标计算分离；新 revision 带 `completeness_contract_version=1`。默认 `ASR_COMPLETENESS_MODE=report_only`，指标缺失或未通过只告警，完成真实长播客校准后可显式设为 `enforce` 以阻断内容生成和发布。无语音检测结果不会被计为百分之百覆盖。结构化 correction contract 独立生效，不受 completeness rollout mode 影响。ASR segment 同时保留清洗前 `decoder_text` 和可审计的 `normalization.operations`；广告、寒暄、口头语、外语标记和真实重复不得在 evidence 层静默删除。
+
 模型 policy 经 AMI ES2004a 人工参考集校准：`balanced` 默认
 `large-v3-turbo`，`max` 保留 `large-v3` 作为显式复核档。显式
 `--asr-model` 或 `ASR_MODEL` 仍优先。候选选择会识别范围受限的 prompt echo；
@@ -157,6 +159,8 @@ diarization 默认模型为
 
 按 `scripts/纠错提示词.md` 检查转录。第三方转录也要抽查人名、公司、数字和说话人；需要纠错时写 `转录_纠错.txt`，但不覆盖原始证据。
 
+新本地 ASR revision 使用 `correction_contract_version=1`：纠错按连续 segment 分批返回结构化结果，主流程验证 evidence revision、完整 ID 顺序、源哈希、未解决高风险项和异常删除后，写入 `correction_manifest.json` 并确定性渲染 `转录_纠错.txt`。没有直接听音频的 subagent 不能声称 `human_audio` 验证。历史 revision 继续兼容旧纠错稿，但不会伪造 manifest。
+
 新一期必须建立 evidence v3 台账：
 
 ```bash
@@ -167,17 +171,8 @@ diarization 默认模型为
 ```
 
 `content_map.json` 的每个 unit/claim 必须绑定转录 segment ID 和源文本
-SHA-256。content-map 子进程只返回结构化 JSON，主流程在启动 claim-evidence
-之前校验 status 枚举、segment 存在性、时间窗合法性、完整源片段记账和 excluded
-约束；结构错误不进入模型重试。evidence enrichment 不允许把有来源的 unit 静默刷新
-为空，`null`/倒序时间窗或未知 text anchor 会直接阻断且不覆盖原 evidence。多 claim
-单元不得给所有 claim 复制整个 unit 的 segment 集合；每条 claim 还要记录证据置信度、
-选择理由和 `claim_modalities`（actual_event、conditional、prediction、opinion、
-recommendation、general_claim），写稿不得把条件句、预测或观点升级为已发生事实。
-新 map 同时声明 `detail_items_version=1`，为 numbers/examples 派生稳定的 `Nxx/Exx`；
-完整笔记必须在 summary map 的 `notes_number_ids` / `notes_example_ids` 逐项记账。新映射可同时记录
-`primary_segment_ids` 与 `context_segment_ids`，并继续派生旧版扁平
-`claim_evidence` 供已有单集读取。
+SHA-256。新 evidence revision 同时声明 `source_accountability_contract_version=1`，对应 map 必须保留 `source_accountability_version=1`；每个非空源 segment 必须至少属于一个 `included`、`condensed` 或带明确 `exclusion_type`/`notes` 的 `excluded` unit，删除 map 字段不能绕过检查，`unresolved` 阻断。广告和无意义闲谈可以排除，但仍留在原始转录和纠错证据中，且 excluded unit 不得进入 summary map。`condensed` 的实质 claim 必须进入中文完整笔记，但进入讲稿是可选的；`included` high/medium claim 仍必须进入讲稿。多 claim 单元不得给所有 claim 复制整个 unit 的 segment 集合；
+每条 claim 还要记录证据置信度和选择理由。
 
 没有真实时间戳的网页或本地文本使用 `evidence_mode=text_anchor`，通过
 `segment_id + source_sha256` 回溯原始文本，不伪造音频时间；有真实时间戳的
@@ -185,11 +180,9 @@ recommendation、general_claim），写稿不得把条件句、预测或观点�
 
 ### 3. 写中文内容
 
-主脚本按 `scripts/讲稿提示词.md` 调用 subagent：
+claim evidence 完成后，主脚本先生成 `editorial_fact_checks.json`。该台账逐条覆盖所有非排除 source claim，绑定 `content_map.json` 和实际使用的转录哈希，并把公开实体、医学/法律/金融/政治事实、金额、比例和年份拆成原子核查项。`content_map.json` 始终只表示节目实际说法；外部纠正只能写入该台账，不能混入由 Sxxxx 转录片段锚定的 source claim。台账缺 claim、顺序变化、哈希过期或编辑纠正没有来源 URL 都会阻断质量门。
 
-写稿前会联网生成 `canonical_entities.json`：每个规范实体绑定 observed names、允许公开
-使用的 `public_aliases`、canonical name、类型、官方 URL 和 segment IDs。公开笔记与讲稿
-若仍出现未获允许的 ASR 别名会被确定性阻断。
+主脚本随后按 `scripts/讲稿提示词.md` 调用 subagent，并要求一次性处理台账中的全部 critical/high/medium 问题：
 
 1. 先写 `中文完整笔记.md`。
 2. 再写适合收听的 `讲书稿.md`。
@@ -212,14 +205,15 @@ claim 单元的映射。历史数据需要按 unit 精炼：
 ```
 
 strict 模式下 claim evidence runner 失败会按单 unit 重试，仍失败则阻断。
-每次运行以 `claim_evidence_progress.json` 绑定 evidence revision，并原子记录 target、
-completed、pending 和 failed unit；中断后的 partial 状态可按 unit 恢复，不能把半成品
-误报为完整精炼。最终 confidence/hash 校验失败写为 `invalid_result`。claim-evidence
-同时读取 raw segment 与可对齐的 corrected segment 文本，但 segment ID 和证据哈希始终
-绑定 raw evidence。low confidence 先按单 unit 以 max effort 复核；仍低时只允许收窄该
-unit 的原子 claim 与 modality，再精炼一次。只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；确定性
+只有显式传入 `--allow-degraded-evidence` 才会写入可审计的降级映射；确定性
 质量门会识别 `deterministic-fallback` 并阻断发布，不能用它降低 evidence v3
 或逐 claim 证据要求。
+
+claim evidence 的 segment ID 和 primary/context 角色数组必须按 immutable transcript
+顺序规范化；新合同通过 `claim_evidence_order_version=1` 强制执行。预写作事实核查
+分批结果写入 `editorial_fact_check_batches/` 并可断点恢复，成功批次不得因同轮其他
+批次失败而丢失。`summary_map.writing_inputs` 绑定语义 content map、规范实体表、
+事实台账和转录基准，只有这些语义输入变化才重写笔记和讲稿。
 
 已经发布的 evidence v2 单集只有同时满足以下条件才能暂时兼容：
 
@@ -241,22 +235,14 @@ evidence v2，所有待重新发布单集必须先迁移到 evidence v3。
 ```
 
 缺失或过期审查会进入最多两轮的受限 `review → safe repair → independent
-re-review`。AI review 输出在写入状态或 fact-check cache 前先执行与质量门相同的
-机械 taxonomy 校验；仅允许一次冻结语义结论的合同纠错重试，且不得修改 passed、
-分数、issues、claim 文本、来源性质或 evidence segment。自动修复只允许 summary map
-最终化、确定性 TTS 词典和明确 unit 的 claim evidence；事实性、医疗、数字、归因、
-转录质量及未知 high/critical 类别一律阻断。修复记录写入 `review_repair.json`，
-绝不直接把 `passed` 改为 true。
+re-review`。自动修复只允许 summary map 最终化、确定性 TTS 词典、明确 unit 的
+claim evidence，以及带官方/一手来源、最小精确字符串和受限文件清单的实体名称替换。
+精确实体替换不得修改 `原始转录.txt`、`transcript.raw.json`、`source_excerpt`、
+segment/evidence 哈希或 claim ID；完成后必须刷新正文、summary、预写作台账绑定并独立复审。
+事实结论、医疗、数字、归因、范围和因果关系仍一律阻断。修复记录写入
+`review_repair.json`，绝不直接把 `passed` 改为 true。
 
-节目原话与外部校正必须分账。可选的 `editorial_corrections.json` 绑定原始
-claim ID、节目陈述、公开处理、来源 URL、日期和风险域；它不构成 transcript evidence，
-但存在时属于 AI review 输入并由严格质量门校验。AI review 前会为 correction/entity
-URL 生成 `source_relevance_cache.json`，保存 HTTP 状态、最终 URL、标题、正文摘录和
-内容哈希；reviewer 必须检查来源语义相关性，不能把“URL 可访问”等同于“支持主张”。
-
-复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定。
-只要 reviewed input hash 已变化，旧 review 的 failed/score/issue 错误就被视为 stale 结论，
-不会阻止自动独立复审；artifact/evidence 本身的结构错误仍然阻断。
+复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定，
 分数和 high/critical 阈值不变。AI review v3 要求先把复合 claim 拆为原子
 subclaim，并用 `parent_claim_id` / `subclaim_id` 绑定 content_map；每个子主张分别填写：
 
@@ -441,12 +427,9 @@ content/<storage_name>/
 ├── 原始转录.txt
 ├── transcript.raw.json      # 含 provenance、revision 和 segment hash
 ├── evidence_history/          # --force-refetch 时归档旧 revision
-├── 转录_纠错.txt             # 需要时
+├── 转录_纠错.txt             # 通过 manifest 确定性渲染
+├── correction_manifest.json  # 新本地 ASR 的逐 segment 纠错合同
 ├── content_map.json
-├── canonical_entities.json   # 规范实体、允许别名、官方来源与 segment 绑定
-├── editorial_corrections.json # 可选：节目原话与外部校正分账
-├── source_relevance_cache.json # 外部 URL 标题/摘录/内容哈希缓存
-├── claim_evidence_progress.json # claim evidence 批次恢复状态
 ├── 中文完整笔记.md
 ├── 讲书稿.md
 ├── summary_map.json
@@ -468,22 +451,6 @@ TTS、HTML 和发布事务的耗时、失败、重试、调用量与模型成本
 `audio/` 分章节音频可在发布后清理，但保留它可以提高同配置重跑速度。
 
 ## 配置
-
-私有工作区配置：
-
-私有内容与公开代码分离部署时可设置：
-
-```env
-PODCAST_ROOT=/path/to/private-workspace
-PODCAST_DIR=/path/to/private-workspace/content       # 可选覆盖
-PODCAST_SITE_DIR=/path/to/private-workspace/site     # 可选覆盖
-PODCAST_CATALOG=/path/to/private-workspace/content/播客目录.md
-WRANGLER_MAX_RETRIES=2
-WRANGLER_RETRY_BACKOFF=2
-```
-
-`PODCAST_ROOT` 同时决定私有 `.env`、content、site 和 catalog 默认位置。Wrangler 只对
-网络、429 和 5xx 类失败做有界指数退避；认证、权限和参数错误不重试。
 
 `.env`：
 

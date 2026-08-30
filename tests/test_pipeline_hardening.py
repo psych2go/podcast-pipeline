@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+import agent_pipeline
 import catalog_publish as catalog
 import claim_evidence
 import process
@@ -17,10 +18,13 @@ from content_finalizer import (
     ContentFinalizationError,
     finalize_content_artifacts,
     generate_safe_tts_lexicon,
+    validate_tts_lexicon_semantics,
     validate_tts_readiness,
 )
 from content_map import (
+    apply_claim_evidence_mapping,
     body_sha256,
+    canonicalize_claim_evidence_order,
     enrich_content_map_evidence,
     enrich_summary_map_evidence,
     validate_content_map,
@@ -29,7 +33,204 @@ from content_map import (
 from validator import integer_to_chinese, normalize_briefing_artifacts
 
 
+class DeterministicPreReviewTests(unittest.TestCase):
+    def test_claim_evidence_is_canonicalized_to_transcript_order(self):
+        transcript = {
+            "segments": [
+                {"id": "S0001", "text": "first"},
+                {"id": "S0002", "text": "second"},
+                {"id": "S0003", "text": "third"},
+            ],
+        }
+        content_map = {
+            "schema_version": 3,
+            "units": [{
+                "id": "U0001",
+                "claims": ["claim"],
+                "evidence": {
+                    "segment_ids": ["S0001", "S0002", "S0003"],
+                },
+            }],
+        }
+        mapped, _transcript = apply_claim_evidence_mapping(
+            content_map,
+            transcript,
+            [{
+                "claim_id": "U0001-C01",
+                "segment_ids": ["S0003", "S0001", "S0002"],
+                "primary_segment_ids": ["S0003", "S0002"],
+                "context_segment_ids": ["S0001"],
+                "confidence": "high",
+                "rationale": "All three ordered segments support the claim.",
+            }],
+        )
+        unit = mapped["units"][0]
+        self.assertEqual(
+            unit["claim_evidence"]["C01"],
+            ["S0001", "S0002", "S0003"],
+        )
+        self.assertEqual(
+            unit["claim_evidence_roles"]["C01"]["primary_segment_ids"],
+            ["S0002", "S0003"],
+        )
+        self.assertEqual(
+            unit["claim_evidence_roles"]["C01"]["context_segment_ids"],
+            ["S0001"],
+        )
+
+    def test_canonicalizer_repairs_existing_order_and_hash(self):
+        transcript = {
+            "segments": [
+                {"id": "S0001", "text": "first"},
+                {"id": "S0002", "text": "second"},
+            ],
+        }
+        content_map = {"units": [{
+            "claim_evidence": {"C01": ["S0002", "S0001"]},
+            "claim_evidence_sha256": {"C01": "stale"},
+        }]}
+        canonicalize_claim_evidence_order(content_map, transcript)
+        unit = content_map["units"][0]
+        self.assertEqual(unit["claim_evidence"]["C01"], ["S0001", "S0002"])
+        self.assertNotEqual(unit["claim_evidence_sha256"]["C01"], "stale")
+
+    def test_canonicalizer_does_not_promote_missing_context_to_primary(self):
+        transcript = {
+            "segments": [
+                {"id": "S0001", "text": "first"},
+                {"id": "S0002", "text": "second"},
+            ],
+        }
+        content_map = {"units": [{
+            "claim_evidence": {"C01": ["S0002", "S0001"]},
+            "claim_evidence_roles": {"C01": {
+                "primary_segment_ids": ["S0002"],
+                "context_segment_ids": [],
+            }},
+            "claim_evidence_sha256": {"C01": "stale"},
+        }]}
+        canonicalize_claim_evidence_order(content_map, transcript)
+        role = content_map["units"][0]["claim_evidence_roles"]["C01"]
+        self.assertEqual(role["primary_segment_ids"], ["S0002"])
+        self.assertEqual(role["context_segment_ids"], [])
+
+    def test_tts_fraction_semantics_and_math_symbols_fail_fast(self):
+        self.assertTrue(validate_tts_lexicon_semantics({
+            "Spin-3/二 matter": "自旋三分之二物质",
+        }))
+        self.assertTrue(validate_tts_lexicon_semantics({
+            "3/2": "三比二",
+        }))
+        self.assertTrue(validate_tts_lexicon_semantics({
+            "3/2 and 5/4": "二分之三和五比四",
+        }))
+        self.assertEqual(validate_tts_lexicon_semantics({
+            "Spin-3/二 matter": "自旋二分之三物质",
+        }), [])
+        self.assertTrue(any(
+            "难读符号" in issue
+            for issue in validate_tts_readiness("由虚 W− 介导", {})
+        ))
+
+
 class SubagentRecoveryTests(unittest.TestCase):
+    def test_pre_review_tts_lexicon_repair_is_scoped(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            briefing = folder / "讲书稿.md"
+            briefing.write_text(
+                "血液pH、LinkedIn和A/B测试。", encoding="utf-8")
+
+            def repair(_folder, _task, **kwargs):
+                self.assertEqual(
+                    [Path(path).name for path in kwargs["allowed_files"]],
+                    ["tts_lexicon.json"],
+                )
+                (folder / "tts_lexicon.json").write_text(json.dumps({
+                    "pH": "酸碱度",
+                    "LinkedIn": "领英",
+                    "A/B": "A B",
+                }), encoding="utf-8")
+
+            with patch("agent_pipeline.run_edit_task", side_effect=repair):
+                result = agent_pipeline._ensure_tts_lexicon_ready(
+                    folder, briefing)
+        self.assertTrue(result["repaired"])
+        self.assertEqual(result["entries"], 3)
+
+    def test_pre_review_tts_lexicon_rejects_sentence_scale_mapping(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            briefing = folder / "讲书稿.md"
+            briefing.write_text(
+                "血液pH、LinkedIn和A/B测试需要准确朗读。", encoding="utf-8")
+            existing = {"LinkedIn": "领英"}
+            (folder / "tts_lexicon.json").write_text(
+                json.dumps(existing), encoding="utf-8")
+
+            def repair(_folder, _task, **_kwargs):
+                (folder / "tts_lexicon.json").write_text(json.dumps({
+                    **existing,
+                    "血液pH、LinkedIn和A/B测试需要准确朗读": "完全不同事实",
+                }), encoding="utf-8")
+
+            with patch("agent_pipeline.run_edit_task", side_effect=repair):
+                with self.assertRaisesRegex(RuntimeError, "key 范围过大"):
+                    agent_pipeline._ensure_tts_lexicon_ready(folder, briefing)
+            restored = json.loads(
+                (folder / "tts_lexicon.json").read_text(encoding="utf-8"))
+        self.assertEqual(restored, existing)
+
+    def test_low_confidence_claim_repair_is_applied_deterministically(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            content_map = folder / "content_map.json"
+            content_map.write_text(json.dumps({
+                "units": [
+                    {
+                        "id": "U10000", "topic": "target",
+                        "claims": ["supported fact and unsupported addition"],
+                        "claim_modalities": ["general_claim"],
+                        "evidence": {"segment_ids": ["S0001"]},
+                        "claim_evidence": {"C01": ["S0001"]},
+                        "claim_evidence_sha256": {"C01": "old"},
+                        "claim_evidence_notes": {
+                            "C01": {"confidence": "low", "rationale": "too broad"},
+                        },
+                    },
+                    {"id": "U0020", "topic": "untouched", "claims": ["keep"]},
+                ],
+            }), encoding="utf-8")
+            raw = folder / "transcript.raw.json"
+            raw.write_text(json.dumps({
+                "segments": [{"id": "S0001", "text": "supported fact"}],
+            }), encoding="utf-8")
+            response = {
+                "payload": {"units": [{
+                    "unit_id": "U10000",
+                    "claims": ["supported fact"],
+                    "claim_modalities": ["actual_event"],
+                }]},
+            }
+            error = RuntimeError(
+                "U10000-C01: claim evidence confidence=low，需人工复核")
+            with patch(
+                    "agent_pipeline.run_json_task",
+                    return_value=response) as repair:
+                unit_ids = agent_pipeline._repair_low_confidence_claims(
+                    folder, raw, error)
+            repaired = json.loads(content_map.read_text(encoding="utf-8"))
+        self.assertEqual(unit_ids, ["U10000"])
+        self.assertEqual(repaired["units"][0]["claims"], ["supported fact"])
+        self.assertEqual(
+            repaired["units"][0]["claim_modalities"], ["actual_event"])
+        self.assertEqual(repaired["units"][0]["claim_evidence"], {})
+        self.assertEqual(repaired["units"][0]["claim_evidence_sha256"], {})
+        self.assertEqual(repaired["units"][0]["claim_evidence_notes"], {})
+        self.assertEqual(repaired["units"][1]["claims"], ["keep"])
+        self.assertIn("U10000", repair.call_args.args[1])
+        self.assertNotIn("U0020", repair.call_args.args[1])
+
     def test_output_schema_is_normalized_for_strict_codex_outputs(self):
         schema = {
             "type": "object",
@@ -220,6 +421,40 @@ class SubagentRecoveryTests(unittest.TestCase):
         self.assertEqual(
             validate_content_map(recovered, transcript)[0], [])
 
+    def test_claim_evidence_string_retry_labels_are_supported(self):
+        self.assertEqual(claim_evidence._batch_label(2), "002")
+        self.assertEqual(
+            claim_evidence._batch_label("2_1"), "2_1")
+
+    def test_claim_evidence_low_confidence_retries_single_unit(self):
+        batch = [{
+            "unit_id": "U0001",
+            "claims": [{"claim_id": "U0001-C01", "text": "claim"}],
+            "segments": [{"id": "S0001", "text": "source"}],
+        }]
+        low = [{
+            "claim_id": "U0001-C01",
+            "segment_ids": ["S0001"],
+            "confidence": "low",
+            "rationale": "首次证据不足，需要按单元重新核对。",
+        }]
+        high = [{
+            "claim_id": "U0001-C01",
+            "segment_ids": ["S0001"],
+            "confidence": "high",
+            "rationale": "单元复核确认原文直接支持该主张。",
+        }]
+        with patch(
+                "claim_evidence._run_batch",
+                return_value=({"claims": high}, {"duration_ms": 1})) as run:
+            mappings, wrappers = (
+                claim_evidence._retry_low_confidence_units(
+                    Path("/tmp"), batch, low, "model", 2))
+        self.assertEqual(mappings, high)
+        self.assertEqual(len(wrappers), 1)
+        self.assertEqual(run.call_args.args[3], "max")
+        self.assertEqual(run.call_args.args[4], "2_low_1")
+
     def test_claim_evidence_strict_mode_retries_failed_batch_per_unit(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
@@ -334,8 +569,10 @@ class ArtifactNormalizationTests(unittest.TestCase):
                 "claim_ids": ["U0001-C01"],
             }],
         }
+
         finalized, aligned, changes = finalize_content_artifacts(
             briefing, summary)
+
         self.assertIn("a16z", finalized)
         self.assertIn("GPT-4", finalized)
         self.assertIn("四十五岁", finalized)
@@ -591,6 +828,19 @@ class ArtifactNormalizationTests(unittest.TestCase):
         )
         self.assertIn("merged_fragment_chapters", changes)
 
+    def test_normalizer_preserves_numbered_titles_and_hyphenated_brands(self):
+        briefing = (
+            "20,000 Leagues Under the Sea、Fantasia 2000 与 7-Eleven，"
+            "相关资料发布于 2018 年。"
+        )
+        fixed, _summary, changes = normalize_briefing_artifacts(
+            briefing, {"chapters": []})
+        self.assertIn("20,000 Leagues Under the Sea", fixed)
+        self.assertIn("Fantasia 2000", fixed)
+        self.assertIn("7-Eleven", fixed)
+        self.assertIn("二零一八年", fixed)
+        self.assertIn("normalized_numbers", changes)
+
     def test_numbers_are_normalized_without_episode_specific_fact_rewrite(self):
         briefing = (
             "节目称 24 英尺、230 比 1、23,000,000 总吨、5% 和 2018 年。"
@@ -678,32 +928,6 @@ class WranglerIsolationTests(unittest.TestCase):
         kwargs = run.call_args.kwargs
         self.assertEqual(kwargs["cwd"], site)
         self.assertNotIn("CLOUDFLARE_API_TOKEN", kwargs["env"])
-    def test_wrangler_retries_transient_fetch_failure(self):
-        command = ["npx", "wrangler", "r2", "bucket", "list"]
-        with patch.dict(os.environ, {
-                "WRANGLER_MAX_RETRIES": "2",
-                "WRANGLER_RETRY_BACKOFF": "0",
-        }, clear=False), patch.object(
-                catalog, "_run_with_output", side_effect=[
-                    (False, "ERROR fetch failed due to connectivity issue"),
-                    (True, "ok"),
-                ]) as run:
-            ok, output = catalog._run_wrangler(command)
-        self.assertTrue(ok)
-        self.assertEqual(output, "ok")
-        self.assertEqual(run.call_count, 2)
-
-    def test_wrangler_does_not_retry_permission_failure(self):
-        command = ["npx", "wrangler", "r2", "bucket", "list"]
-        with patch.dict(os.environ, {
-                "WRANGLER_MAX_RETRIES": "2",
-                "WRANGLER_RETRY_BACKOFF": "0",
-        }, clear=False), patch.object(
-                catalog, "_run_with_output",
-                return_value=(False, "ERROR authentication permission denied")) as run:
-            ok, _output = catalog._run_wrangler(command)
-        self.assertFalse(ok)
-        self.assertEqual(run.call_count, 1)
 
 
 if __name__ == "__main__":

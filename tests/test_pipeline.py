@@ -3,6 +3,8 @@ import hashlib
 import os
 import ssl
 import tempfile
+import threading
+import time
 import unittest
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -65,6 +67,41 @@ from sources import source_label
 
 
 class FetcherTests(unittest.TestCase):
+
+    def test_official_episode_url_is_discovered_only_for_one_rss_match(self):
+        source = (
+            "https://podscripts.co/podcasts/all-in-with-chamath-jason-sacks-"
+            "friedberg/eric-weinstein-state-american-science-breakthroughs"
+        )
+        entry = {
+            "title": "Eric Weinstein: State of American Science Breakthroughs",
+            "id": "episode-eric-weinstein",
+            "guid": "episode-eric-weinstein",
+            "link": "https://allin.com/episodes/eric-weinstein-science",
+            "links": [],
+        }
+        fake_feedparser = SimpleNamespace(
+            parse=lambda _url: SimpleNamespace(entries=[entry]))
+        with patch.dict(sys.modules, {"feedparser": fake_feedparser}):
+            self.assertEqual(
+                fetcher.discover_official_episode_url(source),
+                "https://allin.com/episodes/eric-weinstein-science",
+            )
+        near_collision = {
+            "title": "The Future State of American Science",
+            "id": "different-episode",
+            "guid": "different-episode",
+            "link": "https://allin.com/episodes/different-science",
+            "links": [],
+        }
+        fake_feedparser = SimpleNamespace(
+            parse=lambda _url: SimpleNamespace(entries=[near_collision]))
+        with patch.dict(sys.modules, {"feedparser": fake_feedparser}):
+            self.assertIsNone(fetcher.discover_official_episode_url(source))
+        fake_feedparser = SimpleNamespace(
+            parse=lambda _url: SimpleNamespace(entries=[entry, dict(entry)]))
+        with patch.dict(sys.modules, {"feedparser": fake_feedparser}):
+            self.assertIsNone(fetcher.discover_official_episode_url(source))
 
     def test_podscripts_void_tags_do_not_leak_group_depth(self):
         html = """
@@ -1451,6 +1488,27 @@ class EpisodeTests(unittest.TestCase):
                 "Long Folder Name & Guest/Long Folder Name & Guest.mp3",
             )
 
+    def test_failed_review_becomes_stale_when_reviewed_input_changes(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            load_episode(folder, create=True)
+            briefing = folder / "讲书稿.md"
+            briefing.write_text("original", encoding="utf-8")
+            digest = hashlib.sha256(briefing.read_bytes()).hexdigest()
+            (folder / "ai_review.json").write_text(json.dumps({
+                "passed": False,
+                "reviewed_files": {"讲书稿.md": digest},
+            }), encoding="utf-8")
+            self.assertEqual(
+                inspect_episode_state(folder)["content_review_status"],
+                "failed",
+            )
+            briefing.write_text("repaired", encoding="utf-8")
+            self.assertEqual(
+                inspect_episode_state(folder)["content_review_status"],
+                "stale",
+            )
+
     def test_review_status_does_not_overwrite_transcript_status(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
@@ -1540,12 +1598,14 @@ class TTSTests(unittest.TestCase):
             final = folder / "episode.mp3"
             final.write_bytes(b"previous-final-audio")
 
+            def synth_section(_client, chunks, _speed, _concurrency, _usage):
+                if any("第一章" in chunk for chunk in chunks):
+                    raise RuntimeError("temporary failure")
+                return [b"ID3" + b"a" * 2048]
+
             with patch(
                     "tts.synth_chunks_concurrent",
-                    side_effect=[
-                        [b"ID3" + b"a" * 2048],
-                        RuntimeError("temporary failure"),
-                    ]), \
+                    side_effect=synth_section), \
                     patch("tts.merge_mp3s") as merge, \
                     patch("tts.time.sleep"):
                 result = run_tts(
@@ -1620,6 +1680,59 @@ class TTSTests(unittest.TestCase):
             self.assertEqual(first_calls, 2)
             self.assertEqual(cached_calls, first_calls)
             self.assertEqual(synth.call_count, first_calls + 2)
+
+    def test_explicit_zero_concurrency_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "讲书稿.md").write_text(
+                "开场内容足够。", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "concurrency"):
+                run_tts(
+                    str(folder), "讲书稿.md", "episode", concurrency=0)
+
+    def test_tts_synthesizes_multiple_sections_with_bounded_parallelism(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "讲书稿.md").write_text(
+                "开场内容足够。\n\n"
+                "## 第一章\n第一章正文足够。\n\n"
+                "## 第二章\n第二章正文足够。",
+                encoding="utf-8",
+            )
+            active = 0
+            max_active = 0
+            lock = threading.Lock()
+
+            def fake_synth(_client, _chunks, _speed, _concurrency, _usage):
+                nonlocal active, max_active
+                with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                time.sleep(0.05)
+                with lock:
+                    active -= 1
+                return [b"ID3" + b"a" * 2048]
+
+            def fake_merge(_inputs, output, **_kwargs):
+                Path(output).write_bytes(b"ID3" + b"m" * 4096)
+                return True
+
+            with patch(
+                    "tts.synth_chunks_concurrent",
+                    side_effect=fake_synth), patch(
+                    "tts.merge_mp3s", side_effect=fake_merge), patch.dict(
+                    os.environ, {"TTS_SECTION_CONCURRENCY": "2"}):
+                result = run_tts(
+                    str(folder), "讲书稿.md", "episode", concurrency=4)
+            manifest = json.loads(
+                (folder / "tts_manifest.json").read_text(encoding="utf-8"))
+        self.assertTrue(result.ok)
+        self.assertGreaterEqual(max_active, 2)
+        self.assertEqual(
+            [item["filename"] for item in manifest["sections"]],
+            ["00_开场.mp3", "01_第一章.mp3", "02_第二章.mp3"],
+        )
+        self.assertEqual(manifest["config"]["global_concurrency"], 4)
 
     def test_tts_manifest_detects_changed_briefing(self):
         with tempfile.TemporaryDirectory() as td:
@@ -2262,6 +2375,30 @@ class RunReportTests(unittest.TestCase):
                 (folder / "run_report.json").read_text(encoding="utf-8"))
             self.assertEqual(len(payload["runs"]), 2)
             self.assertEqual(payload["runs"][-1]["status"], "passed")
+
+    def test_running_stage_is_persisted_before_completion(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td) / "Episode"
+            report = RunReport(folder, "long-running")
+            with report.stage("running"):
+                live = json.loads(
+                    (folder / "run_report.json").read_text(encoding="utf-8"))
+                self.assertEqual(
+                    live["runs"][-1]["stages"][-1]["status"], "running")
+            report.finish(True)
+
+    def test_keyboard_interrupt_closes_running_stage(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td) / "Episode"
+            report = RunReport(folder, "interrupted")
+            with self.assertRaises(KeyboardInterrupt):
+                with report.stage("long"):
+                    raise KeyboardInterrupt()
+            report.finish(False, "interrupted")
+            payload = json.loads(
+                (folder / "run_report.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            payload["runs"][-1]["stages"][-1]["status"], "failed")
 
     def test_concurrent_run_report_instances_do_not_lose_each_other(self):
         with tempfile.TemporaryDirectory() as td:

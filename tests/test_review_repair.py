@@ -165,6 +165,8 @@ class PartialReviewTests(unittest.TestCase):
             self.assertEqual(scope["changed_files"], ["讲书稿.md"])
             self.assertIn("不会提供上次 ai_review.json", prompt)
             self.assertIn("完整发布判定", prompt)
+            self.assertIn("穷尽式 issue inventory", prompt)
+            self.assertIn("禁止发现第一个 high 问题后停止", prompt)
 
     def test_review_prompt_does_not_require_web_for_guest_firsthand_claims(self):
         with tempfile.TemporaryDirectory() as td:
@@ -176,6 +178,9 @@ class PartialReviewTests(unittest.TestCase):
         self.assertIn("不强制联网", prompt)
         self.assertIn("不能因无公开网页而扣 factuality 分", prompt)
         self.assertIn("实体准确性作为独立硬门", prompt)
+        self.assertIn("editorial_fact_checks.json", prompt)
+        self.assertIn("repair_kind", prompt)
+        self.assertIn("audit_completion", prompt)
 
 
 if __name__ == "__main__":

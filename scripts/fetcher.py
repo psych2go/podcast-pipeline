@@ -10,6 +10,7 @@ from html.parser import HTMLParser
 import subprocess
 import tempfile
 import time
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -249,10 +250,17 @@ def extract_title_from_url(url):
 
 
 def _slug_tokens(value):
-    """将 URL/title 转成用于 episode 匹配的稳定 token 集合。"""
-    value = re.sub(r"https?://", "", value.lower())
-    tokens = re.findall(r"[a-z0-9]{3,}", value)
-    ignored = {"www", "com", "html", "transcript", "episode", "podcast"}
+    """Return distinctive episode tokens; URL hosts and podcast paths are ignored."""
+    text = str(value or "").casefold()
+    if text.startswith(("http://", "https://")):
+        path = urlsplit(text).path.rstrip("/")
+        text = path.rsplit("/", 1)[-1]
+    tokens = re.findall(r"[a-z0-9]{3,}", text)
+    ignored = {
+        "www", "com", "html", "transcript", "episode", "podcast",
+        "the", "and", "with", "for", "from", "into", "about", "this",
+        "that", "state", "future", "full",
+    }
     return {token for token in tokens if token not in ignored}
 
 
@@ -271,19 +279,59 @@ def _rss_entry_matches_url(entry, url):
         fields.append(link.get("href", ""))
     candidate = set().union(*(_slug_tokens(value) for value in fields))
     overlap = target & candidate
-    # URL slug 通常包含 3 个以上有意义 token；短标题则至少匹配两个。
-    threshold = 2 if len(target) <= 5 else 3
-    return len(overlap) >= threshold
+    if len(target) <= 3:
+        return len(overlap) == len(target) and len(overlap) >= 2
+    return len(overlap) >= 3 and len(overlap) / len(target) >= 0.6
+
+
+_KNOWN_PODCAST_FEEDS = {
+    "all-in": "https://feeds.supercast.com/supercast_all_in_all",
+    "huberman-lab": "https://feeds.megaphone.fm/hubermanlab",
+    "naval": "https://nav.al/feed.xml",
+}
+
+
+def discover_official_episode_url(url):
+    """Return an RSS-matched official episode URL, or None when uncertain."""
+    try:
+        import feedparser
+    except ImportError:
+        return None
+    source = str(url or "")
+    for key, feed_url in _KNOWN_PODCAST_FEEDS.items():
+        if key not in source.casefold():
+            continue
+        try:
+            feed = feedparser.parse(feed_url)
+            matches = [
+                entry for entry in feed.entries
+                if _rss_entry_matches_url(entry, source)
+            ]
+        except Exception:
+            return None
+        if len(matches) != 1:
+            return None
+        entry = matches[0]
+        candidates = [entry.get("link", "")]
+        candidates.extend(
+            link.get("href", "")
+            for link in entry.get("links", [])
+            if link.get("rel") in {"alternate", None, ""}
+        )
+        for candidate in candidates:
+            candidate = str(candidate or "").strip()
+            if (
+                    candidate.startswith(("http://", "https://"))
+                    and source_host(candidate) != "podscripts.co"):
+                return candidate
+        return None
+    return None
 
 
 def _try_rss_transcript(url):
     try:
         import feedparser
-        known_feeds = {
-            "all-in": "https://feeds.supercast.com/supercast_all_in_all",
-            "naval": "https://nav.al/feed.xml",
-        }
-        for key, feed_url in known_feeds.items():
+        for key, feed_url in _KNOWN_PODCAST_FEEDS.items():
             if key not in url.lower():
                 continue
             feed = feedparser.parse(feed_url)
@@ -737,30 +785,13 @@ def _remove_repeated_ngrams(text, max_repeat=2, ngram_size=5):
 
 
 def clean_whisper_hallucinations(text):
-    """清洗确定性 ASR 幻觉，不负责删除真实广告或节目内容。"""
-    for pat in _HALLUCINATION_PATTERNS:
-        text = re.sub(pat, "", text, flags=re.IGNORECASE | re.MULTILINE)
+    """Preserve decoder speech; ambiguous cleanup belongs in correction review.
 
-    lines = text.splitlines()
-    cleaned = []
-    prev = None
-    run = 0
-    for line in lines:
-        value = line.strip()
-        if value and value == prev:
-            run += 1
-            if run >= 2:
-                continue
-        else:
-            run = 0
-        cleaned.append(line)
-        prev = value
-
-    text = "\n".join(cleaned)
-    text = _remove_repeated_ngrams(text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    return text.strip()
+    The pre-normalization value is stored per segment. This compatibility
+    helper now only normalizes trailing whitespace and never deletes fillers,
+    foreign-language markers, repetition, advertisements, or banter.
+    """
+    return re.sub(r"[ \t]+\n", "\n", str(text or "")).strip()
 
 
 def _model_path(model_size):
@@ -823,10 +854,12 @@ def _word_to_dict(word):
 
 
 def _segment_to_dict(segment):
+    decoder_text = getattr(segment, "text", "") or ""
     result = {
         "start": float(getattr(segment, "start", 0.0) or 0.0),
         "end": float(getattr(segment, "end", 0.0) or 0.0),
-        "text": (getattr(segment, "text", "") or "").strip(),
+        "decoder_text": decoder_text,
+        "text": decoder_text.strip(),
     }
     for attr in ("avg_logprob", "compression_ratio", "no_speech_prob", "temperature"):
         value = getattr(segment, attr, None)
@@ -901,7 +934,15 @@ def _transcribe_audio_range(
         result = []
         for segment in decoded:
             item = _segment_to_dict(segment)
-            item["text"] = clean_whisper_hallucinations(item["text"])
+            decoder_text = item["decoder_text"]
+            item["text"] = clean_whisper_hallucinations(decoder_text)
+            item["normalization"] = {
+                "changed": item["text"] != decoder_text,
+                "operations": (
+                    [{"type": "whitespace_normalization"}]
+                    if item["text"] != decoder_text else []
+                ),
+            }
             if item["text"]:
                 result.append(_offset_segment_timestamps(item, float(start)))
         return result
@@ -955,9 +996,16 @@ def transcribe_mp3_timestamped(mp3_path, model_size=None, initial_prompt=None,
     removed_chars = 0
     for segment in segments:
         item = _segment_to_dict(segment)
-        raw_text = item["text"]
+        raw_text = item["decoder_text"]
         raw_chars += len(raw_text)
-        item["text"] = clean_whisper_hallucinations(raw_text) if clean_hallucinations else raw_text
+        item["text"] = clean_whisper_hallucinations(raw_text) if clean_hallucinations else raw_text.strip()
+        changed = item["text"] != raw_text
+        item["normalization"] = {
+            "changed": changed,
+            "operations": (
+                [{"type": "whitespace_normalization"}] if changed else []
+            ),
+        }
         removed_chars += max(0, len(raw_text) - len(item["text"]))
         if item["text"]:
             result.append(item)
@@ -1149,6 +1197,17 @@ def transcribe(mp3_path, engine="whisper", quality="balanced", asr_model=None,
             })
     else:
         result["meta"]["diarization"] = False
+
+    try:
+        from transcript_completeness import analyze_audio_completeness
+    except ImportError:
+        from scripts.transcript_completeness import analyze_audio_completeness
+    from config import ASR_COMPLETENESS_MODE
+    result["meta"]["completeness_contract_version"] = 1
+    result["meta"]["correction_contract_version"] = 1
+    result["meta"]["completeness_mode"] = ASR_COMPLETENESS_MODE
+    result["meta"]["completeness"] = analyze_audio_completeness(
+        mp3_path, result["segments"], mode=ASR_COMPLETENESS_MODE)
 
     result["text"] = render_segments(result["segments"])
     return result if return_metadata else result["text"]

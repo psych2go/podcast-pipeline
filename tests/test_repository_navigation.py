@@ -111,6 +111,9 @@ class RepositoryNavigationTests(unittest.TestCase):
             ".env": "local secret/tool state",
             "sample.mp3": "source/generated media",
             "exports/转录_纠错.txt": "podcast content artifact",
+            "exports/correction_manifest.json": "podcast content artifact",
+            "exports/prewrite_fact_checks_progress.json": "podcast content artifact",
+            "exports/editorial_fact_check_batches/001.json": "podcast content artifact",
         }
         for path, expected in cases.items():
             self.assertEqual(checker.privacy_reason(path), expected)

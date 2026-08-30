@@ -279,10 +279,41 @@ def generate_safe_tts_lexicon(text, existing=None):
     return result
 
 
+def _spoken_integer(value):
+    digits = {
+        "0": "零", "1": "一", "2": "二", "3": "三", "4": "四",
+        "5": "五", "6": "六", "7": "七", "8": "八", "9": "九",
+    }
+    text = str(value).strip()
+    if all(character in digits for character in text):
+        return "".join(digits[character] for character in text)
+    return text
+
+
+def validate_tts_lexicon_semantics(lexicon):
+    """Reject deterministic pronunciation mappings that change fractions."""
+    issues = []
+    fraction = re.compile(
+        r"([0-9一二三四五六七八九十]+)\s*[/／]\s*"
+        r"([0-9一二三四五六七八九十]+)"
+    )
+    for source, spoken in (lexicon or {}).items():
+        matches = list(fraction.finditer(str(source)))
+        for match in matches:
+            numerator = _spoken_integer(match.group(1))
+            denominator = _spoken_integer(match.group(2))
+            expected = f"{denominator}分之{numerator}"
+            if expected not in str(spoken):
+                issues.append(
+                    f"TTS 词典分数读音错误: {source!r} 应包含 {expected!r}")
+    return issues
+
+
 def validate_tts_readiness(text, lexicon=None):
     """Validate the exact text produced by normalization plus lexicon use."""
-    spoken = apply_tts_lexicon(normalize_for_tts(text or ""), lexicon or {})
-    issues = []
+    lexicon = lexicon or {}
+    spoken = apply_tts_lexicon(normalize_for_tts(text or ""), lexicon)
+    issues = validate_tts_lexicon_semantics(lexicon)
     numbers = sorted(set(re.findall(r"\d[\d,.%]*", spoken)))
     if numbers:
         issues.append(f"TTS 输入仍有阿拉伯数字: {numbers[:10]}")
@@ -290,7 +321,7 @@ def validate_tts_readiness(text, lexicon=None):
         r"(?<![A-Za-z0-9])(?:[A-Z]{2,})(?![A-Za-z0-9])", spoken)))
     if acronyms:
         issues.append(f"TTS 输入仍有未映射全大写缩写: {acronyms[:10]}")
-    symbols = sorted(set(re.findall(r"[+/]", spoken)))
+    symbols = sorted(set(re.findall(r"[+/−]", spoken)))
     if symbols:
         issues.append(f"TTS 输入仍有难读符号: {symbols}")
     repeated = sorted(set(

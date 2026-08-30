@@ -9,15 +9,15 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from agent_pipeline import (
-    CONTENT_MAP_GENERATION_SCHEMA,
     _env_positive_int,
     _transcript_basis_is_current,
-    _validate_content_map_stage,
+    _validate_content_map_stage_statuses,
+    _writing_artifacts_are_current,
+    _writing_input_hashes,
     content_pipeline_needed,
-    run_content_pipeline,
 )
 from claim_evidence import _unit_payloads
-from content_map import init_content_map, validate_content_map
+from content_map import body_sha256, init_content_map, validate_content_map
 from episode import load_episode, update_transcript_status
 from quality_report import _transcript_status_accepted
 
@@ -56,124 +56,139 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                 "导览。\n\n## 章节\n正文。", encoding="utf-8")
             self.assertTrue(content_pipeline_needed(folder))
 
-    def test_force_refetch_always_rebuilds_content(self):
-        with tempfile.TemporaryDirectory() as td:
-            self.assertTrue(content_pipeline_needed(Path(td), force=True))
-
-    def test_content_map_schema_restricts_completed_statuses(self):
-        unit_properties = CONTENT_MAP_GENERATION_SCHEMA["properties"]["units"][
-            "items"]["properties"]
-        self.assertEqual(
-            unit_properties["status"]["enum"],
-            ["included", "condensed", "excluded"],
-        )
-        self.assertIn(
-            "conditional",
-            unit_properties["claim_modalities"]["items"]["enum"],
-        )
-
-    def test_content_map_stage_rejects_unknown_status_and_segment(self):
-        transcript = {
-            "segments": [{"id": "S0001", "text": "source"}],
-        }
-        errors = _validate_content_map_stage({
-            "units": [{
-                "id": "U0001",
-                "topic": "topic",
-                "claims": ["claim"],
-                "claim_modalities": ["general_claim"],
-                "importance": "high",
-                "status": "expanded",
-                "notes": "",
-                "evidence": {"segment_ids": ["S9999"]},
-            }],
-        }, transcript)
-        self.assertTrue(any("status" in error for error in errors))
-        self.assertTrue(any("未知片段" in error for error in errors))
-        self.assertTrue(any("未记账" in error for error in errors))
-
-    def test_content_map_stage_rejects_excluded_claims(self):
-        errors = _validate_content_map_stage({
-            "units": [{
-                "id": "U0001",
-                "topic": "advertisement",
-                "claims": ["should not exist"],
-                "claim_modalities": ["general_claim"],
-                "importance": "low",
-                "status": "excluded",
-                "notes": "sponsor read",
-                "evidence": {"segment_ids": ["S0001"]},
-            }],
-        }, {"segments": [{"id": "S0001", "text": "ad"}]})
-        self.assertTrue(any("不得生成 claims" in error for error in errors))
-
-    def test_invalid_structured_map_stops_before_claim_evidence(self):
-        with tempfile.TemporaryDirectory() as td:
-            folder = Path(td)
-            raw = {
-                "source_kind": "web_transcript",
-                "meta": {"evidence_mode": "text_anchor"},
-                "segments": [{
-                    "id": "S0001", "start": None, "end": None,
-                    "text": "source claim",
-                }],
-            }
-            (folder / "transcript.raw.json").write_text(
-                json.dumps(raw), encoding="utf-8")
-            (folder / "原始转录.txt").write_text(
-                "source claim", encoding="utf-8")
-            invalid = {
-                "units": [{
-                    "id": "U0001",
-                    "topic": "topic",
-                    "speaker": "speaker",
-                    "claims": ["claim"],
-                    "claim_modalities": ["general_claim"],
-                    "reasoning": [],
-                    "examples": [],
-                    "numbers": [],
-                    "terms": [],
-                    "timestamps": [],
-                    "importance": "high",
-                    "status": "expanded",
-                    "notes": "",
-                    "evidence": {"segment_ids": ["S0001"]},
-                }],
-            }
-            with mock.patch(
-                    "agent_pipeline.quality_metadata",
-                    return_value={"transcript_status": "可接受（已抽查）"}), \
-                    mock.patch(
-                        "agent_pipeline.run_json_task",
-                        return_value={"payload": invalid}) as structured, \
-                    mock.patch(
-                        "agent_pipeline.refine_claim_evidence") as claim_runner:
-                self.assertFalse(run_content_pipeline(folder, "Episode"))
-        structured.assert_called_once()
-        claim_runner.assert_not_called()
-
-    def test_claim_evidence_skips_excluded_units(self):
-        payloads = _unit_payloads({
-            "units": [{
-                "id": "U0001",
-                "status": "excluded",
-                "claims": ["legacy excluded claim"],
-                "evidence": {"segment_ids": ["S0001"]},
-            }],
-        }, {"segments": [{"id": "S0001", "text": "ad"}]})
-        self.assertEqual(payloads, [])
-
     def test_corrected_transcript_change_invalidates_summary_basis(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
-            (folder / "转录_纠错.txt").write_text(
-                "corrected revision", encoding="utf-8")
+            corrected = folder / "转录_纠错.txt"
+            corrected.write_text("corrected revision", encoding="utf-8")
             self.assertFalse(_transcript_basis_is_current(folder, {
                 "transcript_basis": {
                     "file": "转录_纠错.txt",
                     "sha256": "stale",
                 },
             }))
+
+    def test_semantic_prose_reuse_ignores_tts_only_repairs(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "原始转录.txt").write_text("source", encoding="utf-8")
+            (folder / "transcript.raw.json").write_text(
+                json.dumps({"segments": []}), encoding="utf-8")
+            (folder / "content_map.json").write_text(
+                json.dumps({"schema_version": 3, "units": []}),
+                encoding="utf-8",
+            )
+            (folder / "中文完整笔记.md").write_text("notes", encoding="utf-8")
+            (folder / "讲书稿.md").write_text(
+                "导览。\n\n## 章节\nOpenAI", encoding="utf-8")
+            (folder / "summary_map.json").write_text(json.dumps({
+                "transcript_basis": {
+                    "file": "原始转录.txt",
+                    "sha256": body_sha256("source"),
+                },
+                "chapters": [],
+            }), encoding="utf-8")
+            with mock.patch(
+                    "agent_pipeline.validate_content_map",
+                    return_value=([], [])), mock.patch(
+                    "agent_pipeline.validate_summary_map",
+                    return_value=[]):
+                self.assertTrue(_writing_artifacts_are_current(folder))
+
+    def test_semantic_entity_change_invalidates_bound_prose(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "原始转录.txt").write_text("source", encoding="utf-8")
+            (folder / "transcript.raw.json").write_text(
+                json.dumps({"segments": []}), encoding="utf-8")
+            (folder / "content_map.json").write_text(
+                json.dumps({"schema_version": 3, "units": []}),
+                encoding="utf-8")
+            (folder / "canonical_entities.json").write_text(
+                json.dumps({"entities": [{"canonical_name": "Alpha"}]}),
+                encoding="utf-8")
+            (folder / "中文完整笔记.md").write_text("notes", encoding="utf-8")
+            (folder / "讲书稿.md").write_text("briefing", encoding="utf-8")
+            summary = {
+                "transcript_basis": {
+                    "file": "原始转录.txt",
+                    "sha256": body_sha256("source"),
+                },
+                "chapters": [],
+                "writing_inputs_version": 1,
+                "writing_inputs": _writing_input_hashes(folder),
+            }
+            (folder / "summary_map.json").write_text(
+                json.dumps(summary), encoding="utf-8")
+            with mock.patch(
+                    "agent_pipeline.validate_content_map",
+                    return_value=([], [])), mock.patch(
+                    "agent_pipeline.validate_summary_map",
+                    return_value=[]):
+                self.assertTrue(_writing_artifacts_are_current(folder))
+                (folder / "canonical_entities.json").write_text(
+                    json.dumps({"entities": [{"canonical_name": "Beta"}]}),
+                    encoding="utf-8")
+                self.assertFalse(_writing_artifacts_are_current(folder))
+
+    def test_force_refetch_always_rebuilds_content(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertTrue(content_pipeline_needed(Path(td), force=True))
+
+    def test_content_map_stage_rejects_non_contract_status(self):
+        with self.assertRaisesRegex(RuntimeError, "expanded"):
+            _validate_content_map_stage_statuses({
+                "units": [{
+                    "id": "U0001",
+                    "status": "expanded",
+                    "evidence": {"segment_ids": ["S0001"]},
+                }],
+            })
+
+    def test_content_map_stage_rejects_excluded_claim_without_evidence(self):
+        with self.assertRaisesRegex(
+                RuntimeError, "evidence.segment_ids|excluded 单元"):
+            _validate_content_map_stage_statuses({
+                "units": [{
+                    "id": "U0001",
+                    "status": "excluded",
+                    "claims": ["没有来源的 claim"],
+                    "evidence": {"segment_ids": []},
+                }],
+            })
+
+    def test_content_map_stage_accepts_completed_statuses(self):
+        _validate_content_map_stage_statuses({
+            "units": [
+                {
+                    "id": "U0001",
+                    "status": "included",
+                    "evidence": {"segment_ids": ["S0001"]},
+                },
+                {
+                    "id": "U0002",
+                    "status": "condensed",
+                    "evidence": {"segment_ids": ["S0002"]},
+                },
+                {
+                    "id": "U0003",
+                    "status": "excluded",
+                    "claims": [],
+                    "evidence": {"segment_ids": ["S0003"]},
+                },
+            ],
+        })
+
+    def test_claim_evidence_skips_excluded_units(self):
+        payloads = _unit_payloads({
+            "units": [{
+                "id": "U0001",
+                "status": "excluded",
+                "claims": ["不应送入 claim evidence"],
+                "evidence": {"segment_ids": []},
+            }],
+        }, {"segments": []})
+        self.assertEqual(payloads, [])
 
     def test_transcript_review_updates_episode_and_source(self):
         with tempfile.TemporaryDirectory() as td:

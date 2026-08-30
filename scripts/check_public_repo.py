@@ -37,6 +37,11 @@ PRIVATE_ARTIFACT_NAMES = {
     "中文完整笔记.md",
     "transcript.raw.json",
     "content_map.json",
+    "editorial_fact_checks.json",
+    "prewrite_fact_checks_progress.json",
+    "claim_evidence_progress.json",
+    "correction_manifest.json",
+    "source_relevance_cache.json",
     "summary_map.json",
     "ai_review.json",
     "quality_report.json",
@@ -96,6 +101,8 @@ def privacy_reason(path: str) -> str | None:
     if Path(path).suffix.lower() in PRIVATE_MEDIA_SUFFIXES:
         return "source/generated media"
     if Path(path).name in PRIVATE_ARTIFACT_NAMES:
+        return "podcast content artifact"
+    if "editorial_fact_check_batches" in Path(path).parts:
         return "podcast content artifact"
     if "/audio/" in f"/{path}":
         return "audio directory"

@@ -176,6 +176,25 @@ def build_provenance(folder, raw):
                 )
                 if key in refinement
             }
+        completeness = meta.get("completeness")
+        if isinstance(completeness, dict):
+            asr["completeness"] = {
+                key: completeness.get(key)
+                for key in (
+                    "schema_version", "status", "detector", "passed",
+                    "audio_duration_seconds", "speech_coverage",
+                    "max_uncovered_speech_seconds", "timeline_valid",
+                    "enforcement_mode",
+                )
+                if key in completeness
+            }
+        for key in (
+                "completeness_contract_version",
+                "correction_contract_version",
+                "source_accountability_contract_version",
+                "completeness_mode"):
+            if meta.get(key) is not None:
+                asr[key] = meta[key]
         provenance["asr"] = asr
     else:
         provenance.pop("asr", None)

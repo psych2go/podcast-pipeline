@@ -29,12 +29,15 @@ from content_map import (
 )
 from episode import _source_heading
 import claim_evidence
+import source_relevance
 from rebuild_plan import build_rebuild_plan
 from source_relevance import (
     expected_source_references,
+    normalize_source_url,
     refresh_source_relevance_cache,
     validate_source_relevance_cache,
 )
+from transcript_correction import build_manifest, render_corrected_transcript
 from tts import build_tts_plan
 
 
@@ -103,6 +106,47 @@ class CondensedCoverageTests(unittest.TestCase):
 
 
 class CorrectedClaimEvidenceTests(unittest.TestCase):
+    def test_structured_manifest_aligns_rendered_lines_to_segment_ids(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            transcript = {
+                "evidence": {
+                    "revision_id": "revision-1",
+                    "transcript_sha256": "transcript-1",
+                },
+                "segments": [
+                    {"id": "S0001", "text": "raw one"},
+                    {"id": "S0002", "text": "raw two"},
+                ],
+            }
+            items = [{
+                "segment_id": segment["id"],
+                "corrected_text": segment["text"],
+                "status": "unchanged",
+                "change_types": [],
+                "verification": "not_required",
+                "unresolved": [],
+            } for segment in transcript["segments"]]
+            manifest = build_manifest(transcript, items)
+            (folder / "correction_manifest.json").write_text(
+                json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            (folder / "转录_纠错.txt").write_text(
+                render_corrected_transcript(transcript, manifest),
+                encoding="utf-8",
+            )
+            aligned = claim_evidence._corrected_segment_texts(
+                folder, transcript)
+            payloads = claim_evidence._unit_payloads({
+                "units": [{
+                    "id": "U0001", "status": "included",
+                    "topic": "topic", "claims": ["claim"],
+                    "evidence": {"segment_ids": ["S0002"]},
+                }],
+            }, transcript, folder=folder)
+        self.assertEqual(aligned["S0002"], "raw two")
+        self.assertEqual(
+            payloads[0]["segments"][0]["corrected_text"], "raw two")
+
     def test_corrected_paragraphs_align_to_segment_ids(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
@@ -246,7 +290,7 @@ class LowConfidenceClaimRepairTests(unittest.TestCase):
 
 
 class EvidenceEnrichmentSafetyTests(unittest.TestCase):
-    def test_open_ended_unit_window_is_rejected_without_erasing_evidence(self):
+    def test_open_ended_last_unit_window_is_normalized_without_erasing_evidence(self):
         transcript = {
             "meta": {"timestamped": True, "evidence_mode": "timestamp"},
             "segments": [{
@@ -267,10 +311,11 @@ class EvidenceEnrichmentSafetyTests(unittest.TestCase):
                 },
             }],
         }
-        with self.assertRaisesRegex(ValueError, "timestamp 范围无效"):
-            enrich_content_map_evidence(content_map, transcript)
+        enriched, _transcript = enrich_content_map_evidence(
+            content_map, transcript)
+        self.assertEqual(enriched["units"][0]["timestamps"], [[12, 12]])
         self.assertEqual(
-            content_map["units"][0]["evidence"]["segment_ids"],
+            enriched["units"][0]["evidence"]["segment_ids"],
             ["S0001"],
         )
 
@@ -443,7 +488,7 @@ class ClaimEvidenceRoleTests(unittest.TestCase):
 
 
 class RebuildPlanTests(unittest.TestCase):
-    def test_transcript_basis_change_is_planned_in_shadow_mode(self):
+    def test_transcript_basis_change_is_planned_in_active_mode(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
             for name in (
@@ -462,7 +507,8 @@ class RebuildPlanTests(unittest.TestCase):
             plan = build_rebuild_plan(folder)
         self.assertTrue(plan["needs_content"])
         self.assertIn("stale:transcript_basis", plan["reasons"])
-        self.assertEqual(plan["mode"], "shadow")
+        self.assertEqual(plan["mode"], "active")
+        self.assertEqual(plan["schema_version"], 2)
         self.assertIn("ai_review", plan["stages"])
 
 
@@ -489,9 +535,75 @@ class CanonicalEntityTests(unittest.TestCase):
         self.assertTrue(any("Edward LeMay" in error for error in errors))
         self.assertEqual(
             public_entity_alias_errors(payload, "Interview with Edward Lemay"), [])
+    def test_short_observed_name_inside_canonical_name_is_not_a_leak(self):
+        transcript = {"segments": [{"id": "S0001", "text": "Neal Gabler"}]}
+        payload = {
+            "schema_version": 1,
+            "entities": [{
+                "entity_id": "EN0001",
+                "canonical_name": "Neal Gabler",
+                "observed_names": ["Neal", "Neal Gabler"],
+                "public_aliases": [],
+                "entity_type": "person",
+                "source_urls": ["https://example.com/neal-gabler"],
+                "segment_ids": ["S0001"],
+                "confidence": "high",
+                "rationale": "Official profile confirms the complete canonical name.",
+            }],
+        }
+        self.assertEqual(validate_canonical_entities(payload, transcript), [])
+        self.assertEqual(public_entity_alias_errors(payload, "Neal Gabler wrote it."), [])
+        self.assertTrue(public_entity_alias_errors(payload, "Neal wrote it."))
+
+    def test_sourced_localized_public_alias_is_allowed(self):
+        transcript = {"segments": [{"id": "S0001", "text": "Walt Disney"}]}
+        payload = {
+            "schema_version": 1,
+            "entities": [{
+                "entity_id": "EN0001",
+                "canonical_name": "Walt Disney",
+                "observed_names": ["Walt Disney"],
+                "public_aliases": ["华特·迪士尼"],
+                "entity_type": "person",
+                "source_urls": ["https://example.com/walt-disney"],
+                "segment_ids": ["S0001"],
+                "confidence": "high",
+                "rationale": "Official profile supports the localized public name.",
+            }],
+        }
+        self.assertEqual(validate_canonical_entities(payload, transcript), [])
+        self.assertEqual(
+            public_entity_alias_errors(payload, "华特·迪士尼创办了公司。"), [])
 
 
 class DetailItemCoverageTests(unittest.TestCase):
+    def test_low_priority_detail_may_be_mapped_when_notes_use_it(self):
+        content_map = normalize_detail_items({
+            "units": [
+                {
+                    "id": "U0001", "status": "included", "importance": "high",
+                    "claims": ["required"], "numbers": ["required number"],
+                    "examples": [],
+                },
+                {
+                    "id": "U0002", "status": "condensed", "importance": "low",
+                    "claims": ["optional"], "numbers": ["optional number"],
+                    "examples": [],
+                },
+            ],
+        })
+        summary = {
+            "schema_version": 2,
+            "chapters": [{
+                "title": "chapter", "unit_ids": ["U0001"],
+                "claim_ids": ["U0001-C01"],
+            }],
+            "notes_claim_ids": ["U0001-C01", "U0002-C01"],
+            "notes_number_ids": ["U0001-N01", "U0002-N01"],
+            "notes_example_ids": [],
+        }
+        self.assertTrue(coverage_report(content_map, summary)["passed"])
+
     def test_number_and_example_ids_are_stable_and_required_in_notes(self):
         content_map = normalize_detail_items({
             "units": [{
@@ -525,6 +637,127 @@ class DetailItemCoverageTests(unittest.TestCase):
 
 
 class SourceRelevanceTests(unittest.TestCase):
+    class _FakeResponse:
+        def __init__(self, status_code, url, *, headers=None, chunks=None):
+            self.status_code = status_code
+            self.url = url
+            self.headers = headers or {}
+            self.charset_encoding = "utf-8"
+            self._chunks = chunks or []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def iter_bytes(self):
+            yield from self._chunks
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    class _FakeClient:
+        def __init__(self, responses):
+            self.responses = list(responses)
+            self.requests = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def stream(self, method, url, **kwargs):
+            self.requests.append({
+                "method": method,
+                "url": url,
+                **kwargs,
+            })
+            return self.responses.pop(0)
+
+    def test_private_and_resolved_private_source_urls_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "非公网地址"):
+            source_relevance._validate_public_source_url(
+                "http://127.0.0.1/private")
+        private_resolution = [(
+            source_relevance.socket.AF_INET,
+            source_relevance.socket.SOCK_STREAM,
+            6,
+            "",
+            ("10.0.0.8", 443),
+        )]
+        with mock.patch.object(
+                source_relevance.socket, "getaddrinfo",
+                return_value=private_resolution):
+            with self.assertRaisesRegex(ValueError, "非公网地址"):
+                source_relevance._validate_public_source_url(
+                    "https://internal.example/private")
+
+    def test_public_redirect_to_private_address_is_rejected(self):
+        client = self._FakeClient([
+            self._FakeResponse(
+                302,
+                "http://93.184.216.34/start",
+                headers={"location": "http://127.0.0.1/secret"},
+            ),
+        ])
+        with mock.patch.object(
+                source_relevance.httpx, "Client", return_value=client):
+            with self.assertRaisesRegex(ValueError, "非公网地址"):
+                source_relevance._fetch_source(
+                    "http://93.184.216.34/start")
+        self.assertEqual(
+            client.requests[0]["url"],
+            "http://93.184.216.34:80/start",
+        )
+
+    def test_hostname_connection_is_pinned_to_validated_address(self):
+        client = self._FakeClient([
+            self._FakeResponse(
+                200,
+                "https://93.184.216.34:443/article",
+                headers={"content-type": "text/plain"},
+                chunks=[b"public source"],
+            ),
+        ])
+        public_resolution = [(
+            source_relevance.socket.AF_INET,
+            source_relevance.socket.SOCK_STREAM,
+            6,
+            "",
+            ("93.184.216.34", 443),
+        )]
+        with mock.patch.object(
+                source_relevance.socket, "getaddrinfo",
+                return_value=public_resolution), mock.patch.object(
+                source_relevance.httpx, "Client", return_value=client) as factory:
+            result = source_relevance._fetch_source(
+                "https://source.example/article")
+        request = client.requests[0]
+        self.assertEqual(request["url"], "https://93.184.216.34:443/article")
+        self.assertEqual(request["headers"], {"Host": "source.example"})
+        self.assertEqual(
+            request["extensions"], {"sni_hostname": "source.example"})
+        self.assertEqual(result["final_url"], "https://source.example/article")
+        self.assertFalse(factory.call_args.kwargs["trust_env"])
+
+    def test_source_response_body_is_stream_bounded(self):
+        client = self._FakeClient([
+            self._FakeResponse(
+                200,
+                "http://93.184.216.34/large",
+                headers={"content-type": "text/plain"},
+                chunks=[b"x" * source_relevance.MAX_SOURCE_BYTES, b"y"],
+            ),
+        ])
+        with mock.patch.object(
+                source_relevance.httpx, "Client", return_value=client):
+            with self.assertRaisesRegex(ValueError, "超过"):
+                source_relevance._fetch_source(
+                    "http://93.184.216.34/large")
+
     def test_cache_materializes_title_excerpt_hash_and_references(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
@@ -552,6 +785,48 @@ class SourceRelevanceTests(unittest.TestCase):
         entry = payload["entries"]["https://example.com/study"]
         self.assertEqual(entry["source_ids"], ["EC0001"])
         self.assertEqual(entry["title"], "Relationship study")
+
+    def test_tracking_parameters_are_removed_from_cache_identity(self):
+        self.assertEqual(
+            normalize_source_url(
+                "HTTPS://Example.COM/report.pdf?utm_source=x&cid=abc#page=2"),
+            "https://example.com/report.pdf",
+        )
+
+        self.assertEqual(
+            normalize_source_url(
+                "https://example.com/data?source=primary&utm_medium=email"),
+            "https://example.com/data?source=primary",
+        )
+
+    def test_recent_fetch_error_is_reused_until_retry_ttl(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "editorial_corrections.json").write_text(json.dumps({
+                "schema_version": 1,
+                "corrections": [{
+                    "correction_id": "EC0001",
+                    "source_urls": ["https://example.com/unavailable"],
+                }],
+            }), encoding="utf-8")
+            attempts = []
+
+            def fetcher(url):
+                attempts.append(url)
+                raise TimeoutError("temporary timeout")
+
+            first = refresh_source_relevance_cache(folder, fetcher=fetcher)
+            first_text = (folder / "source_relevance_cache.json").read_text(
+                encoding="utf-8")
+            second = refresh_source_relevance_cache(folder, fetcher=fetcher)
+            second_text = (folder / "source_relevance_cache.json").read_text(
+                encoding="utf-8")
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(first_text, second_text)
+        self.assertEqual(first["entries"], second["entries"])
+        entry = second["entries"]["https://example.com/unavailable"]
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["error_kind"], "TimeoutError")
 
     def test_cache_rejects_failed_or_unreferenced_entries(self):
         refs = {"https://example.com/study": ["EC0001"]}
