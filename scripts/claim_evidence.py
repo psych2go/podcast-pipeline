@@ -18,6 +18,10 @@ try:
     )
     from run_report import RunReport
     from subagent import run_json_task
+    from transcript_correction import (
+        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
+        validate_correction_manifest,
+    )
 except ImportError:
     from scripts.atomic_io import atomic_write_json
     from scripts.content_map import (
@@ -29,6 +33,10 @@ except ImportError:
     )
     from scripts.run_report import RunReport
     from scripts.subagent import run_json_task
+    from scripts.transcript_correction import (
+        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
+        validate_correction_manifest,
+    )
 
 
 CLAIM_EVIDENCE_SCHEMA = {
@@ -228,9 +236,30 @@ def _prompt(batch):
 
 
 def _corrected_segment_texts(folder, transcript):
-    corrected_path = Path(folder) / "转录_纠错.txt"
+    folder = Path(folder)
+    corrected_path = folder / "转录_纠错.txt"
     if not corrected_path.exists():
         return {}
+    manifest_path = folder / CORRECTION_MANIFEST_NAME
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("correction manifest 无法读取") from exc
+        rendered_text = corrected_path.read_text(encoding="utf-8")
+        errors = validate_correction_manifest(
+            transcript, manifest, rendered_text=rendered_text)
+        if errors:
+            raise RuntimeError(
+                "correction manifest 无效，拒绝生成 claim evidence: "
+                + "; ".join(errors[:5]))
+        return {
+            str(item["segment_id"]): str(item["corrected_text"]).strip()
+            for item in manifest.get("segments", [])
+            if isinstance(item, dict)
+            and item.get("segment_id")
+            and str(item.get("corrected_text", "")).strip()
+        }
     source_segments = [
         segment for segment in transcript.get("segments", [])
         if isinstance(segment, dict)

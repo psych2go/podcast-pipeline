@@ -1,12 +1,21 @@
 """Cache bounded source metadata so reviewers can assess URL relevance."""
 import hashlib
+import ipaddress
 import json
 import re
+import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import (
+    parse_qsl,
+    urlencode,
+    urljoin,
+    urlparse,
+    urlsplit,
+    urlunsplit,
+)
 
 import httpx
 
@@ -20,6 +29,8 @@ SCHEMA_VERSION = 1
 CACHE_FILENAME = "source_relevance_cache.json"
 MAX_SOURCE_BYTES = 2_000_000
 MAX_EXCERPT_CHARS = 2000
+MAX_REDIRECTS = 5
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 ERROR_RETRY_TTL = timedelta(hours=24)
 SUCCESS_REFRESH_TTL = timedelta(days=7)
 MAX_CLOCK_SKEW = timedelta(minutes=5)
@@ -178,28 +189,94 @@ def _annotate_relevance(entry, expected_terms):
     return entry
 
 
+def _validate_public_source_url(url):
+    """Reject source URLs that can address local or non-public networks."""
+    value = str(url or "").strip()
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError(f"source URL 无效: {value}") from exc
+    if parts.scheme.casefold() not in {"http", "https"}:
+        raise ValueError(f"source URL 只允许 HTTP(S): {value}")
+    if not parts.hostname or parts.username is not None or parts.password is not None:
+        raise ValueError(f"source URL host 或认证信息无效: {value}")
+    port = port or (443 if parts.scheme.casefold() == "https" else 80)
+    try:
+        literal = ipaddress.ip_address(parts.hostname)
+        addresses = {literal}
+    except ValueError:
+        try:
+            resolved = socket.getaddrinfo(
+                parts.hostname, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise ValueError(f"source URL host 无法解析: {parts.hostname}") from exc
+        addresses = {
+            ipaddress.ip_address(item[4][0])
+            for item in resolved
+            if item and len(item) > 4 and item[4]
+        }
+    if not addresses:
+        raise ValueError(f"source URL host 没有可用地址: {parts.hostname}")
+    blocked = sorted(str(address) for address in addresses if not address.is_global)
+    if blocked:
+        raise ValueError(
+            f"source URL 指向非公网地址: {parts.hostname}: {blocked}")
+    return value
+
+
+def _read_limited_body(response):
+    body = bytearray()
+    for chunk in response.iter_bytes():
+        if not chunk:
+            continue
+        if len(body) + len(chunk) > MAX_SOURCE_BYTES:
+            raise ValueError(
+                f"source response 超过 {MAX_SOURCE_BYTES} bytes")
+        body.extend(chunk)
+    return bytes(body)
+
+
 def _fetch_source(url):
-    with httpx.Client(timeout=30, follow_redirects=True) as client:
-        response = client.get(url)
-    response.raise_for_status()
-    body = response.content[:MAX_SOURCE_BYTES]
-    content_type = response.headers.get("content-type", "")
+    current_url = str(url)
+    with httpx.Client(timeout=30, follow_redirects=False) as client:
+        for redirect_count in range(MAX_REDIRECTS + 1):
+            _validate_public_source_url(current_url)
+            with client.stream("GET", current_url) as response:
+                if response.status_code in REDIRECT_STATUSES:
+                    location = response.headers.get("location", "").strip()
+                    if not location:
+                        response.raise_for_status()
+                    if redirect_count >= MAX_REDIRECTS:
+                        raise ValueError("source URL 重定向次数过多")
+                    current_url = urljoin(current_url, location)
+                    _validate_public_source_url(current_url)
+                    continue
+                response.raise_for_status()
+                body = _read_limited_body(response)
+                content_type = response.headers.get("content-type", "")
+                encoding = response.charset_encoding or "utf-8"
+                final_url = str(response.url)
+                status_code = response.status_code
+                break
+        else:  # pragma: no cover - loop is bounded by explicit redirect handling
+            raise ValueError("source URL 重定向次数过多")
     title = ""
     excerpt = ""
     if "html" in content_type.casefold() or body.lstrip().startswith(b"<"):
         parser = _ReadableHTML()
-        parser.feed(body.decode(response.encoding or "utf-8", errors="replace"))
+        parser.feed(body.decode(encoding, errors="replace"))
         title = " ".join(parser.title).strip()
         excerpt = " ".join(parser.text).strip()[:MAX_EXCERPT_CHARS]
     else:
-        title = Path(urlparse(str(response.url)).path).name or str(response.url)
+        title = Path(urlparse(final_url).path).name or final_url
         if "text" in content_type.casefold() or "json" in content_type.casefold():
-            excerpt = body.decode(response.encoding or "utf-8", errors="replace")
+            excerpt = body.decode(encoding, errors="replace")
             excerpt = re.sub(r"\s+", " ", excerpt).strip()[:MAX_EXCERPT_CHARS]
     return {
         "status": "fetched",
-        "http_status": response.status_code,
-        "final_url": str(response.url),
+        "http_status": status_code,
+        "final_url": final_url,
         "content_type": content_type,
         "title": title,
         "excerpt": excerpt,

@@ -443,7 +443,7 @@ class ExactEntityRepairTests(unittest.TestCase):
                 "replacement_from": "Our Brain, Ourselves",
                 "replacement_to": "Our Brains, Our Selves",
                 "allowed_files": [
-                    "转录_纠错.txt", "content_map.json", "中文完整笔记.md", "讲书稿.md",
+                    "content_map.json", "中文完整笔记.md", "讲书稿.md",
                 ],
                 "source_urls": ["https://example.com/book"],
             }
@@ -455,9 +455,65 @@ class ExactEntityRepairTests(unittest.TestCase):
             self.assertIn("Our Brains, Our Selves", updated["units"][0]["claims"][0])
             self.assertEqual(updated["units"][0]["source_excerpt"], raw_text)
             self.assertEqual((folder / "原始转录.txt").read_text(encoding="utf-8"), raw_text)
-            self.assertIn("Our Brains, Our Selves", (
-                folder / "转录_纠错.txt").read_text(encoding="utf-8"))
+            self.assertEqual(
+                (folder / "转录_纠错.txt").read_text(encoding="utf-8"),
+                raw_text,
+            )
             self.assertEqual(action["action"], "evidence_backed_exact_entity_repair")
+
+    def test_exact_entity_repair_rejects_direct_structured_correction_edit(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "原始转录.txt").write_text("WrongCo", encoding="utf-8")
+            (folder / "transcript.raw.json").write_text(
+                json.dumps({"segments": [{"id": "S0001", "text": "WrongCo"}]}),
+                encoding="utf-8",
+            )
+            (folder / "转录_纠错.txt").write_text("WrongCo", encoding="utf-8")
+            (folder / "correction_manifest.json").write_text("{}", encoding="utf-8")
+            issue = {
+                "replacement_from": "WrongCo",
+                "replacement_to": "CorrectCo",
+                "allowed_files": ["转录_纠错.txt"],
+                "source_urls": ["https://example.com/company"],
+            }
+            with self.assertRaisesRegex(RuntimeError, "correction manifest"):
+                review_repair._repair_exact_entities(folder, [issue])
+            self.assertEqual(
+                (folder / "转录_纠错.txt").read_text(encoding="utf-8"),
+                "WrongCo",
+            )
+
+    def test_exact_entity_repair_rolls_back_partial_writes(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "原始转录.txt").write_text("raw", encoding="utf-8")
+            (folder / "transcript.raw.json").write_text(
+                json.dumps({"segments": [{"id": "S0001", "text": "raw"}]}),
+                encoding="utf-8",
+            )
+            briefing = folder / "讲书稿.md"
+            briefing.write_text("WrongCo appears here", encoding="utf-8")
+            issues = [
+                {
+                    "replacement_from": "WrongCo",
+                    "replacement_to": "CorrectCo",
+                    "allowed_files": ["讲书稿.md"],
+                    "source_urls": ["https://example.com/company"],
+                },
+                {
+                    "replacement_from": "MissingCo",
+                    "replacement_to": "OtherCo",
+                    "allowed_files": ["讲书稿.md"],
+                    "source_urls": ["https://example.com/other"],
+                },
+            ]
+            with self.assertRaisesRegex(RuntimeError, "未找到目标文本"):
+                review_repair._repair_exact_entities(folder, issues)
+            self.assertEqual(
+                briefing.read_text(encoding="utf-8"),
+                "WrongCo appears here",
+            )
 
     def test_ledger_entity_refresh_does_not_rewrite_urls_or_ids(self):
         payload = {

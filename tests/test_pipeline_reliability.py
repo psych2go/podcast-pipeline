@@ -29,6 +29,7 @@ from content_map import (
 )
 from episode import _source_heading
 import claim_evidence
+import source_relevance
 from rebuild_plan import build_rebuild_plan
 from source_relevance import (
     expected_source_references,
@@ -36,6 +37,7 @@ from source_relevance import (
     refresh_source_relevance_cache,
     validate_source_relevance_cache,
 )
+from transcript_correction import build_manifest, render_corrected_transcript
 from tts import build_tts_plan
 
 
@@ -104,6 +106,47 @@ class CondensedCoverageTests(unittest.TestCase):
 
 
 class CorrectedClaimEvidenceTests(unittest.TestCase):
+    def test_structured_manifest_aligns_rendered_lines_to_segment_ids(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            transcript = {
+                "evidence": {
+                    "revision_id": "revision-1",
+                    "transcript_sha256": "transcript-1",
+                },
+                "segments": [
+                    {"id": "S0001", "text": "raw one"},
+                    {"id": "S0002", "text": "raw two"},
+                ],
+            }
+            items = [{
+                "segment_id": segment["id"],
+                "corrected_text": segment["text"],
+                "status": "unchanged",
+                "change_types": [],
+                "verification": "not_required",
+                "unresolved": [],
+            } for segment in transcript["segments"]]
+            manifest = build_manifest(transcript, items)
+            (folder / "correction_manifest.json").write_text(
+                json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            (folder / "转录_纠错.txt").write_text(
+                render_corrected_transcript(transcript, manifest),
+                encoding="utf-8",
+            )
+            aligned = claim_evidence._corrected_segment_texts(
+                folder, transcript)
+            payloads = claim_evidence._unit_payloads({
+                "units": [{
+                    "id": "U0001", "status": "included",
+                    "topic": "topic", "claims": ["claim"],
+                    "evidence": {"segment_ids": ["S0002"]},
+                }],
+            }, transcript, folder=folder)
+        self.assertEqual(aligned["S0002"], "raw two")
+        self.assertEqual(
+            payloads[0]["segments"][0]["corrected_text"], "raw two")
+
     def test_corrected_paragraphs_align_to_segment_ids(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
@@ -594,6 +637,90 @@ class DetailItemCoverageTests(unittest.TestCase):
 
 
 class SourceRelevanceTests(unittest.TestCase):
+    class _FakeResponse:
+        def __init__(self, status_code, url, *, headers=None, chunks=None):
+            self.status_code = status_code
+            self.url = url
+            self.headers = headers or {}
+            self.charset_encoding = "utf-8"
+            self._chunks = chunks or []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def iter_bytes(self):
+            yield from self._chunks
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    class _FakeClient:
+        def __init__(self, responses):
+            self.responses = list(responses)
+            self.urls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def stream(self, method, url):
+            self.urls.append(url)
+            return self.responses.pop(0)
+
+    def test_private_and_resolved_private_source_urls_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "非公网地址"):
+            source_relevance._validate_public_source_url(
+                "http://127.0.0.1/private")
+        private_resolution = [(
+            source_relevance.socket.AF_INET,
+            source_relevance.socket.SOCK_STREAM,
+            6,
+            "",
+            ("10.0.0.8", 443),
+        )]
+        with mock.patch.object(
+                source_relevance.socket, "getaddrinfo",
+                return_value=private_resolution):
+            with self.assertRaisesRegex(ValueError, "非公网地址"):
+                source_relevance._validate_public_source_url(
+                    "https://internal.example/private")
+
+    def test_public_redirect_to_private_address_is_rejected(self):
+        client = self._FakeClient([
+            self._FakeResponse(
+                302,
+                "http://93.184.216.34/start",
+                headers={"location": "http://127.0.0.1/secret"},
+            ),
+        ])
+        with mock.patch.object(
+                source_relevance.httpx, "Client", return_value=client):
+            with self.assertRaisesRegex(ValueError, "非公网地址"):
+                source_relevance._fetch_source(
+                    "http://93.184.216.34/start")
+        self.assertEqual(client.urls, ["http://93.184.216.34/start"])
+
+    def test_source_response_body_is_stream_bounded(self):
+        client = self._FakeClient([
+            self._FakeResponse(
+                200,
+                "http://93.184.216.34/large",
+                headers={"content-type": "text/plain"},
+                chunks=[b"x" * source_relevance.MAX_SOURCE_BYTES, b"y"],
+            ),
+        ])
+        with mock.patch.object(
+                source_relevance.httpx, "Client", return_value=client):
+            with self.assertRaisesRegex(ValueError, "超过"):
+                source_relevance._fetch_source(
+                    "http://93.184.216.34/large")
+
     def test_cache_materializes_title_excerpt_hash_and_references(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)

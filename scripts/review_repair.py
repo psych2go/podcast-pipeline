@@ -6,7 +6,7 @@ from pathlib import Path
 
 try:
     from ai_review import review_episode
-    from atomic_io import atomic_write_json, atomic_write_text
+    from atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
     from claim_evidence import refine_claim_evidence
     from content_map import (
         body_sha256,
@@ -28,7 +28,11 @@ try:
     )
 except ImportError:
     from scripts.ai_review import review_episode
-    from scripts.atomic_io import atomic_write_json, atomic_write_text
+    from scripts.atomic_io import (
+        atomic_write_bytes,
+        atomic_write_json,
+        atomic_write_text,
+    )
     from scripts.claim_evidence import refine_claim_evidence
     from scripts.content_map import (
         body_sha256,
@@ -61,8 +65,7 @@ SAFE_EXACT_ENTITY_CATEGORIES = {
     "entity_accuracy", "transcript_quality", "transcript_title_normalization",
 }
 ENTITY_REPAIR_FILES = {
-    "转录_纠错.txt", "content_map.json", "中文完整笔记.md",
-    "讲书稿.md", "tts_lexicon.json",
+    "content_map.json", "中文完整笔记.md", "讲书稿.md", "tts_lexicon.json",
 }
 
 
@@ -236,42 +239,81 @@ def _refresh_semantic_bindings(folder, replacements):
     _refresh_ledger_binding(folder, replacements)
 
 
+def _repair_snapshot_paths(folder, issues):
+    names = {
+        "content_map.json",
+        "summary_map.json",
+        "中文完整笔记.md",
+        "讲书稿.md",
+        "tts_lexicon.json",
+        PREWRITE_FACT_CHECKS_FILENAME,
+    }
+    for issue in issues:
+        names.update(issue.get("allowed_files", []) or [])
+    return [Path(folder) / name for name in sorted(names)]
+
+
+def _restore_snapshots(snapshots):
+    for path, original in snapshots.items():
+        if original is None:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            atomic_write_bytes(path, original)
+
+
 def _repair_exact_entities(folder, issues):
     folder = Path(folder)
+    if any(
+            "转录_纠错.txt" in (issue.get("allowed_files", []) or [])
+            for issue in issues):
+        raise RuntimeError(
+            "结构化纠错稿不得由精确实体修复直接修改；"
+            "请通过 correction manifest 纠错流程重新生成")
     raw_before = (folder / "原始转录.txt").read_bytes()
     transcript_before = (folder / "transcript.raw.json").read_bytes()
+    snapshots = {
+        path: path.read_bytes() if path.exists() else None
+        for path in _repair_snapshot_paths(folder, issues)
+    }
     replacements = []
     changes = []
-    for issue in issues:
-        old = str(issue["replacement_from"]).strip()
-        new = str(issue["replacement_to"]).strip()
-        changed_files = {}
-        for name in issue.get("allowed_files", []):
-            path = folder / name
-            if not path.exists():
-                continue
-            if name == "content_map.json":
-                count = _replace_content_map_entity(path, old, new)
-            elif name == "tts_lexicon.json":
-                count = _replace_tts_lexicon_entity(path, old, new)
-            else:
-                count = _replace_text_entity(path, old, new)
-            if count:
-                changed_files[name] = count
-        if not changed_files:
-            raise RuntimeError(f"精确实体修复未找到目标文本: {old!r}")
-        replacements.append((old, new))
-        changes.append({
-            "from": old,
-            "to": new,
-            "files": changed_files,
-            "source_urls": issue.get("source_urls", []),
-        })
-    if (folder / "原始转录.txt").read_bytes() != raw_before:
-        raise RuntimeError("精确实体修复不得修改 原始转录.txt")
-    if (folder / "transcript.raw.json").read_bytes() != transcript_before:
-        raise RuntimeError("精确实体修复不得修改 transcript.raw.json")
-    _refresh_semantic_bindings(folder, replacements)
+    try:
+        for issue in issues:
+            old = str(issue["replacement_from"]).strip()
+            new = str(issue["replacement_to"]).strip()
+            changed_files = {}
+            for name in issue.get("allowed_files", []):
+                path = folder / name
+                if not path.exists():
+                    continue
+                if name == "content_map.json":
+                    count = _replace_content_map_entity(path, old, new)
+                elif name == "tts_lexicon.json":
+                    count = _replace_tts_lexicon_entity(path, old, new)
+                else:
+                    count = _replace_text_entity(path, old, new)
+                if count:
+                    changed_files[name] = count
+            if not changed_files:
+                raise RuntimeError(f"精确实体修复未找到目标文本: {old!r}")
+            replacements.append((old, new))
+            changes.append({
+                "from": old,
+                "to": new,
+                "files": changed_files,
+                "source_urls": issue.get("source_urls", []),
+            })
+        if (folder / "原始转录.txt").read_bytes() != raw_before:
+            raise RuntimeError("精确实体修复不得修改 原始转录.txt")
+        if (folder / "transcript.raw.json").read_bytes() != transcript_before:
+            raise RuntimeError("精确实体修复不得修改 transcript.raw.json")
+        _refresh_semantic_bindings(folder, replacements)
+    except Exception:
+        _restore_snapshots(snapshots)
+        raise
     return {
         "action": "evidence_backed_exact_entity_repair",
         "changes": changes,
