@@ -10,7 +10,7 @@
 - `content/`、生成后的 `site/`、`reports/` 和 `.runlogs/` 是本地私有数据，禁止公开提交。
 - 当前有效提示词只有 `scripts/纠错提示词.md` 与 `scripts/讲稿提示词.md`。
 - 公开推送前运行 `scripts/check_public_repo.py`；私有分支历史不能仅靠 `.gitignore` 脱敏。
-- 更短的入口和目录说明见 `README.md`；编码代理安全规则见 `AGENTS.md`。
+- 更短的入口和目录说明见 `README.md`；模块和 artifact 导航见 `docs/module-map.md`；编码代理安全规则见 `AGENTS.md`。
 
 ## 标准流程
 
@@ -489,12 +489,14 @@ Cloudflare 认证可使用 `wrangler login` 的 OAuth 凭据或环境中的 API 
 
 ## 验证
 
+提交或合并前必须运行与 CI 等价的完整验证：
+
 ```bash
-.venv/bin/python -m unittest discover -s tests -p 'test_pipeline.py' -v
-.venv/bin/python -m unittest discover -s tests -p 'test_browser_layout.py' -v
+.venv/bin/python scripts/check_public_repo.py
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-浏览器测试需要：
+按领域定位测试和定向开发命令见 `tests/README.md`。浏览器测试需要：
 
 ```bash
 .venv/bin/pip install -r requirements-browser.txt

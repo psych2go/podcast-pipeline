@@ -11,14 +11,17 @@
 来源 URL / MP3
   -> fetcher.py
   -> episode.json + 来源.md + 原始转录.txt + transcript.raw.json
-  -> subagent 转录纠错
+  -> subagent 转录纠错 + correction_manifest.json
   -> subagent content_map.json evidence v3
+  -> claim_evidence.py 逐 claim 最小证据
+  -> subagent canonical_entities.json 规范实体表
+  -> prewrite_fact_checks.py 写作前事实台账
   -> subagent 中文完整笔记.md + 讲书稿.md + summary_map.json
   -> content_finalizer.py 规范化、章节重平衡、TTS 词典
-  -> subagent claim evidence
   -> subagent ai_review.json + bounded review/repair
   -> quality_report.py
   -> tts.py + tts_manifest.json
+  -> release.py 准备 release.json 与内容哈希音频 key
   -> html_gen.py
   -> catalog.py
   -> R2 + Pages
@@ -27,7 +30,12 @@
 
 ### 核心深模块
 
-- `process.py` 的内部入口是 `process_episode(source, name, EpisodeOptions)`；旧的
+维护者先阅读 [`module-map.md`](module-map.md)，可用
+`python scripts/pipeline_map.py` 查看同一阶段图。`pipeline/stages.py` 只提供导航
+元数据，不是第二套运行时编排器。
+
+- `process.py` 的内部入口是 `process_episode(source, name, EpisodeOptions)`；参数
+  合同与 CLI 构造已分别放入 `pipeline/options.py`、`pipeline/cli.py`，旧的
   多参数 `process(...)` 只保留为兼容 adapter，CLI 不再逐项位置透传参数。
 - `sections.py` 是 TTS 和 HTML 唯一的 Markdown 章节解析 seam；两侧只保留返回
   旧 tuple 形状的轻量 adapter，避免章节数、标题和正文边界静默漂移。
@@ -504,11 +512,21 @@ npx wrangler pages deploy site --project-name podcast-scripts --branch main
 
 ## 5. 测试
 
+提交或合并前运行与 CI 等价的完整验证：
+
 ```bash
-.venv/bin/python -m unittest discover -s tests -p 'test_pipeline.py' -v
-.venv/bin/python -m unittest discover -s tests -p 'test_browser_layout.py' -v
-.venv/bin/python -m playwright install --with-deps chromium
+.venv/bin/python scripts/check_public_repo.py
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
+
+浏览器依赖初始化和定向测试：
+
+```bash
+.venv/bin/python -m playwright install --with-deps chromium
+.venv/bin/python -m unittest discover -s tests -p 'test_browser_layout.py' -v
+```
+
+按领域查找测试和开发期定向命令见 [`../tests/README.md`](../tests/README.md)。
 
 覆盖范围包括：
 

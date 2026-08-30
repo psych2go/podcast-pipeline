@@ -48,6 +48,15 @@
 
 - `AGENTS.md`：编码代理必须遵守的入口、私有数据和 Git 安全规则。
 - `CLAUDE.md`：完整操作手册、质量门和故障恢复说明。
-- `docs/pipeline.md`：内部模块和数据流技术说明。
+- `docs/module-map.md`：维护者优先阅读的模块、stage owner 和 artifact 依赖地图。
+- `docs/pipeline.md`：各阶段的详细技术合同和发布不变量。
+- `tests/README.md`：CI 等价命令和按领域定位测试的索引。
+
+查看机器可读阶段图：
+
+```bash
+.venv/bin/python scripts/pipeline_map.py
+.venv/bin/python scripts/pipeline_map.py --json
+```
 
 普通任务不要直接拼接 `tts.py`、`html_gen.py`、`ai_review.py` 等内部阶段；应让 `process.py` 保证顺序、缓存失效和质量门。
