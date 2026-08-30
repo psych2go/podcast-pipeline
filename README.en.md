@@ -27,7 +27,7 @@ Turn English podcasts into auditable Chinese notes, Chinese narration scripts, T
 | `scripts/` | Pipeline implementation | Yes |
 | `tests/`, `.github/` | Tests and CI | Yes |
 | `examples/` | Sanitized reader-page and script examples | Yes |
-| `docs/pipeline.md` | Current architecture | Yes |
+| `docs/module-map.md`, `docs/pipeline.md` | Module navigation and detailed architecture | Yes |
 | `benchmarks/` | Contracts, manual references, durable reports | Yes, except downloaded media and generated runs |
 | `site/deploy.sh`, `site/wrangler.toml` | Cloudflare deployment configuration | Yes |
 | `requirements*.txt`, `.env.example` | Dependencies and secret-free configuration template | Yes |
@@ -40,6 +40,7 @@ The boundary is enforced by `.gitignore`, `scripts/check_public_repo.py`, and CI
 
 ```bash
 .venv/bin/python scripts/check_public_repo.py
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 Branches prefixed with `private-` or `private/` may contain private episode data in Git history. The checker refuses to treat them as public branches, and also fails closed for a detached HEAD whose branch cannot be established from local or GitHub Actions context. `--allow-private-branch` and `--allow-detached-head` inspect only the current index and do not prove that history is sanitized.
@@ -48,6 +49,11 @@ Branches prefixed with `private-` or `private/` may contain private episode data
 
 - `AGENTS.md`: mandatory routing, privacy, and Git rules for coding agents.
 - `CLAUDE.md`: complete operating guide, quality gates, and recovery procedures.
-- `docs/pipeline.md`: internal modules and data flow.
+- `docs/module-map.md`: maintainer-oriented stage owners and artifact dependencies.
+- `docs/pipeline.md`: detailed internal contracts and data flow.
+- `tests/README.md`: CI-equivalent validation and domain test index.
+
+Inspect the stage map with `python scripts/pipeline_map.py` or
+`python scripts/pipeline_map.py --json`.
 
 For normal work, use `process.py` rather than manually chaining internal CLIs such as `tts.py`, `html_gen.py`, or `ai_review.py`.

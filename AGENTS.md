@@ -31,6 +31,7 @@
 
 ```bash
 .venv/bin/python scripts/check_public_repo.py
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 `private-` 或 `private/` 分支可能在 Git 历史中包含播客内容，不得直接推送到公开远端。无法确认来源的 detached HEAD 同样不得公开推送。即使当前文件已经取消跟踪，也不能据此判断历史已脱敏。
@@ -47,5 +48,6 @@
 
 1. 当前用户指令。
 2. 本文件的入口、私有数据和安全规则。
-3. `CLAUDE.md` 的完整流程规则。
-4. `docs/pipeline.md` 的实现说明。
+3. `docs/module-map.md` 的模块、owner 和 artifact 导航。
+4. `CLAUDE.md` 的完整流程规则。
+5. `docs/pipeline.md` 的详细实现说明。

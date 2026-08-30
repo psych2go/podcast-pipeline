@@ -43,6 +43,8 @@ class RepositoryNavigationTests(unittest.TestCase):
             self.assertFalse(path.exists(), f"obsolete path still exists: {path}")
 
         self.assertTrue((ROOT / "docs" / "pipeline.md").exists())
+        self.assertTrue((ROOT / "docs" / "module-map.md").exists())
+        self.assertTrue((ROOT / "tests" / "README.md").exists())
         self.assertTrue((ROOT / "benchmarks" / "reports" / "asr-model-policy.md").exists())
         self.assertTrue((ROOT / "benchmarks" / "reports" / "multispeaker-sources.md").exists())
 
@@ -52,6 +54,8 @@ class RepositoryNavigationTests(unittest.TestCase):
             ROOT / "AGENTS.md",
             ROOT / "CLAUDE.md",
             ROOT / "docs" / "pipeline.md",
+            ROOT / "docs" / "module-map.md",
+            ROOT / "tests" / "README.md",
             ROOT / "scripts" / "纠错提示词.md",
             ROOT / "scripts" / "讲稿提示词.md",
         )
