@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -168,6 +169,59 @@ class PipelineStageMapTests(unittest.TestCase):
             "unittest discover -s tests -p 'test_*.py' -v",
             tests_readme,
         )
+
+
+class PackagingContractTests(unittest.TestCase):
+    """pyproject packaging stays consistent with requirements and imports."""
+
+    @staticmethod
+    def _dependency_name(requirement):
+        requirement = str(requirement).split(";", 1)[0].strip()
+        name = requirement.split("[", 1)[0]
+        for marker in (">", "=", "<", "!", "~"):
+            name = name.split(marker, 1)[0]
+        name = name.strip()
+        return name.lower()
+
+    @staticmethod
+    def _requirement_names(path):
+        names = set()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                names.add(PackagingContractTests._dependency_name(line))
+        return names
+
+    def test_pyproject_dependencies_mirror_requirements(self):
+        pyproject = tomllib.loads(
+            (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        declared = {
+            self._dependency_name(requirement)
+            for requirement in pyproject["project"]["dependencies"]
+        }
+        required = self._requirement_names(ROOT / "requirements.txt")
+        self.assertEqual(declared, required)
+
+    def test_console_entry_points_import_their_modules(self):
+        pyproject = tomllib.loads(
+            (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        entry_points = pyproject["project"]["scripts"]
+        self.assertEqual(
+            entry_points,
+            {
+                "podcast-process": "scripts.process:main",
+                "podcast-catalog": "scripts.catalog:main",
+            },
+        )
+        for module_name in ("scripts.process", "scripts.catalog"):
+            result = subprocess.run(
+                [sys.executable, "-c", f"import {module_name}"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

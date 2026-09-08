@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "podcast-pipeline"
+version = "8.0.0"
+description = "Auditable English-podcast to Chinese briefing, TTS and publishing pipeline"
+readme = "README.md"
+requires-python = ">=3.12"
+# Keep in sync with requirements.txt (guarded by
+# tests/test_pipeline_structure.py::PackagingContractTests).
+dependencies = [
+    "httpx>=0.28.0",
+    "tqdm>=4.66.0",
+    "soundfile>=0.12.1",
+]
+
+[project.scripts]
+podcast-process = "scripts.process:main"
+podcast-catalog = "scripts.catalog:main"
+
+[tool.setuptools]
+packages = ["scripts", "scripts.pipeline"]
+
+[tool.setuptools.package-data]
+scripts = ["*.md"]

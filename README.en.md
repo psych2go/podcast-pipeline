@@ -56,4 +56,16 @@ Branches prefixed with `private-` or `private/` may contain private episode data
 Inspect the stage map with `python scripts/pipeline_map.py` or
 `python scripts/pipeline_map.py --json`.
 
+## Development install
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e .    # provides podcast-process / podcast-catalog entry points
+```
+
+The canonical commands remain `.venv/bin/python scripts/process.py` and
+`scripts/catalog.py`; the console entry points are aliases only and do not
+change the documented interface.
+
 For normal work, use `process.py` rather than manually chaining internal CLIs such as `tts.py`, `html_gen.py`, or `ai_review.py`.
