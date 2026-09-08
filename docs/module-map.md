@@ -41,6 +41,7 @@
 | `catalog.py`、`catalog_*` | 发布事务 facade 与实现 | 已按 core/site/health/triage/publish 拆分；`catalog_triage.py` 只读诊断阻断原因 |
 | `release.py`、`publish.py` | release provenance 和远端验收 | Wrangler 成功不等于发布成功 |
 | `atomic_io.py`、`hashing.py`、`retry.py`、`run_report.py`、`review_attribution.py` | 共享基础设施 | stage 名和报告字段属于持久合同；`review_attribution.py` 是审查拒绝归一的唯一词表，供 run_report/health/triage 共用 |
+| `pyproject.toml` | 可编辑安装与静态检查配置 | 包体（`scripts`、`scripts.pipeline`）、console 入口（`podcast-process`/`podcast-catalog`）与依赖真源；依赖与 `requirements.txt` 由测试防漂移；ruff/mypy 配置也在此 |
 
 ## 3. 阶段顺序
 

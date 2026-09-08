@@ -26,6 +26,12 @@ jobs:
             -r requirements-browser.txt \
             -r requirements-benchmark.txt
 
+      - name: Install editable package and smoke-test entry points
+        run: |
+          python -m pip install -e .
+          podcast-process --help
+          podcast-catalog --help
+
       - name: Install Chromium and system dependencies
         run: python -m playwright install --with-deps chromium
 

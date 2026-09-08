@@ -59,4 +59,15 @@
 .venv/bin/python scripts/pipeline_map.py --json
 ```
 
+## 开发安装
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e .    # 提供 podcast-process / podcast-catalog 入口
+```
+
+标准命令始终是 `.venv/bin/python scripts/process.py` 与 `scripts/catalog.py`；
+console 入口只是等价别名，不改变文档合同。
+
 普通任务不要直接拼接 `tts.py`、`html_gen.py`、`ai_review.py` 等内部阶段；应让 `process.py` 保证顺序、缓存失效和质量门。
