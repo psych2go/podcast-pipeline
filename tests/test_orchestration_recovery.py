@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
@@ -14,7 +15,9 @@ from agent_pipeline import (
     _validate_content_map_stage_statuses,
     _writing_artifacts_are_current,
     _writing_input_hashes,
+    _writing_prompt,
     content_pipeline_needed,
+    run_content_pipeline,
 )
 from claim_evidence import _unit_payloads
 from content_map import body_sha256, init_content_map, validate_content_map
@@ -130,6 +133,119 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                     json.dumps({"entities": [{"canonical_name": "Beta"}]}),
                     encoding="utf-8")
                 self.assertFalse(_writing_artifacts_are_current(folder))
+
+    def test_writing_uses_canonical_rules_without_word_ratio_requirement(self):
+        rules = (Path(__file__).resolve().parents[1]
+                 / "scripts" / "讲稿提示词.md").read_text(encoding="utf-8").strip()
+        prompt = _writing_prompt()
+        self.assertTrue(prompt.startswith(rules))
+        self.assertIn("只允许修改这三个输出", prompt)
+        self.assertIn("notes_number_ids", prompt)
+        self.assertIn("issue_inventory", prompt)
+        self.assertIn("字数比例仅供观察", prompt)
+        self.assertNotIn("百分之十五", prompt)
+        self.assertNotIn("不要使用“审查过程”", prompt)
+
+    def test_repaired_inputs_reuse_prose_only_with_current_bindings(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            files = {
+                "原始转录.txt": "source",
+                "transcript.raw.json": '{"segments": []}',
+                "content_map.json": '{"schema_version": 3, "units": []}',
+                "canonical_entities.json": '{"entities": [{"canonical_name": "Alpha"}]}',
+                "editorial_fact_checks.json": '{}',
+                "中文完整笔记.md": "notes",
+                "讲书稿.md": "briefing",
+            }
+            for name, text in files.items():
+                (folder / name).write_text(text, encoding="utf-8")
+            summary = {
+                "transcript_basis": {
+                    "file": "原始转录.txt", "sha256": body_sha256("source")},
+                "chapters": [],
+                "writing_inputs_version": 1,
+                "writing_inputs": _writing_input_hashes(folder),
+            }
+            summary_path = folder / "summary_map.json"
+            summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            with mock.patch("agent_pipeline.validate_content_map",
+                            return_value=([], [])), mock.patch(
+                    "agent_pipeline.validate_summary_map", return_value=[]), mock.patch(
+                    "agent_pipeline.ledger_is_current", return_value=True):
+                # Regenerate entity metadata without changing the canonical name.
+                entities_path = folder / "canonical_entities.json"
+                entities_path.write_text(json.dumps({"entities": [{
+                    "canonical_name": "Alpha", "rationale": "refreshed source"}]}),
+                    encoding="utf-8")
+                self.assertTrue(_writing_artifacts_are_current(
+                    folder, require_bound_inputs=True))
+                entities_path.write_text(json.dumps({"entities": [{
+                    "canonical_name": "Beta"}]}), encoding="utf-8")
+                self.assertFalse(_writing_artifacts_are_current(
+                    folder, require_bound_inputs=True))
+                entities_path.write_text(files["canonical_entities.json"], encoding="utf-8")
+                with mock.patch("agent_pipeline.ledger_is_current", return_value=False):
+                    self.assertFalse(_writing_artifacts_are_current(
+                        folder, require_bound_inputs=True))
+                (folder / "editorial_fact_checks.json").write_text(
+                    '{"changed": true}', encoding="utf-8")
+                self.assertFalse(_writing_artifacts_are_current(
+                    folder, require_bound_inputs=True))
+                # Legacy prose remains reusable only on the no-repair path.
+                summary.pop("writing_inputs_version")
+                summary.pop("writing_inputs")
+                summary_path.write_text(json.dumps(summary), encoding="utf-8")
+                self.assertTrue(_writing_artifacts_are_current(folder))
+                self.assertFalse(_writing_artifacts_are_current(
+                    folder, require_bound_inputs=True))
+            self.assertEqual((folder / "讲书稿.md").read_text(), "briefing")
+
+    def test_writing_reuse_is_checked_after_entity_regeneration(self):
+        for reusable in (True, False):
+            with self.subTest(reusable=reusable), tempfile.TemporaryDirectory() as td:
+                folder = Path(td)
+                for name in ("transcript.raw.json", "content_map.json",
+                             "中文完整笔记.md", "讲书稿.md", "summary_map.json"):
+                    (folder / name).write_text("{}", encoding="utf-8")
+                (folder / "原始转录.txt").write_text("source", encoding="utf-8")
+                with ExitStack() as stack:
+                    for target, result in (
+                        ("effective_source_kind", "web_transcript"),
+                        ("quality_metadata", {"transcript_status": "可接受"}),
+                        ("_content_map_is_valid", True),
+                        ("_canonical_entities_is_valid", False),
+                        ("validate_canonical_entities", []),
+                        ("ledger_is_current", True),
+                    ):
+                        stack.enter_context(mock.patch(
+                            "agent_pipeline." + target, return_value=result))
+                    regenerate = stack.enter_context(mock.patch(
+                        "agent_pipeline.run_json_task",
+                        return_value={"payload": {"entities": []}}))
+
+                    def check_after_repair(*args, **kwargs):
+                        regenerate.assert_called_once()
+                        self.assertTrue((folder / "canonical_entities.json").exists())
+                        self.assertTrue(kwargs["require_bound_inputs"])
+                        return reusable
+
+                    check = stack.enter_context(mock.patch(
+                        "agent_pipeline._writing_artifacts_are_current",
+                        side_effect=check_after_repair))
+                    writer = stack.enter_context(mock.patch("agent_pipeline.run_edit_task"))
+                    # Stop at the next stage: this test exercises orchestration,
+                    # not the independently tested content finalizer.
+                    stack.enter_context(mock.patch(
+                        "agent_pipeline.finalize_content_package",
+                        side_effect=RuntimeError("reached finalization")))
+                    with self.assertRaisesRegex(RuntimeError, "reached finalization"):
+                        run_content_pipeline(folder, "Episode")
+                    check.assert_called_once()
+                    self.assertEqual(writer.call_count, int(not reusable))
+                    if not reusable:
+                        self.assertEqual(writer.call_args.kwargs["task_name"], "content_writing")
+                        self.assertEqual(writer.call_args.args[1], _writing_prompt())
 
     def test_force_refetch_always_rebuilds_content(self):
         with tempfile.TemporaryDirectory() as td:

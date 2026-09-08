@@ -37,17 +37,41 @@
 - `process.py` 的内部入口是 `process_episode(source, name, EpisodeOptions)`；参数
   合同与 CLI 构造已分别放入 `pipeline/options.py`、`pipeline/cli.py`，旧的
   多参数 `process(...)` 只保留为兼容 adapter，CLI 不再逐项位置透传参数。
+- 内容是否需要重建只由 `agent_pipeline.content_pipeline_needed()` 判定。
+  `rebuild_plan.py` 是只读报告 adapter，`process.py` 直接采用该报告的判定，
+  不重复扫描。`rebuild_plan` stage 保留原有字段和 schema version 2；`reasons`
+  只记录 `force_rebuild` 或 `deterministic_validation`，不再另行推导细分原因。
+  `stages` 是保守的下游候选范围，不是逐阶段执行承诺；`affected_units` 和
+  `affected_chapters` 保留为空（未知），不猜测局部影响范围。实际复用由各阶段
+  自身验证决定。`--fetch-only` / `--no-auto-content` 不运行这项内容规划。
+- 内容写作直接加载 `scripts/讲稿提示词.md`；编排代码只追加本次输入、输出和
+  文件写入边界。完整性以 claims、numbers、examples 和限定条件覆盖为准，
+  笔记/讲稿字数比例仅作观察，不要求模型为满足比例补写。
+- 写作复用在上游阶段完成后验证，而不是按“是否重新生成过上游文件”判断。
+  修复后的复用必须具有当前版本的 `writing_inputs` 绑定且全部校验通过；
+  缺少绑定的历史稿在修复路径上仍重写，`--force-refetch` 仍强制重建。
+- 后台叙述检查只机械拦截明确的本稿编辑决策，不无条件封禁“审查过程”等
+  正常领域词。独立 AI 终审负责结合语境区分节目内容与流水线后台叙述。
+  抓取后继续处理和内容编排返回失败的提示均给出 `process.py` 恢复命令，
+  不再要求用户手工拼接台账、写稿和 TTS。
 - `sections.py` 是 TTS 和 HTML 唯一的 Markdown 章节解析 seam；两侧只保留返回
   旧 tuple 形状的轻量 adapter，避免章节数、标题和正文边界静默漂移。
 - `pipeline_metrics.py` 统一读取质量报告指标，`process.py` 与 `preflight.py` 不再
   各维护一份副本。
 - `quality_errors.py` 给质量错误附加稳定 `error_details[].code`；自动复审依据 error
   code 决策，不再依赖中文错误文案前缀。原 `errors[]` 文本继续保留用于人类阅读。
-- `catalog_health.py` 独立聚合 `run_report.json`/质量/发布状态；
+- `catalog_health.py` 独立聚合 `run_report.json`/质量/发布状态；`catalog_triage.py`
+  只读诊断单集阻断原因并给出下一步自动动作（rerun / content_regen /
+  checker_suspect / gate_only）；
   `site_index.py` 独立完成首页统计和卡片渲染。`catalog.py` 保留 CLI 与发布事务编排，
   通过兼容 wrapper 调用这两个深模块。
 - `hashing.py` 统一文件、文本和 bytes 的 SHA-256；`text_distance.py` 统一 benchmark
   Levenshtein 距离及插入/删除/替换明细，避免两套 DP 漂移。
+- `review_attribution.py` 是审查拒绝归因的唯一词表：把失败的 review JSON
+  确定性投影为原因码（复用 quality_errors 的 ai_review_* 命名）、失败分项、
+  评分和归一化 issue 类别。写入点只有两个：失败时 ai_review 的 run-report
+  stage metrics 与 review_repair history；health 聚合、triage 和历史快照回放
+  都重用同一投影，不另建分类。
 
 流水线把三类判断分开：
 
@@ -423,7 +447,10 @@ AI review 之后，`process.py` 的 TTS/HTML 路径只读验证讲稿和 summary
 继续使用原有音频 key。默认仅记录 dirty 状态；`scripts/release.py ...
 --require-clean` 可选择阻断脏工作区。
 每个自动化命令的阶段耗时、状态、调用量、重试和可用成本字段追加写入
-单集的 `run_report.json`；写入使用临时文件原子替换，中断的 running 记录会在
+单集的 `run_report.json`；失败 ai_review 阶段的 metrics 另含
+`rejection` 结构化归因（原因码、失败分项、评分、归一化 issue 类别，
+词表见 `review_attribution.py`），`review_repair.json` 每轮 history 同步携带，
+供 `catalog.py health` 聚合与 `catalog.py triage` 诊断；写入使用临时文件原子替换，中断的 running 记录会在
 下一次执行时自动标记为失败。
 
 `catalog.py finish-batch` 对多期先统一预检，再以默认三路并发上传内容哈希音频，

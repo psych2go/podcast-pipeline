@@ -75,7 +75,9 @@ def validate_canonical_entities(payload, transcript=None):
         if isinstance(segment, dict) and segment.get("id")
     }
     seen_ids = set()
-    seen_names = {}
+    # Only names that may appear as public identifiers must be globally unique.
+    # observed_names are source mentions and can be descriptive or ambiguous.
+    seen_public_names = {}
     for index, item in enumerate(entities):
         prefix = f"entities[{index}]"
         if not isinstance(item, dict):
@@ -94,15 +96,14 @@ def validate_canonical_entities(payload, transcript=None):
         if not isinstance(observed, list) or not observed:
             errors.append(f"{prefix}.observed_names 不能为空")
             observed = []
-        for name in [canonical, *observed]:
-            normalized = str(name).strip().casefold()
-            if not normalized:
-                continue
-            previous = seen_names.get(normalized)
+        normalized = canonical.casefold()
+        if normalized:
+            previous = seen_public_names.get(normalized)
             if previous and previous != canonical:
                 errors.append(
-                    f"实体别名冲突: {name!r} 同时指向 {previous!r} 和 {canonical!r}")
-            seen_names[normalized] = canonical
+                    f"实体规范名冲突: {canonical!r} 同时指向 "
+                    f"{previous!r} 和 {canonical!r}")
+            seen_public_names[normalized] = canonical
         public_aliases = item.get("public_aliases")
         if not isinstance(public_aliases, list):
             errors.append(f"{prefix}.public_aliases 必须是数组")
@@ -113,12 +114,12 @@ def validate_canonical_entities(payload, transcript=None):
                 errors.append(f"{prefix}.public_aliases 不得包含空值")
                 continue
             normalized = alias.casefold()
-            previous = seen_names.get(normalized)
+            previous = seen_public_names.get(normalized)
             if previous and previous != canonical:
                 errors.append(
                     f"实体公开别名冲突: {alias!r} 同时指向 "
                     f"{previous!r} 和 {canonical!r}")
-            seen_names[normalized] = canonical
+            seen_public_names[normalized] = canonical
         if item.get("entity_type") not in ENTITY_TYPES:
             errors.append(f"{prefix}.entity_type 无效")
         if item.get("confidence") not in CONFIDENCE_VALUES:
@@ -148,11 +149,32 @@ def validate_canonical_entities(payload, transcript=None):
 
 
 def public_entity_alias_errors(payload, *texts):
-    """Reject non-canonical observed aliases that leaked into public prose."""
+    """Reject leaked aliases for identity-bearing public entities.
+
+    Technical terms are concepts, not names whose spelling identifies an entity;
+    translations and explanatory parentheticals therefore remain valid prose.
+    Identity-bearing types still require the canonical name or an explicit
+    public alias, except when an observed variant is wholly contained in an
+    allowed parenthetical/compound alias.
+    """
     errors = []
+    identity_types = {"person", "company", "product", "institution", "title", "place"}
     joined = "\n".join(text or "" for text in texts)
+    observed_counts = {}
+    for entity in payload.get("entities", []) or []:
+        for observed_name in entity.get("observed_names", []) or []:
+            value = str(observed_name).strip().casefold()
+            if value:
+                observed_counts[value] = observed_counts.get(value, 0) + 1
     for item in payload.get("entities", []) or []:
         if not isinstance(item, dict):
+            continue
+        if item.get("entity_type") not in identity_types:
+            continue
+        # Demonyms and geographic modifiers are descriptive language, not
+        # alternate public names of a place (e.g. American, Chinese, Gulf).
+        # They must not be forced into the canonical noun form.
+        if item.get("entity_type") == "place":
             continue
         canonical = str(item.get("canonical_name", "")).strip()
         public_aliases = [
@@ -179,10 +201,20 @@ def public_entity_alias_errors(payload, *texts):
             )
         for observed in item.get("observed_names", []) or []:
             observed = str(observed).strip()
+            # Institutions are commonly named by an established localized
+            # translation (e.g. 社会保障 for Social Security). Requiring every
+            # such translation to be pre-listed as an alias creates false
+            # positives; AI review still checks whether the attribution is right.
+            if (
+                    item.get("entity_type") == "institution"
+                    and observed
+                    and re.fullmatch(r"[\u3400-\u9fff·、（）()\s]+", observed)):
+                continue
             if (
                     not observed
                     or observed == canonical
-                    or observed.casefold() in allowed):
+                    or observed.casefold() in allowed
+                    or observed_counts.get(observed.casefold(), 0) > 1):
                 continue
             flags = (
                 0 if observed.casefold() == canonical.casefold()

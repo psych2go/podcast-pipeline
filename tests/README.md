@@ -21,7 +21,7 @@ GitHub Actions 使用同样的完整 `test_*.py` discovery。下面的单文件�
 | 恢复、严格证据和边界 hardening | `test_pipeline_hardening.py`、`test_pipeline_reliability.py` |
 | transcript completeness / correction manifest | `test_transcript_completeness.py` |
 | 写作前事实核查与 exact entity repair | `test_prewrite_fact_checks.py` |
-| AI review / repair / cache | `test_review_repair.py` |
+| AI review / repair / cache / 拒绝归因 | `test_review_repair.py`、`test_review_attribution.py` |
 | subagent 隔离和恢复 | `test_subagent_isolation.py`、`test_orchestration_recovery.py` |
 | catalog / release / Pages / R2 | `test_release_flow.py` |
 | ASR runtime、refinement、alignment、benchmark | `test_asr_*.py`、`test_diarization_runtime.py`、`test_prepare_ami_benchmark.py` |

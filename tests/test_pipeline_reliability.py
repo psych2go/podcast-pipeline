@@ -1,5 +1,7 @@
 import copy
+import io
 import json
+import shlex
 import sys
 import tempfile
 import unittest
@@ -30,6 +32,9 @@ from content_map import (
 from episode import _source_heading
 import claim_evidence
 import source_relevance
+import process as pipeline_process
+from pipeline.options import EpisodeOptions
+from run_report import RunReport
 from rebuild_plan import build_rebuild_plan
 from source_relevance import (
     expected_source_references,
@@ -488,13 +493,14 @@ class ClaimEvidenceRoleTests(unittest.TestCase):
 
 
 class RebuildPlanTests(unittest.TestCase):
-    def test_transcript_basis_change_is_planned_in_active_mode(self):
+    def test_transcript_basis_change_requires_rebuild(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
             for name in (
                     "transcript.raw.json", "content_map.json",
                     "中文完整笔记.md", "讲书稿.md"):
-                (folder / name).write_text("{}", encoding="utf-8")
+                (folder / name).write_text(
+                    '{"schema_version": 3}', encoding="utf-8")
             (folder / "原始转录.txt").write_text("source", encoding="utf-8")
             (folder / "转录_纠错.txt").write_text("corrected", encoding="utf-8")
             (folder / "summary_map.json").write_text(json.dumps({
@@ -504,12 +510,90 @@ class RebuildPlanTests(unittest.TestCase):
                 },
                 "chapters": [],
             }), encoding="utf-8")
-            plan = build_rebuild_plan(folder)
+            with mock.patch("agent_pipeline.quality_metadata", return_value={
+                    "transcript_status": "已纠错"}):
+                plan = build_rebuild_plan(folder)
         self.assertTrue(plan["needs_content"])
-        self.assertIn("stale:transcript_basis", plan["reasons"])
+        self.assertEqual(plan["reasons"], ["deterministic_validation"])
         self.assertEqual(plan["mode"], "active")
         self.assertEqual(plan["schema_version"], 2)
         self.assertIn("ai_review", plan["stages"])
+
+    def test_report_delegates_once_to_authoritative_check(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            for needed, force in ((False, False), (True, False), (True, True)):
+                with self.subTest(needed=needed, force=force), mock.patch(
+                        "rebuild_plan.content_pipeline_needed",
+                        return_value=needed) as check:
+                    plan = build_rebuild_plan(folder, force=force)
+                    check.assert_called_once_with(folder, force=force)
+                    self.assertEqual(plan["needs_content"], needed)
+                    self.assertEqual(bool(plan["stages"]), needed)
+                    self.assertEqual(plan["affected_units"], [])
+                    self.assertEqual(plan["affected_chapters"], [])
+                    self.assertEqual(plan["reasons"], (
+                        ["force_rebuild" if force else "deterministic_validation"]
+                        if needed else []))
+
+    def test_process_uses_reported_decision_without_rechecking(self):
+        for needed in (False, True):
+            with self.subTest(needed=needed), tempfile.TemporaryDirectory() as td:
+                folder = Path(td)
+                report = RunReport(folder, "process", {})
+                with mock.patch("process.fetch_transcript", return_value=True), \
+                        mock.patch("rebuild_plan.content_pipeline_needed",
+                                   return_value=needed) as check, \
+                        mock.patch("process.run_content_pipeline",
+                                   return_value=True) as run:
+                    self.assertTrue(pipeline_process._process_impl(
+                        "source.txt", "Episode", folder, report, EpisodeOptions()))
+                check.assert_called_once_with(folder, force=False)
+                self.assertEqual(run.call_count, int(needed))
+                stage = next(item for item in report.run["stages"]
+                             if item["name"] == "rebuild_plan")
+                self.assertEqual(stage["metrics"]["needs_content"], needed)
+
+    def test_recovery_message_uses_public_entry_and_quotes_arguments(self):
+        source = "https://example.com/episode?x=1&y=2"
+        name = "Episode's title"
+        for fetch_only in (True, False):
+            with self.subTest(fetch_only=fetch_only), tempfile.TemporaryDirectory() as td:
+                folder = Path(td)
+                output = io.StringIO()
+                with mock.patch("sys.stdout", output), mock.patch(
+                        "process.fetch_transcript", return_value=True), mock.patch(
+                        "process.build_rebuild_plan", return_value={
+                            "needs_content": True, "reasons": ["deterministic_validation"]}), mock.patch(
+                        "process.run_content_pipeline", return_value=False):
+                    result = pipeline_process._process_impl(
+                        source, name, folder, None, EpisodeOptions(fetch_only=fetch_only))
+                self.assertEqual(result, fetch_only)
+                message = output.getvalue()
+                command = next(line.strip() for line in message.splitlines()
+                               if line.startswith("  .venv/bin/python"))
+                self.assertEqual(shlex.split(command), [
+                    ".venv/bin/python", "scripts/process.py", source, "--name", name])
+                self.assertNotIn("--tts-only", message)
+                self.assertNotIn("--force-refetch", message)
+                if not fetch_only:
+                    self.assertIn("run_report.json", message)
+                    self.assertIn("已有成果保留", message)
+
+    def test_fetch_only_and_disabled_auto_content_skip_planning(self):
+        for options in (EpisodeOptions(fetch_only=True),
+                        EpisodeOptions(auto_content=False)):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as td:
+                folder = Path(td)
+                # A broken downstream file must not affect source-only work.
+                (folder / "summary_map.json").write_text("{", encoding="utf-8")
+                with mock.patch("process.fetch_transcript", return_value=True), \
+                        mock.patch("process.build_rebuild_plan") as plan, \
+                        mock.patch("process.run_content_pipeline") as run:
+                    self.assertTrue(pipeline_process._process_impl(
+                        "source.txt", "Episode", folder, None, options))
+                plan.assert_not_called()
+                run.assert_not_called()
 
 
 class CanonicalEntityTests(unittest.TestCase):
@@ -535,6 +619,71 @@ class CanonicalEntityTests(unittest.TestCase):
         self.assertTrue(any("Edward LeMay" in error for error in errors))
         self.assertEqual(
             public_entity_alias_errors(payload, "Interview with Edward Lemay"), [])
+    def test_descriptive_observed_names_may_overlap_across_entities(self):
+        transcript = {"segments": [{"id": "S0001", "text": "Stanford review MIT study"}]}
+        payload = {
+            "schema_version": 1,
+            "entities": [
+                {
+                    "entity_id": "EN0001", "canonical_name": "Stanford University",
+                    "observed_names": ["Stanford review"], "public_aliases": [],
+                    "entity_type": "institution", "source_urls": ["https://stanford.edu"],
+                    "segment_ids": ["S0001"], "confidence": "high",
+                    "rationale": "Institution named in the source context.",
+                },
+                {
+                    "entity_id": "EN0002", "canonical_name": "A 2026 Review",
+                    "observed_names": ["Stanford review"], "public_aliases": [],
+                    "entity_type": "title", "source_urls": ["https://example.com/review"],
+                    "segment_ids": ["S0001"], "confidence": "high",
+                    "rationale": "Review title identified from the source context.",
+                },
+            ],
+        }
+        self.assertEqual(validate_canonical_entities(payload, transcript), [])
+
+    def test_technical_terms_do_not_force_english_canonical_spelling(self):
+        payload = {
+            "schema_version": 1,
+            "entities": [{
+                "entity_id": "EN0001",
+                "canonical_name": "artificial intelligence",
+                "observed_names": ["AI", "AI 模型", "人工智能"],
+                "public_aliases": ["AI", "人工智能"],
+                "entity_type": "technical_term",
+            }],
+        }
+        self.assertEqual(public_entity_alias_errors(
+            payload, "AI 模型正在改变企业软件。"), [])
+
+    def test_localized_institution_name_does_not_require_alias_listing(self):
+        payload = {
+            "schema_version": 1,
+            "entities": [{
+                "entity_id": "EN0001",
+                "canonical_name": "Social Security",
+                "observed_names": ["社会保障"],
+                "public_aliases": ["美国社会保障制度"],
+                "entity_type": "institution",
+            }],
+        }
+        self.assertEqual(public_entity_alias_errors(
+            payload, "社会保障是美国的公共制度。"), [])
+
+    def test_observed_parenthetical_containing_canonical_is_not_a_leak(self):
+        payload = {
+            "schema_version": 1,
+            "entities": [{
+                "entity_id": "EN0001",
+                "canonical_name": "heterodoxy",
+                "observed_names": ["异端思想（heterodoxy）"],
+                "public_aliases": ["heterodoxy", "异端思想"],
+                "entity_type": "technical_term",
+            }],
+        }
+        self.assertEqual(public_entity_alias_errors(
+            payload, "这被称为异端思想（heterodoxy）。"), [])
+
     def test_short_observed_name_inside_canonical_name_is_not_a_leak(self):
         transcript = {"segments": [{"id": "S0001", "text": "Neal Gabler"}]}
         payload = {

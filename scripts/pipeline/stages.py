@@ -105,7 +105,10 @@ STAGES = (
             "讲书稿.md",
             "summary_map.json",
         ),
-        outputs=("ai_review.json", "review_repair.json", "quality_report.json"),
+        outputs=(
+            "ai_review.json", "review_repair.json", "quality_report.json",
+            "ai_review_failures/",  # Only created for rejected review verdicts.
+        ),
     ),
     StageSpec(
         key="tts",

@@ -14,6 +14,16 @@ except ImportError:
     from scripts.sources import source_host
 
 
+def _quality_code(quality):
+    """Prefer the stable error code over localized error text."""
+    details = quality.get("error_details") if isinstance(quality, dict) else None
+    if isinstance(details, list):
+        for item in details:
+            if isinstance(item, dict) and item.get("code"):
+                return str(item["code"])
+    return None
+
+
 def _load_json_file(path):
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -66,6 +76,10 @@ def build_health_report(content_dir, since="7d", now=None):
     stage_stats = defaultdict(
         lambda: {"runs": 0, "failures": 0, "durations": []})
     error_counts = Counter()
+    rejection_codes = Counter()
+    rejection_categories = Counter()
+    rejection_other_raw = Counter()
+    episode_rejections = Counter()
     source_failures = Counter()
     total_runs = 0
     retry_count = 0
@@ -125,6 +139,20 @@ def build_health_report(content_dir, since="7d", now=None):
                 retry_count += int(_metric_number(metrics.get("retry_count")))
                 tls_downgrades += int(bool(metrics.get("tls_downgrade")))
                 reported_cost += _metric_number(metrics.get("reported_cost_usd"))
+                if name == "ai_review" and stage.get("status") == "failed":
+                    rejection = metrics.get("rejection")
+                    if isinstance(rejection, dict):
+                        episode_rejections[folder.name] += 1
+                        for code in rejection.get("codes", []) or []:
+                            rejection_codes[str(code)] += 1
+                        for category, count in (
+                                rejection.get("issue_counts", {}) or {}).items():
+                            rejection_categories[str(category)] += int(
+                                _metric_number(count))
+                        for raw, count in (
+                                rejection.get("other_raw_counts", {}) or {}).items():
+                            rejection_other_raw[str(raw)] += int(
+                                _metric_number(count))
                 usage = metrics.get("usage", {})
                 if isinstance(usage, dict):
                     for key in (
@@ -157,7 +185,7 @@ def build_health_report(content_dir, since="7d", now=None):
                 failed_stages[-1].get("name") if failed_stages
                 else latest_failure.get("command", "unknown")
             )
-            reason = (
+            reason = _quality_code(quality) or (
                 failed_stages[-1].get("error") if failed_stages
                 else latest_failure.get("error")
             ) or next(iter(quality.get("errors", [])), "质量门未通过")
@@ -201,6 +229,36 @@ def build_health_report(content_dir, since="7d", now=None):
             lines.append(f"| {count} | {_md_cell(error)} |")
     else:
         lines.append("| 0 | 无 |")
+
+    lines.extend([
+        "", "## AI 审查拒绝归因", "",
+        "按失败 ai_review 阶段的结构化归因聚合；issue 类别只统计驱动拒绝的 high/critical。",
+        "", "| 次数 | 拒绝原因码 |", "|---:|---|",
+    ])
+    if rejection_codes:
+        for code, count in rejection_codes.most_common(10):
+            lines.append(f"| {count} | {_md_cell(code)} |")
+    else:
+        lines.append("| 0 | 无 |")
+    lines.extend(["", "| 次数 | issue 类别（high/critical） |", "|---:|---|"])
+    if rejection_categories:
+        for category, count in rejection_categories.most_common(10):
+            lines.append(f"| {count} | {_md_cell(category)} |")
+    else:
+        lines.append("| 0 | 无 |")
+    if rejection_other_raw:
+        lines.extend([
+            "", "未归入已知类别的原始 category（建议扩充别名表）：",
+            "",
+        ])
+        for raw, count in rejection_other_raw.most_common(10):
+            lines.append(f"- {count} × {_md_cell(raw)}")
+    if episode_rejections:
+        lines.extend([
+            "", "| 拒绝次数 | 单集 |", "|---:|---|",
+        ])
+        for name, count in episode_rejections.most_common(5):
+            lines.append(f"| {count} | {_md_cell(name)} |")
 
     lines.extend(["", "## 失败来源", "", "| 次数 | 域名 |", "|---:|---|"])
     if source_failures:

@@ -143,9 +143,13 @@ class AiReviewIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
             self._episode(folder)
+            archive = folder / "ai_review_failures"
+            archive.mkdir()
+            (archive / "previous.json").write_text('{"passed": false}', encoding="utf-8")
             observed = {}
 
             def fake_runner(workspace, prompt, *_args, **_kwargs):
+                observed["has_failure_archive"] = (workspace / "ai_review_failures").exists()
                 observed["has_previous_review"] = (workspace / "ai_review.json").exists()
                 observed["prompt"] = prompt
                 return {"payload": {"passed": True}, "command": "fake"}
@@ -155,6 +159,7 @@ class AiReviewIsolationTests(unittest.TestCase):
                 review = ai_review.run_ai_review(folder, persist=False)
             self.assertTrue(review["input_snapshot_verified"])
             self.assertFalse(observed["has_previous_review"])
+            self.assertFalse(observed["has_failure_archive"])
             self.assertIn("不会提供上次 ai_review.json", observed["prompt"])
             self.assertNotIn("transcript_quality\": {\"score\": 100", observed["prompt"])
 
@@ -250,6 +255,92 @@ class AiReviewIsolationTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "超出预期"):
                     ai_review.review_episode(folder)
             cache.assert_not_called()
+
+    def test_failed_review_snapshots_survive_retries_and_later_success(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            self._episode(folder)
+            report = ai_review.RunReport(folder, "ai_review", {})
+            retained = {}
+            for passed in (False, False, True):
+                review = {
+                    "passed": passed,
+                    "reviewed_at": "2026-09-01T00:00:00+00:00",
+                    "issues": [] if passed else [{
+                        "category": "factuality", "severity": "high",
+                        "statement": "A claim needs correction",
+                    }],
+                    "fact_checks": [], "reviewer": {"model": "test"},
+                    "reviewed_files": ai_review.reviewed_hashes(folder),
+                    "review_context": ai_review.review_context_hashes(folder),
+                }
+                with patch.object(ai_review, "run_ai_review", return_value=review), \
+                        patch.object(ai_review, "update_cache_from_review", return_value=0):
+                    ai_review.review_episode(folder, run_report=report)
+                saved_report = json.loads((folder / "run_report.json").read_text())
+                stage = saved_report["runs"][-1]["stages"][-1]
+                if passed:
+                    self.assertNotIn("failure_snapshot", stage["metrics"])
+                    self.assertEqual(stage["status"], "passed")
+                else:
+                    relative = Path(stage["metrics"]["failure_snapshot"])
+                    self.assertFalse(relative.is_absolute())
+                    self.assertEqual(relative.parent.as_posix(), "ai_review_failures")
+                    self.assertEqual(relative.stem, stage["id"])
+                    snapshot = folder / relative
+                    self.assertNotIn(snapshot, retained)
+                    retained[snapshot] = snapshot.read_bytes()
+                    self.assertEqual(json.loads(retained[snapshot]), json.loads(
+                        (folder / "ai_review.json").read_text()))
+                    self.assertEqual(stage["status"], "failed")
+                for snapshot, original in retained.items():
+                    self.assertEqual(snapshot.read_bytes(), original)
+            report.finish(True)
+            self.assertEqual(len(retained), 2)
+            self.assertEqual(len(list((folder / "ai_review_failures").glob("*.json"))), 2)
+            self.assertTrue(json.loads((folder / "ai_review.json").read_text())["passed"])
+
+    def test_snapshot_write_failure_remains_a_recorded_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            self._episode(folder)
+            review = {
+                "passed": False, "issues": [], "fact_checks": [], "reviewer": {},
+                "reviewed_files": ai_review.reviewed_hashes(folder),
+                "review_context": ai_review.review_context_hashes(folder),
+            }
+            write = ai_review.atomic_write_json
+
+            def fail_archive(path, payload):
+                if Path(path).parent.name == "ai_review_failures":
+                    raise OSError("snapshot disk error")
+                return write(path, payload)
+
+            with patch.object(ai_review, "run_ai_review", return_value=review), \
+                    patch.object(ai_review, "atomic_write_json", side_effect=fail_archive), \
+                    patch.object(ai_review, "update_cache_from_review") as cache:
+                with self.assertRaisesRegex(OSError, "snapshot disk error"):
+                    ai_review.review_episode(folder)
+            cache.assert_not_called()
+            self.assertFalse(json.loads((folder / "ai_review.json").read_text())["passed"])
+            run = json.loads((folder / "run_report.json").read_text())["runs"][-1]
+            self.assertEqual(run["status"], "failed")
+            self.assertIn("snapshot disk error", run["error"])
+            self.assertNotIn("failure_snapshot", run["stages"][-1]["metrics"])
+
+    def test_runner_error_does_not_fabricate_review_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            self._episode(folder)
+            previous = (folder / "ai_review.json").read_bytes()
+            with patch.object(ai_review, "run_ai_review", side_effect=RuntimeError("provider unavailable")):
+                with self.assertRaisesRegex(RuntimeError, "provider unavailable"):
+                    ai_review.review_episode(folder)
+            self.assertFalse((folder / "ai_review_failures").exists())
+            self.assertEqual((folder / "ai_review.json").read_bytes(), previous)
+            run = json.loads((folder / "run_report.json").read_text())["runs"][-1]
+            self.assertEqual(run["status"], "failed")
+            self.assertIn("provider unavailable", run["stages"][-1]["error"])
 
     def test_cache_updates_only_after_authoritative_review_write(self):
         with tempfile.TemporaryDirectory() as td:

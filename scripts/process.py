@@ -31,6 +31,7 @@ if _scripts not in sys.path:
 import json
 import os
 import re
+import shlex
 import uuid
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -66,7 +67,7 @@ except ImportError:
     from scripts.hashing import (
         sha256_file as _source_sha256, sha256_text as _text_sha256)
 from preflight import quality_gate as shared_quality_gate
-from agent_pipeline import content_pipeline_needed, run_content_pipeline
+from agent_pipeline import run_content_pipeline
 from rebuild_plan import build_rebuild_plan
 from release import prepare_release
 from run_report import RunReport
@@ -883,35 +884,43 @@ def _process_impl(source, name, folder, run_report, options):
             return False
     _warn_if_asr_needs_correction(folder)
 
+    # Resume through the public entry point, reusing immutable source evidence.
+    # Deliberately omit --force-refetch and source-only flags.
+    resume_command = shlex.join([
+        ".venv/bin/python", "scripts/process.py", str(source), "--name", name,
+    ])
     # ---- 抓取后：默认由 subagent 自动生成内容 ----
     briefing_file, briefing_path = detect_briefing(folder)
-    rebuild_plan = build_rebuild_plan(folder, force=force_refetch)
-    with _stage(run_report, "rebuild_plan", rebuild_plan):
-        pass
-    needs_content = (
-        not fetch_only
-        and auto_content
-        and content_pipeline_needed(folder, force=force_refetch)
-    )
+    needs_content = False
+    if not fetch_only and auto_content:
+        with _stage(run_report, "rebuild_plan") as stage:
+            rebuild_plan = build_rebuild_plan(folder, force=force_refetch)
+            needs_content = rebuild_plan["needs_content"]
+            if stage is not None:
+                stage.metrics.update(rebuild_plan)
     if needs_content:
-        reasons = rebuild_plan.get("reasons") or ["deterministic_validation"]
-        print("[内容计划] " + ", ".join(reasons[:8]), flush=True)
+        print("[内容计划] " + ", ".join(rebuild_plan["reasons"]), flush=True)
         print("[内容] 内容产物缺失、过期或不完整，启动 subagent 编排...", flush=True)
         if not run_content_pipeline(
                 folder,
                 display_title or name,
                 run_report,
                 force=force_refetch):
-            print("[内容][阻断] subagent 内容编排失败", flush=True)
+            print(
+                "[内容][阻断] 内容编排失败；已有成果保留。"
+                f"请查看 {folder / 'run_report.json'} 的失败阶段，"
+                "排除原因后通过统一入口恢复：\n"
+                f"  {resume_command}",
+                flush=True,
+            )
             return False
         briefing_file, briefing_path = detect_briefing(folder)
     if fetch_only or not briefing_path:
         print(
-            "\n[下一步] 转录已就绪。请运行 subagent 内容编排，或手动生成\n"
-            f"  {folder / '原始转录.txt'}\n"
-            "并生成 content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json，"
-            "完成后运行：\n"
-            f"  python scripts/process.py --name \"{name}\" --tts-only",
+            "\n[下一步] 转录已就绪，内容尚未继续处理。"
+            "无需手工生成台账或拼接内部阶段。\n"
+            "通过统一入口继续（复用原始证据，并检查已有内容是否可复用）：\n"
+            f"  {resume_command}",
             flush=True,
         )
         return True

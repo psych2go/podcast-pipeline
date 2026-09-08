@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Podcast catalog CLI and compatibility exports.
 
-All implementation lives in catalog_core, catalog_site, catalog_health, and
-catalog_publish. Callers that need alternate paths should configure a
-CatalogPaths instance explicitly instead of monkeypatching this facade.
+All implementation lives in catalog_core, catalog_site, catalog_health,
+catalog_triage, and catalog_publish. Callers that need alternate paths should
+configure a CatalogPaths instance explicitly instead of monkeypatching this
+facade.
 """
 import argparse
+import json
 
 try:
     from atomic_io import atomic_write_text
@@ -17,6 +19,11 @@ try:
         episode_stats, rebuild_catalog,
     )
     from catalog_health import build_health_report as _build_health_report
+    from catalog_triage import (
+        render_markdown as _render_triage_markdown,
+        triage_all as _triage_all,
+        triage_episode as _triage_episode,
+    )
     from catalog_publish import (
         BASE_DIR, PAGES_BASE_URL, PAGES_PROJECT, R2_BUCKET, R2_PUBLIC_URL,
         _PublishFailure, _batch_publish_item, _candidate_catalog_errors,
@@ -46,6 +53,11 @@ except ImportError:
         episode_stats, rebuild_catalog,
     )
     from scripts.catalog_health import build_health_report as _build_health_report
+    from scripts.catalog_triage import (
+        render_markdown as _render_triage_markdown,
+        triage_all as _triage_all,
+        triage_episode as _triage_episode,
+    )
     from scripts.catalog_publish import (
         BASE_DIR, PAGES_BASE_URL, PAGES_PROJECT, R2_BUCKET, R2_PUBLIC_URL,
         _PublishFailure, _batch_publish_item, _candidate_catalog_errors,
@@ -109,6 +121,17 @@ def main():
     sub.add_parser("gen-index", help="从 site.json 重建首页 index.html")
     sub.add_parser("backfill-sources", help="为缺来源信息的期回填来源")
     p = sub.add_parser("health", help="汇总近期跨单集运行健康度"); p.add_argument("--since", default="7d"); p.add_argument("--output", default=None)
+    triage_parser = sub.add_parser(
+        "triage", help="只读诊断质量门/AI 审查阻断原因并给出下一步自动动作")
+    triage_parser.add_argument("name", nargs="?", default=None)
+    triage_parser.add_argument(
+        "--all", dest="all_episodes", action="store_true",
+        help="诊断全部 strict 模式单集")
+    triage_parser.add_argument(
+        "--blocked", action="store_true",
+        help="仅列出被阻断单集；存在阻断时退出码为 1")
+    triage_parser.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    triage_parser.add_argument("--output", default=None)
     p = sub.add_parser("finish", help="完整发布：R2 + Pages + 远端验收"); p.add_argument("name"); p.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("finish-batch", help="批量完整发布：R2 + Pages + 逐期远端验收"); p.add_argument("names", nargs="+"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--upload-concurrency", type=int, default=3)
     args = parser.parse_args()
@@ -127,6 +150,25 @@ def main():
     elif args.cmd == "health":
         try: health(args.since, args.output)
         except ValueError as exc: parser.error(str(exc))
+    elif args.cmd == "triage":
+        if bool(args.all_episodes) == (args.name is not None):
+            triage_parser.error("name 与 --all 必须二选一")
+        if args.all_episodes:
+            reports = _triage_all(CONTENT_DIR, blocked_only=args.blocked)
+        else:
+            folder = CONTENT_DIR / args.name
+            if not folder.is_dir():
+                triage_parser.error(f"找不到单集目录: {args.name}")
+            reports = [_triage_episode(folder)]
+        if args.json:
+            text = json.dumps(reports, ensure_ascii=False, indent=2)
+        else:
+            text = _render_triage_markdown(reports)
+        if args.output:
+            atomic_write_text(args.output, text)
+            print(f"[Triage] 已写入 {args.output}")
+        print(text, end="")
+        return 1 if args.blocked and any(r["blocked"] for r in reports) else 0
     elif args.cmd == "finish": return 0 if finish(args.name, args.dry_run) else 1
     elif args.cmd == "finish-batch": return 0 if finish_batch(args.names, args.dry_run, upload_concurrency=args.upload_concurrency) else 1
     return 0
