@@ -26,6 +26,7 @@ try:
         FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
         validate_ledger as validate_prewrite_fact_checks,
     )
+    from review_attribution import attribute_rejection
 except ImportError:
     from scripts.ai_review import review_episode
     from scripts.atomic_io import (
@@ -52,6 +53,7 @@ except ImportError:
         FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
         validate_ledger as validate_prewrite_fact_checks,
     )
+    from scripts.review_attribution import attribute_rejection
 
 
 SAFE_SUMMARY_CATEGORIES = {"summary_map", "summary", "coverage_mapping"}
@@ -449,6 +451,8 @@ def review_and_repair(
             "passed": bool(review.get("passed")),
             "reviewed_files": review.get("reviewed_files", {}),
         })
+        if not review.get("passed"):
+            history[-1]["rejection"] = attribute_rejection(review)
         if review.get("passed"):
             break
         if round_index >= max_rounds:

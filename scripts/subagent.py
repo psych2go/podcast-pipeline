@@ -506,6 +506,13 @@ def _run(
         timeout=None,
 ):
     folder = Path(folder).resolve()
+    # Per-task model arguments (e.g. SUBAGENT_REVIEW_MODEL) take precedence;
+    # SUBAGENT_MODEL fills the stages that do not select a model themselves.
+    model = (
+        model
+        or os.environ.get("SUBAGENT_MODEL", "").strip()
+        or None
+    )
     commands = _runner_commands()
     timeout = timeout or int(os.environ.get("SUBAGENT_TIMEOUT", "1800"))
     max_retries = int(os.environ.get("SUBAGENT_MAX_RETRIES", "2"))

@@ -98,6 +98,50 @@ class SubagentIsolationTests(unittest.TestCase):
             self.assertEqual(observed["catalog"], '{"models":[]}')
             self.assertEqual(observed["config_mode"], 0o600)
 
+    def test_global_model_env_applies_when_task_has_no_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            episode = root / "episode"
+            episode.mkdir()
+            source_home = root / "source-codex"
+            source_home.mkdir()
+            (source_home / "config.toml").write_text(
+                'model="config-default"\n', encoding="utf-8")
+            observed = {}
+
+            def fake_process(cmd, *, cwd, env, timeout):
+                observed["cmd"] = cmd
+                return type("Result", (), {
+                    "returncode": 0, "stdout": "ok", "stderr": ""})()
+
+            base_env = {
+                "CODEX_HOME": str(source_home),
+                "SUBAGENT_COMMAND": "codex",
+                "SUBAGENT_MAX_RETRIES": "0",
+            }
+            with patch.dict(os.environ, {
+                    **base_env, "SUBAGENT_MODEL": "glm-5.3-flash"}, clear=False), \
+                    patch("subagent.shutil.which", return_value="/bin/codex"), \
+                    patch("subagent._run_process", side_effect=fake_process):
+                subagent._run(episode, "task", task_name="env_model")
+                self.assertIn("--model", observed["cmd"])
+                self.assertEqual(
+                    observed["cmd"][observed["cmd"].index("--model") + 1],
+                    "glm-5.3-flash")
+                # An explicit per-task model wins over the global fallback.
+                subagent._run(
+                    episode, "task", task_name="explicit_model",
+                    model="task-model")
+                self.assertEqual(
+                    observed["cmd"][observed["cmd"].index("--model") + 1],
+                    "task-model")
+            with patch.dict(os.environ, base_env, clear=False), \
+                    patch("subagent.shutil.which", return_value="/bin/codex"), \
+                    patch("subagent._run_process", side_effect=fake_process):
+                # Without the env override the runner keeps its config default.
+                subagent._run(episode, "task", task_name="no_model")
+                self.assertNotIn("--model", observed["cmd"])
+
     def test_codex_profile_is_sanitized_and_copied(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

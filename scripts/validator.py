@@ -325,12 +325,11 @@ def normalize_briefing_artifacts(text, summary_map):
 
 
 _AUDIT_NARRATION_PATTERNS = (
-    re.compile(r"本稿|本文|本次审查|审查过程|审查结论|核查过程"),
-    re.compile(r"这里(?:不采用|不保留|不把|不将|只按|仅按|必须保留|材料说的是)"),
-    re.compile(r"因此(?:不采用|不保留|不把|不将)"),
-    re.compile(r"由于[^。；\n]{0,60}(?:不采用|不保留|不把|不将)"),
-    re.compile(r"未独立核实(?:底层引语|原始说法|相关数字)?"),
-    re.compile(r"不可合并，因此"),
+    # Domain terms such as 审查过程 and attributed uncertainty need context;
+    # leave those to independent AI review rather than banning normal prose.
+    re.compile(r"(?:本稿|本文|本次审查|本次核查)[^。；\n]{0,40}"
+               r"(?:未独立核实|不采用|不保留|删除|省略|核查发现|审查发现)"),
+    re.compile(r"这里(?:不采用|不保留|只按|仅按|材料说的是)"),
     re.compile(r"纠错稿(?:已|将|把)"),
 )
 

@@ -10,6 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
+    from review_attribution import attribute_rejection
+except ImportError:
+    from scripts.review_attribution import attribute_rejection
+
+try:
     from hashing import sha256_file as sha256
 except ImportError:
     from scripts.hashing import sha256_file as sha256
@@ -592,7 +597,10 @@ def _prompt(folder, scope=None):
    - 应保留“节目称”“报道称”“仍在洽谈”“这是预测而非已发生结果”等影响理解的限定；
    - 禁止出现“这里不采用”“这里不保留”“本稿未独立核实”“由于口径不同因此删除”等后台审查叙述；
    - 若精确数字被舍弃，讲稿应直接自然概括并保留来源归因，不得向听众解释流水线为何删数。
-   发现审查过程语言时，publish.passed=false，并创建 briefing_style high issue。
+   这里禁止的是本流水线的后台编辑/审查决策泄漏，不是“审查过程”“核查过程”等词本身。
+   正常讨论政策监督、论文核查、机构审批，以及明确归因给节目人物或媒体的未核实声明，
+   不得仅因包含这些词判失败；根据语境区分节目内容和本稿后台叙述。
+   发现后台审查决策泄漏时，publish.passed=false，并创建 briefing_style high issue。
 12. 检查讲稿是否适合中文 TTS：阿拉伯数字、英文缩写、专有名词、难读符号和可能误读的混合表达。
    如果存在 tts_lexicon.json，还要检查替换是否会改变原意、误替换子串或引入错误读音。
 13. 检查 summary_map 是否真实反映讲稿，而不是只自报 unit IDs。
@@ -894,6 +902,15 @@ def review_episode(
             assert_review_snapshot(
                 folder, after_status, context_snapshot)
             atomic_write_json(output, review)
+            if not review.get("passed"):
+                # Retain this verdict before a later review overwrites ai_review.json.
+                # The existing stage UUID also distinguishes retries in the same run.
+                snapshot = folder / "ai_review_failures" / f"{stage.payload['id']}.json"
+                atomic_write_json(snapshot, review)
+                stage.metrics["failure_snapshot"] = snapshot.relative_to(folder).as_posix()
+                # Structured rejection reason recorded at failure time so
+                # cross-episode trending never has to reopen snapshots.
+                stage.metrics["rejection"] = attribute_rejection(review)
             try:
                 review["fact_check_cache_entries_written"] = (
                     update_cache_from_review(folder, review))

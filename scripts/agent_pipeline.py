@@ -1,4 +1,5 @@
 """Subagent-orchestrated content production for a single episode."""
+import hashlib
 import json
 import os
 import re
@@ -297,6 +298,17 @@ def content_pipeline_needed(folder, force=False):
     ]
     if any(not path.exists() for path in required):
         return True
+    # A current rejected review is actionable input for content recovery: the
+    # next public-entry run must regenerate prose before requesting another
+    # independent review, rather than reusing the rejected package forever.
+    review_path = folder / "ai_review.json"
+    if review_path.exists():
+        try:
+            review = load_json(review_path)
+        except (OSError, ValueError, TypeError):
+            return True
+        if review.get("passed") is False:
+            return True
     if not _accepted_transcript_status(
             quality_metadata(folder).get("transcript_status")):
         return True
@@ -323,6 +335,11 @@ def content_pipeline_needed(folder, force=False):
             summary_map, briefing_text, content_map, notes_text)
         tts_errors = validate_tts_readiness(
             briefing_text, load_tts_lexicon(folder))
+        alias_errors = public_entity_alias_errors(
+            load_json(folder / "canonical_entities.json"),
+            notes_text,
+            briefing_text,
+        )
         ledger_path = folder / PREWRITE_FACT_CHECKS_FILENAME
         ledger_required = int(
             content_map.get("prewrite_fact_checks_version", 0) or 0
@@ -331,13 +348,15 @@ def content_pipeline_needed(folder, force=False):
             (ledger_required or ledger_path.exists())
             and not ledger_is_current(folder)
         )
-        return bool(errors or summary_errors or tts_errors or ledger_stale)
+        return bool(
+            errors or summary_errors or tts_errors or alias_errors or ledger_stale
+        )
     except (OSError, ValueError, TypeError):
         return True
 
 
-def _writing_artifacts_are_current(folder):
-    """Return whether semantic prose can be reused without regeneration."""
+def _writing_artifacts_are_current(folder, *, require_bound_inputs=False):
+    """Validate prose reuse; upstream repairs require explicit input bindings."""
     folder = Path(folder)
     required = [
         folder / "transcript.raw.json",
@@ -357,6 +376,10 @@ def _writing_artifacts_are_current(folder):
             encoding="utf-8")
         summary_map = normalize_summary_claim_ids(
             load_json(folder / "summary_map.json"))
+        if (
+                require_bound_inputs
+                and summary_map.get("writing_inputs_version") != WRITING_INPUTS_VERSION):
+            return False
         if not _transcript_basis_is_current(folder, summary_map):
             return False
         if not _writing_inputs_are_current(folder, summary_map):
@@ -375,6 +398,21 @@ def _writing_artifacts_are_current(folder):
         return not map_errors and not summary_errors and ledger_current
     except (OSError, ValueError, TypeError):
         return False
+
+
+def _writing_prompt():
+    rules = (Path(__file__).resolve().parent / "讲稿提示词.md").read_text(
+        encoding="utf-8").strip()
+    return rules + """
+
+## 本次受限任务
+
+读取 transcript.raw.json、原始转录.txt、存在时的 转录_纠错.txt，以及
+content_map.json、canonical_entities.json、editorial_fact_checks.json。
+按规则依次生成 中文完整笔记.md、讲书稿.md、summary_map.json。
+只允许修改这三个输出；不得修改输入台账或任何证据文件，不要运行内部阶段命令。
+summary_map 先写结构，正文哈希与 writing_inputs 绑定由主流程最终化补齐。
+"""
 
 
 def _correction_prompt(source_kind):
@@ -650,9 +688,13 @@ def _ensure_tts_lexicon_ready(folder, briefing_path):
 
 读取讲书稿.md，在 tts_lexicon.json 中为确实出现的完整词或完整短语增加精确映射。
 输出必须是 JSON 对象 {{\"原词或短语\": \"自然中文朗读文本\"}}。
-优先映射完整表达，例如 A/B，而不是单独映射 /；不得使用空 key、不得级联替换，
-不得修改讲书稿或任何内容事实。混合大小写品牌、技术符号应按上下文给出自然读音；
-拿不准时不要猜。只修改 tts_lexicon.json。""",
+每个新增 key 必须是讲稿中实际出现的单个英文/数字/符号 token 或短专名，
+不得包含中文释义、中文长短语、连字符两侧的中文组合、整句或机构描述；
+key 最多 48 个字符、最多 6 个空格分词、最多 6 个汉字，并且必须含有英文、数字、
+加号、斜杠、& 或括号之一。优先映射完整表达，例如 A/B，而不是单独映射 /；
+不得使用空 key、不得级联替换，不得修改讲书稿或任何内容事实。
+混合大小写品牌、技术符号应按上下文给出自然读音；拿不准时不要猜。
+只修改 tts_lexicon.json。""", 
         task_name="tts_lexicon_pre_review",
         allowed_files=[lexicon_path],
         input_files=[briefing_path],
@@ -684,7 +726,6 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
         raise RuntimeError("subagent 内容流程缺少原始转录证据")
 
     raw = load_json(raw_path)
-    writing_was_current = not force and _writing_artifacts_are_current(folder)
     source_kind = effective_source_kind(folder, raw)
     correction_path = folder / "转录_纠错.txt"
     source_path = folder / "来源.md"
@@ -944,11 +985,42 @@ JSON，不修改文件。""",
         notes_path = folder / "中文完整笔记.md"
         briefing_path = folder / "讲书稿.md"
         summary_path = folder / "summary_map.json"
+        # Recheck after upstream repairs: regeneration is not necessarily a
+        # semantic change. Legacy prose without input bindings stays conservative.
+        alias_errors = public_entity_alias_errors(
+            load_json(entities_path),
+            notes_path.read_text(encoding="utf-8")
+            if notes_path.exists() else "",
+            briefing_path.read_text(encoding="utf-8")
+            if briefing_path.exists() else "",
+        ) if entities_path.exists() else ["canonical_entities.json 缺失"]
+        review_path = folder / "ai_review.json"
+        review_content_changed = False
+        if review_path.exists():
+            try:
+                previous_review = load_json(review_path)
+            except (OSError, ValueError, TypeError):
+                previous_review = {}
+            expected_files = previous_review.get("reviewed_files", {})
+            if previous_review.get("passed") is False and isinstance(
+                    expected_files, dict):
+                for path in (notes_path, briefing_path, summary_path):
+                    if path.exists():
+                        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                        if expected_files.get(path.name) != actual:
+                            review_content_changed = True
+                            break
         writing_ready = (
-            writing_was_current
-            and content_map_ready
-            and entities_ready
-            and ledger_ready
+            not force
+            and not alias_errors
+            and (
+                review_content_changed
+                or _writing_artifacts_are_current(
+                    folder,
+                    require_bound_inputs=not (
+                        content_map_ready and entities_ready and ledger_ready),
+                )
+            )
         )
         if writing_ready:
             if stage is not None:
@@ -960,57 +1032,32 @@ JSON，不修改文件。""",
                     ],
                 })
         else:
+            writing_prompt = _writing_prompt()
+            if review_path.exists():
+                try:
+                    previous_review = load_json(review_path)
+                except (OSError, ValueError, TypeError):
+                    previous_review = {}
+                if previous_review.get("passed") is False:
+                    review_issues = previous_review.get("issues") or []
+                    writing_prompt += (
+                        "\n\n## 上一轮独立审查的修复清单\n"
+                        "以下问题必须逐项修复；不能把审查过程写进公开稿。\n"
+                        + json.dumps(review_issues, ensure_ascii=False)
+                        + "\n"
+                    )
             run_edit_task(
-            folder,
-            f"""读取 transcript.raw.json、原始转录.txt，
-如果存在则读取 转录_纠错.txt，并读取已经完成的 content_map.json、
-canonical_entities.json 和 editorial_fact_checks.json。content_map 只表示节目实际说了什么；
-editorial_fact_checks.json 是绑定当前 content_map 和转录基准的外部核查台账，
-只能把其中有 URL 支持的 editorial_correction 作为自然事实限定写入笔记和讲稿，
-不得把外部纠正反写进 content_map 或伪装成由 Sxxxx 片段直接支持。
-
-按顺序完成：
-1. 先写 中文完整笔记.md，逐项覆盖所有 included high/medium unit，以及所有
-condensed unit 的实质 claims、numbers 和 examples，保留人物归属、限定条件、时间顺序和推理链。
-2. 再写 讲书稿.md，将完整笔记整理为适合中文收听的讲书稿；included high/medium
-必须覆盖，condensed 可按收听价值选择是否进入。
-3. 最后写 summary_map.json，映射章节标题、unit_ids 和 claim_ids；并显式填写
-notes_claim_ids、notes_number_ids、notes_example_ids，只能列入中文完整笔记正文实际
-覆盖的 claim/number/example。若仍有 notes 必需项未覆盖，先补写笔记，再加入对应 ID。
-
-要求：
-- 必须使用 canonical_entities.json 中的 canonical_name；observed_names 只用于定位原始错误，不得泄漏到公开文本；
-- 不得编造转录之外的观点；
-- 不得遗漏 included high/medium 的 claims、numbers 或 examples；所有 condensed
-  实质 claim 必须进入完整笔记，但进入讲稿可选；
-- 必须保持 content_map.claim_modalities：conditional 继续使用“如果/即使/可能”，prediction 继续标明预测，opinion/recommendation 保留说话人归因；
-- 中文完整笔记必须逐项覆盖 content_map 的 number_items 和 example_items；summary_map 分别用完整 ID（如 U0001-N01、U0001-E01）声明；
-- 完成前按中文汉字数自检：中文完整笔记必须至少比讲书稿多百分之十五；不足时只能
-  从转录和 content_map 补充证据细节、数字范围、例子、限定条件与推理链，禁止用重复或空话凑字数；
-- excluded unit 不得进入中文完整笔记、讲书稿或 summary_map；
-- editorial_fact_checks.json 的 issue_inventory 中所有 critical/high/medium 问题
-  必须在写作时一次性处理；不得修完第一个问题就停止，也不得遗漏同一 claim 的其他问题；
-- 外部纠正必须保留节目原话的说话人归因，并自然说明官方、一手论文或原始报告口径；
-- 不要修改 content_map.json、editorial_fact_checks.json 或任何证据文件；
-- 第一个 ## 前写 50–100 字全局导览；
-- 每章正文必须包含 420–900 个中文汉字（按汉字计数，不是总字符），禁止超过 1000；
-- 章节标题必须准确概括该章 unit，不得用一个话题标题承载无关的后续主题；
-- 讲稿必须保留影响理解的事实状态，例如“节目称”“报道称”“仍在洽谈”“这是预测而非已发生结果”；
-- 中文完整笔记和讲稿都禁止出现面向内部的审查决策语言，例如“这里不采用”“这里不保留”“本稿未独立核实”“由于口径不同因此删除”；审查理由只写入 JSON 审查产物，不写给听众；
-- 为避免确定性审计语言误判，即使讨论政策监督也不要使用“审查过程”这一短语，改用“决策程序”“审批流程”或更具体的领域表达；
-- 不得向听众描述转录或证据处理状态，例如“转录口述”“转录不清”“识别不清”“转录没有确认”；应直接写自然的来源限定，如“节目称”“公开报告估算”“节目没有说明”；
-- 对嘉宾针对第三方研究方法、实验次数或外部机构判断的指控，只能采用 content_map 明确保留且有来源支持的精度；否则保留说话人归因并自然概括，不得从转录重新加入被 content_map 删除的精确次数或机构背书；
-- 若删除无法核实的精确数字，直接用自然、带归因的概括表达核心观点，不向听众解释后台为什么删数；
-- 讲稿每个 ## 标题必须与 summary_map.chapters[].title 逐字一致；
-- summary_map 先写结构，正文哈希由主脚本补齐。""",
-            task_name="content_writing",
-            allowed_files=[notes_path, briefing_path, summary_path],
-            input_files=[
-                path for path in (
-                    raw_path, transcript_path, correction_path,
-                    content_map_path, entities_path, source_path, ledger_path)
-                if path.exists()
-            ],
+                folder,
+                writing_prompt,
+                task_name="content_writing",
+                allowed_files=[notes_path, briefing_path, summary_path],
+                input_files=[
+                    path for path in (
+                        raw_path, transcript_path, correction_path,
+                        content_map_path, entities_path, source_path, ledger_path,
+                        review_path if review_path.exists() else None)
+                    if path is not None and path.exists()
+                ],
                 required_files=[notes_path, briefing_path, summary_path],
             )
         missing = [
@@ -1036,7 +1083,7 @@ notes_claim_ids、notes_number_ids、notes_example_ids，只能列入中文完�
         normalization_changes = finalized["normalization_changes"]
         tts_readiness = _ensure_tts_lexicon_ready(
             folder, folder / "讲书稿.md")
-        if not writing_ready:
+        if (not writing_ready) or review_content_changed:
             content_map, transcript = enrich_content_map_evidence(
                 content_map, transcript)
             summary_map = enrich_summary_map_evidence(

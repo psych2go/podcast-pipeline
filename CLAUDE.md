@@ -182,14 +182,14 @@ SHA-256。新 evidence revision 同时声明 `source_accountability_contract_ver
 
 claim evidence 完成后，主脚本先生成 `editorial_fact_checks.json`。该台账逐条覆盖所有非排除 source claim，绑定 `content_map.json` 和实际使用的转录哈希，并把公开实体、医学/法律/金融/政治事实、金额、比例和年份拆成原子核查项。`content_map.json` 始终只表示节目实际说法；外部纠正只能写入该台账，不能混入由 Sxxxx 转录片段锚定的 source claim。台账缺 claim、顺序变化、哈希过期或编辑纠正没有来源 URL 都会阻断质量门。
 
-主脚本随后按 `scripts/讲稿提示词.md` 调用 subagent，并要求一次性处理台账中的全部 critical/high/medium 问题：
+主脚本随后直接加载 `scripts/讲稿提示词.md` 作为唯一写作编辑规则，追加本次输入输出边界后调用 subagent，并要求一次性处理台账中的全部 critical/high/medium 问题。完整性依据源 claim、数字、例子和限定条件覆盖；笔记与讲稿的字数比例仅供观察，不要求为达到比例补写：
 
 1. 先写 `中文完整笔记.md`。
 2. 再写适合收听的 `讲书稿.md`。
 3. 写 `summary_map.json`，绑定章节正文哈希、unit/claim ID、笔记 claim ID 和笔记正文哈希。
 4. 专有名词需要控制读音时添加 `tts_lexicon.json`，格式为 `{"原词": "朗读文本"}`。
 
-中文完整笔记和讲书稿面向读者时只保留影响理解的事实状态限定，例如“节目称”“报道称”“仍在洽谈”“这是预测”；不得出现“这里不采用”“这里不保留”“本稿未独立核实”“纠错稿已将”等后台审查决策。无法核实的精确数字应直接改成自然、带归因的概括，审查理由只留在 JSON 产物中。严格质量门分别以 `notes_audit_narration` 和 `briefing_audit_narration` 阻断泄漏。
+中文完整笔记和讲书稿面向读者时只保留影响理解的事实状态限定，例如“节目称”“报道称”“仍在洽谈”“这是预测”；不得出现“这里不采用”“这里不保留”“本稿未独立核实”“纠错稿已将”等后台审查决策。无法核实的精确数字应直接改成自然、带归因的概括，审查理由只留在 JSON 产物中。严格质量门分别以 `notes_audit_narration` 和 `briefing_audit_narration` 阻断明确的后台叙述；正常讨论政策审查、论文核查、机构审批或归因给节目人物的未核实声明不因领域词汇而失败。依赖语境的后台决策泄漏由独立 AI 终审继续检查。
 
 内容 subagent 完成后，`content_finalizer.py` 是唯一允许写回讲稿和
 `summary_map.json` 的最终化阶段：它同步逐字标题、刷新正文哈希、只在自然段和
@@ -213,7 +213,7 @@ claim evidence 的 segment ID 和 primary/context 角色数组必须按 immutabl
 顺序规范化；新合同通过 `claim_evidence_order_version=1` 强制执行。预写作事实核查
 分批结果写入 `editorial_fact_check_batches/` 并可断点恢复，成功批次不得因同轮其他
 批次失败而丢失。`summary_map.writing_inputs` 绑定语义 content map、规范实体表、
-事实台账和转录基准，只有这些语义输入变化才重写笔记和讲稿。
+事实台账和转录基准，这些绑定在上游修复完成后重新验证；上游文件重新生成但绑定语义未变、正文与台账仍有效时，可以复用笔记和讲稿。缺少绑定的历史稿在修复路径上保守重写，显式 force 仍重建。
 
 已经发布的 evidence v2 单集只有同时满足以下条件才能暂时兼容：
 
@@ -241,6 +241,18 @@ claim evidence，以及带官方/一手来源、最小精确字符串和受限�
 segment/evidence 哈希或 claim ID；完成后必须刷新正文、summary、预写作台账绑定并独立复审。
 事实结论、医疗、数字、归因、范围和因果关系仍一律阻断。修复记录写入
 `review_repair.json`，绝不直接把 `passed` 改为 true。
+
+审查返回未通过时，`review_episode()` 另存完整结果到
+`ai_review_failures/<stage-id>.json`，并在 `run_report.json` 对应 ai_review 阶段的
+`metrics.failure_snapshot` 写入相对单集目录的路径。同一时刻写入
+`metrics.rejection` 结构化归因（原因码、失败分项、评分、归一化 issue
+类别），`review_repair.json` 每轮 history 同步携带；两者均由
+`review_attribution.py` 的单一词表确定性派生，供 health 聚合与 triage
+诊断，不依赖中文错误文案。快照保留原有 issues、
+reviewed_files 和审查元数据，后续复审不覆盖它；成功审查不另存快照。
+这些文件仅作本地排障，不进入独立审查的输入或发布产物。runner 未返回有效审查
+时不伪造快照，仍用现有 stage error 留痕；快照写入失败也会令该次运行失败。
+不自动重跑历史单集或清理快照，在下次正常处理失败时按该路径查看原因。
 
 复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定，
 分数和 high/critical 阈值不变。AI review v3 要求先把复合 claim 拆为原子
@@ -415,8 +427,25 @@ TTS、release、evidence 和 ASR 共用 `hashing.py`；TTS 与 HTML 共用
 ```
 
 报告汇总阶段失败率与平均耗时、高频错误、来源失败、TLS 降级、重试、
-AI 报告成本/token，以及质量门未通过且尚未发布的单集。它只读取
-`run_report.json` 等审计文件，不修改单集状态。
+AI 报告成本/token，以及质量门未通过且尚未发布的单集；未发布表优先显示
+稳定错误码。失败 ai_review 阶段的结构化拒绝归因（原因码、issue 类别、
+other 桶原始值）按时间窗口聚合成独立小节，新数据到达即更新，无需重跑
+一次性归因脚本。它只读取 `run_report.json` 等审计文件，不修改单集状态。
+
+单集被阻断时用只读 triage 定位下一步自动动作：
+
+```bash
+.venv/bin/python scripts/catalog.py triage "播客名"
+.venv/bin/python scripts/catalog.py triage --all --blocked --json
+```
+
+triage 汇总当前质量门错误码、审查拒绝归因、repair 历史和 run_report
+审查尝试，并按优先级给出建议：`rerun`（transient/缺失/过期，直接重跑）、
+`content_regen`（拒绝后下次入口运行自动重写并复审）、`checker_suspect`
+（连续两次拒绝语义输入未变且类别重复——重写不会改变结果，先修检查器
+或提示词）、`gate_only`（审查已过、质量门另有错误码）。循环检测用
+`ai_review_failures/` 快照比对语义输入哈希；快照出现之前的失败不猜测，
+标记为未知。命令不修改任何单集状态。
 
 ## 单集目录
 

@@ -140,6 +140,28 @@ class PublicBriefingBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(validator.audit_narration_issues(natural), [])
 
+    def test_domain_review_terms_and_attributed_uncertainty_are_allowed(self):
+        for text in (
+            "嘉宾认为政策审查过程需要公开，审查结论应接受公众监督。",
+            "论文核查过程暴露了研究方法的局限，本文讨论这些局限。",
+            "由于样本不足，研究者因此不采用这种估算方法。",
+            "记者表示尚未独立核实相关数字，节目引用了这一声明。",
+            "本次审查涉及机构审批流程，而非产品定价。",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(validator.audit_narration_issues(text), [])
+
+    def test_explicit_pipeline_editorial_decisions_remain_blocked(self):
+        for text in (
+            "本稿未独立核实相关数字。",
+            "本文不保留无法核实的实验次数。",
+            "本次审查发现该稿缺少来源，因此删除。",
+            "这里不采用该精确金额。",
+            "纠错稿已将名称替换为官方写法。",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(validator.audit_narration_issues(text))
+
     def test_review_taxonomy_normalizes_attributed_speaker_reports(self):
         review = {"fact_checks": [{
             "subclaim_id": "U0001-C01-F01",
