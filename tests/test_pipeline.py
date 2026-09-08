@@ -6,7 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
@@ -25,8 +25,7 @@ from asr_refinement import build_asr_context
 from content_map import (
     apply_claim_evidence_mapping, body_sha256, coverage_report,
     enrich_content_map_evidence,
-    enrich_summary_map_evidence, init_content_map, transcript_evidence_mode,
-    validate_content_map, validate_summary_map,
+    enrich_summary_map_evidence, init_content_map, validate_content_map, validate_summary_map,
 )
 from diarize import merge_segments_with_speakers
 from benchmark import asr_metrics
@@ -45,8 +44,7 @@ import catalog_site
 from html_gen import _build_html, md_to_html
 from publish import verify_publish
 from episode import (
-    inspect_episode_state, load_episode, set_claim_evidence_mode,
-    stable_slug, sync_episode_state, update_review_status,
+    inspect_episode_state, load_episode, stable_slug, sync_episode_state, update_review_status,
 )
 from evidence import migrate_evidence_provenance
 from release import load_release, prepare_release
@@ -1085,8 +1083,10 @@ class ContentMapTests(unittest.TestCase):
     def setUp(self):
         self.content_map = {
             "units": [
-                {"id": "U0001", "topic": "A", "claims": ["a"], "importance": "high", "status": "included", "timestamps": [[0, 1]]},
-                {"id": "U0002", "topic": "B", "claims": ["b"], "importance": "medium", "status": "included", "timestamps": [[1, 2]]},
+                {"id": "U0001", "topic": "A", "claims": ["a"],
+                 "importance": "high", "status": "included", "timestamps": [[0, 1]]},
+                {"id": "U0002", "topic": "B", "claims": ["b"],
+                 "importance": "medium", "status": "included", "timestamps": [[1, 2]]},
             ]
         }
 
@@ -1095,13 +1095,17 @@ class ContentMapTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
     def test_high_coverage_gate(self):
-        result = coverage_report(self.content_map, {"chapters": [{"title": "A", "unit_ids": ["U0001"]}]})
+        result = coverage_report(
+            self.content_map,
+            {"chapters": [{"title": "A", "unit_ids": ["U0001"]}]})
         self.assertFalse(result["passed"])
         self.assertEqual(result["high_coverage"], 1.0)
         self.assertEqual(result["medium_coverage"], 0.0)
 
     def test_unknown_unit_fails(self):
-        result = coverage_report(self.content_map, {"chapters": [{"title": "X", "unit_ids": ["U9999"]}]})
+        result = coverage_report(
+            self.content_map,
+            {"chapters": [{"title": "X", "unit_ids": ["U9999"]}]})
         self.assertFalse(result["passed"])
         self.assertEqual(result["unknown_unit_ids"], ["U9999"])
 
@@ -2171,7 +2175,7 @@ class CatalogTests(unittest.TestCase):
         sleep.assert_called_once_with(1)
 
     def test_health_report_aggregates_failures_cost_and_unpublished(self):
-        now = datetime(2026, 8, 5, 12, tzinfo=timezone.utc)
+        now = datetime(2026, 8, 5, 12, tzinfo=UTC)
         with tempfile.TemporaryDirectory() as td:
             content = Path(td)
             failed = content / "Failed Episode"

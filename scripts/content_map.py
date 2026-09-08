@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 try:
@@ -350,7 +350,7 @@ def apply_claim_evidence_mapping(
         unit["claim_evidence_notes"] = notes
     content_map["schema_version"] = CONTENT_MAP_SCHEMA_VERSION
     content_map["claim_evidence_refined_at"] = datetime.now(
-        timezone.utc).isoformat()
+        UTC).isoformat()
     return canonicalize_claim_evidence_order(content_map, transcript), transcript
 
 
@@ -448,10 +448,13 @@ def init_content_map(transcript_json, output, title=""):
         "schema_version": CONTENT_MAP_SCHEMA_VERSION,
         "source_accountability_version": SOURCE_ACCOUNTABILITY_VERSION,
         "evidence_mode": mode,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "title": title,
         "source_transcript": str(transcript_json),
-        "instructions": "请将相邻片段合并为完整话题，并补充 claims/reasoning/examples/numbers/terms。",
+        "instructions": (
+            "请将相邻片段合并为完整话题，并补充 "
+            "claims/reasoning/examples/numbers/terms。"
+        ),
         "units": units,
     }
     save_json(output, payload)
@@ -794,7 +797,8 @@ def validate_content_map(payload, transcript=None):
                                     f"{display_id}-{claim_key}: primary/context 证据重叠")
                             elif set(primary) | set(context) != set(claim_segments):
                                 errors.append(
-                                    f"{display_id}-{claim_key}: primary/context 与 claim 证据不一致")
+                                    f"{display_id}-{claim_key}: "
+                                f"primary/context 与 claim 证据不一致")
                             elif (
                                     primary != canonical_segment_ids(
                                         transcript_segments, primary)

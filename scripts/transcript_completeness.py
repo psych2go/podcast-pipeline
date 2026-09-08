@@ -6,7 +6,7 @@ import json
 import math
 import subprocess
 from dataclasses import dataclass
-from typing import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 
 COMPLETENESS_SCHEMA_VERSION = 1

@@ -7,7 +7,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 try:
-    from atomic_io import atomic_write_json, atomic_write_text
+    from atomic_io import atomic_write_json
     from canonical_entities import (
         GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
         SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
@@ -63,7 +63,7 @@ try:
         validate_completeness_result,
     )
 except ImportError:
-    from scripts.atomic_io import atomic_write_json, atomic_write_text
+    from scripts.atomic_io import atomic_write_json
     from scripts.canonical_entities import (
         GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
         SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
@@ -694,7 +694,7 @@ key 最多 48 个字符、最多 6 个空格分词、最多 6 个汉字，并且
 加号、斜杠、& 或括号之一。优先映射完整表达，例如 A/B，而不是单独映射 /；
 不得使用空 key、不得级联替换，不得修改讲书稿或任何内容事实。
 混合大小写品牌、技术符号应按上下文给出自然读音；拿不准时不要猜。
-只修改 tts_lexicon.json。""", 
+只修改 tts_lexicon.json。""",
         task_name="tts_lexicon_pre_review",
         allowed_files=[lexicon_path],
         input_files=[briefing_path],
@@ -820,7 +820,7 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
             ]
             run_edit_task(
                 folder,
-                f"""读取 transcript.raw.json、原始转录.txt，
+                """读取 transcript.raw.json、原始转录.txt，
 以及存在时的 转录_纠错.txt。
 整理 content_map.json：
 - 保留 schema_version、evidence_mode 和 source_accountability_version=1；

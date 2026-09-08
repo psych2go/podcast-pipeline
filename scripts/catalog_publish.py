@@ -4,9 +4,8 @@ import json
 import os
 import re
 import subprocess
-import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from urllib.parse import quote
 
@@ -15,7 +14,8 @@ try:
     import catalog_core as _core_module
     import catalog_site as _site_module
     from catalog_core import (
-        CatalogPaths, _catalog_text, _display_title, _find_briefing, _gen_mp3,
+        CatalogPaths as CatalogPaths,
+        _catalog_text, _display_title, _find_briefing, _gen_mp3,
         _load_site_entries, _ordered_episode_names, rebuild_catalog,
     )
     from catalog_site import (
@@ -43,7 +43,8 @@ except ImportError:
     from scripts import catalog_core as _core_module
     from scripts import catalog_site as _site_module
     from scripts.catalog_core import (
-        CatalogPaths, _catalog_text, _display_title, _find_briefing, _gen_mp3,
+        CatalogPaths as CatalogPaths,
+        _catalog_text, _display_title, _find_briefing, _gen_mp3,
         _load_site_entries, _ordered_episode_names, rebuild_catalog,
     )
     from scripts.catalog_site import (
@@ -254,7 +255,7 @@ def _write_publish_failure(
             audio_key = ""
     payload.update({
         "schema_version": PUBLISH_REPORT_SCHEMA_VERSION,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_at": datetime.now(UTC).isoformat(),
         "passed": False,
         "errors": errors,
         "failed_stage": failed_stage,

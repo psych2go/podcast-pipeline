@@ -6,11 +6,17 @@ from pathlib import Path
 
 try:
     from atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
-    from episode import (legacy_page_path as episode_legacy_page_path, page_path as episode_page_path, quality_metadata)
+    from episode import (
+        legacy_page_path as episode_legacy_page_path,
+        page_path as episode_page_path, quality_metadata,
+    )
     from site_index import render_index
 except ImportError:
     from scripts.atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
-    from scripts.episode import (legacy_page_path as episode_legacy_page_path, page_path as episode_page_path, quality_metadata)
+    from scripts.episode import (
+        legacy_page_path as episode_legacy_page_path,
+        page_path as episode_page_path, quality_metadata,
+    )
     from scripts.site_index import render_index
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -22,14 +28,16 @@ CATALOG = CONTENT_DIR / "播客目录.md"
 try:
     import catalog_core as _core_module
     from catalog_core import (
-        CatalogPaths, _catalog_text, _display_title, _episode_dirs,
+        _catalog_text, _display_title,
+        _episode_dirs as _episode_dirs,
         _find_briefing, _gen_mp3, _load_site_entries,
         _ordered_episode_names, _read_source, episode_stats,
     )
 except ImportError:
     from scripts import catalog_core as _core_module
     from scripts.catalog_core import (
-        CatalogPaths, _catalog_text, _display_title, _episode_dirs,
+        _catalog_text, _display_title,
+        _episode_dirs as _episode_dirs,
         _find_briefing, _gen_mp3, _load_site_entries,
         _ordered_episode_names, _read_source, episode_stats,
     )
@@ -161,7 +169,7 @@ def catalog_consistency_errors():
     if entry_names != names:
         errors.append("site.json 顺序或单集集合与播客台账不一致")
         return errors
-    for name, entry in zip(names, entries):
+    for name, entry in zip(names, entries, strict=True):
         expected = _build_entry(name, entry)
         for field in (
                 "title", "path", "slug", "duration", "words",

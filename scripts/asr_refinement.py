@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from statistics import fmean
-from typing import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 try:
     from hashing import sha256_text as _text_sha256

@@ -23,17 +23,12 @@ from pathlib import Path
 
 try:
     from quality_errors import AI_REVIEW_MISSING, AI_REVIEW_STALE
-    from review_attribution import (
-        OTHER_CATEGORY,
-        attribute_rejection,
-        normalize_category,
-    )
+    from review_attribution import OTHER_CATEGORY, attribute_rejection
 except ImportError:
     from scripts.quality_errors import AI_REVIEW_MISSING, AI_REVIEW_STALE
     from scripts.review_attribution import (
         OTHER_CATEGORY,
         attribute_rejection,
-        normalize_category,
 )
 
 

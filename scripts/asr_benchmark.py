@@ -326,7 +326,7 @@ def cp_word_error_rate(reference_segments, hypothesis_segments):
             hypothesis_speakers[column]
             if column < len(hypothesis_speakers) else None,
         )
-        for row, column in zip(rows, columns)
+        for row, column in zip(rows, columns, strict=True)
     ]
     return _sum_edit_details(pairs, reference, hypothesis)
 

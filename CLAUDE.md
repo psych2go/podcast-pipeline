@@ -522,8 +522,12 @@ Cloudflare 认证可使用 `wrangler login` 的 OAuth 凭据或环境中的 API 
 
 ```bash
 .venv/bin/python scripts/check_public_repo.py
+.venv/bin/ruff check scripts tests
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
+
+ruff 配置在 `pyproject.toml`（E/F/W/B/UP，行宽 100）；提示词散文与
+HTML/SVG 模板字面量超过行宽的四个文件做了有注释的定向豁免。
 
 按领域定位测试和定向开发命令见 `tests/README.md`。浏览器测试需要：
 

@@ -333,7 +333,9 @@ class AiReviewIsolationTests(unittest.TestCase):
             folder = Path(td)
             self._episode(folder)
             previous = (folder / "ai_review.json").read_bytes()
-            with patch.object(ai_review, "run_ai_review", side_effect=RuntimeError("provider unavailable")):
+            with patch.object(
+                    ai_review, "run_ai_review",
+                    side_effect=RuntimeError("provider unavailable")):
                 with self.assertRaisesRegex(RuntimeError, "provider unavailable"):
                     ai_review.review_episode(folder)
             self.assertFalse((folder / "ai_review_failures").exists())

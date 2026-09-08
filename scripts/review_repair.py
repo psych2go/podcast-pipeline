@@ -1,11 +1,10 @@
 """Bounded review/repair loop that never weakens review thresholds."""
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 try:
-    from ai_review import review_episode
     from atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
     from claim_evidence import refine_claim_evidence
     from content_map import (
@@ -28,7 +27,6 @@ try:
     )
     from review_attribution import attribute_rejection
 except ImportError:
-    from scripts.ai_review import review_episode
     from scripts.atomic_io import (
         atomic_write_bytes,
         atomic_write_json,
@@ -468,7 +466,7 @@ def review_and_repair(
 
     payload = {
         "schema_version": 1,
-        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": datetime.now(UTC).isoformat(),
         "max_rounds": max_rounds,
         "passed": bool(review and review.get("passed")),
         "history": history,

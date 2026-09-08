@@ -6,7 +6,7 @@ import shutil
 import sys
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 try:
@@ -484,7 +484,7 @@ def rebind_provenance_review(folder, output=None):
     review["provenance_rebind"] = {
         "method": "metadata_only",
         "changed_files": changed,
-        "rebound_at": datetime.now(timezone.utc).isoformat(),
+        "rebound_at": datetime.now(UTC).isoformat(),
         "semantic_review_reused": True,
     }
     update_source_status(folder, True)
@@ -811,7 +811,7 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
 
     review["schema_version"] = AI_REVIEW_SCHEMA_VERSION
     review["audit_contract_version"] = 1
-    review["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+    review["reviewed_at"] = datetime.now(UTC).isoformat()
     review["reviewer"] = {
         "command": result.get("command", "codex exec"),
         "effort": effort,

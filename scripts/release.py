@@ -2,7 +2,7 @@
 import argparse
 import hashlib
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 try:
@@ -142,7 +142,7 @@ def prepare_release(folder, mp3_path, briefing_path, *, require_clean=False):
     briefing_sha256 = sha256_file(briefing_path)
     slug = page_path(folder)
     release_id = hashlib.sha256(
-        f"{slug}\n{audio_sha256}\n{briefing_sha256}".encode("utf-8")
+        f"{slug}\n{audio_sha256}\n{briefing_sha256}".encode()
     ).hexdigest()[:16]
     previous = load_release(folder)
     provenance = _git_provenance(folder)
@@ -164,7 +164,7 @@ def prepare_release(folder, mp3_path, briefing_path, *, require_clean=False):
         "error": "",
         **provenance,
         "pipeline_version": PIPELINE_VERSION,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
     atomic_write_json(folder / RELEASE_FILENAME, payload)
     return payload
@@ -194,7 +194,7 @@ def update_release_state(folder, state, *, error="", **extra):
     payload["state"] = state
     payload["error"] = str(error) if error else ""
     payload.update(extra)
-    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    payload["updated_at"] = datetime.now(UTC).isoformat()
     atomic_write_json(folder / RELEASE_FILENAME, payload)
     return payload
 

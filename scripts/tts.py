@@ -535,7 +535,9 @@ def merge_mp3s(input_files, output_path, silence_seconds=SECTION_SILENCE_SECONDS
                 escaped_mp3 = str(Path(mp3).resolve()).replace("\\", "\\\\").replace("'", "'\\''")
                 f.write(f"file '{escaped_mp3}'\n")
                 if silence_path and i < len(sorted_files) - 1:
-                    escaped_silence = str(Path(silence_path).resolve()).replace("\\", "\\\\").replace("'", "'\\''")
+                    escaped_silence = (
+                        str(Path(silence_path).resolve())
+                        .replace("\\", "\\\\").replace("'", "'\\''"))
                     f.write(f"file '{escaped_silence}'\n")
         result = subprocess.run(
             ["ffmpeg", "-f", "concat", "-safe", "0",
@@ -857,9 +859,13 @@ def cli_main():
         usage="python scripts/tts.py input.md [output_dir] [--speed 1.0]"
     )
     parser.add_argument("input_md", nargs="?", help="讲稿 markdown 文件路径")
-    parser.add_argument("output_dir", nargs="?", help="音频输出目录（默认 input.md 同级的 audio/ 目录）")
+    parser.add_argument(
+        "output_dir", nargs="?",
+        help="音频输出目录（默认 input.md 同级的 audio/ 目录）")
     parser.add_argument("--speed", type=float, default=1.0, help="语速（默认 1.0）")
-    parser.add_argument("--fresh", action="store_true", help="清空旧音频重新生成（默认断点续传）")
+    parser.add_argument(
+        "--fresh", action="store_true",
+        help="清空旧音频重新生成（默认断点续传）")
     parser.add_argument("--no-titles", action="store_true", help="不在音频中朗读章节标题")
     parser.add_argument("--concurrency", type=int, default=None,
                         help="全局 chunk 并发预算（默认读 TTS_CONCURRENCY 或 4）")
@@ -878,7 +884,6 @@ def cli_main():
     speed = parsed.speed
 
     input_md = parsed.input_md or input("输入 MD 文件路径: ")
-    out_dir = Path(parsed.output_dir) if parsed.output_dir else Path(input_md).parent / "audio"
 
     if not os.path.exists(input_md):
         print(f"❌ 找不到 {input_md}")

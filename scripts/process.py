@@ -34,7 +34,7 @@ import re
 import shlex
 import uuid
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from urllib.parse import urlsplit, urlunsplit
 
 from atomic_io import (
@@ -48,13 +48,11 @@ from evidence import build_provenance, original_audio_files
 from asr_refinement import build_asr_context
 from fetcher import (
     fetch_transcript_from_url,
-    transcribe_mp3,
     transcribe,
     load_transcript_from_file,
     extract_title_from_url,
     detect_source_warnings,
     discover_official_episode_url,
-    apply_content_policy,
     chunk_plain_transcript,
 )
 from tts import run_tts
@@ -103,7 +101,8 @@ def sanitize_title(name):
     """清理文件夹/音频文件名：去掉文件系统与 shell 通配符不安全的字符，折叠空白。
 
     清理 \\ / : * ? " < > | [ ]（跨平台 + 避免 glob 误匹配），保留逗号、空格、中文等。
-    例："Can the AI Industry Regulate Itself? Stripe..." → "Can the AI Industry Regulate Itself Stripe..."
+    例："Can the AI Industry Regulate Itself? Stripe..."
+    → "Can the AI Industry Regulate Itself Stripe..."
     """
     name = re.sub(r'[\\/:*?"<>|\[\]$`]', "", name)
     name = re.sub(r"\s+", " ", name).strip()
@@ -215,7 +214,7 @@ def _load_existing_evidence(transcript_path, metadata_path):
 def _archive_existing_evidence(folder, transcript_path, metadata_path):
     if not transcript_path.exists() and not metadata_path.exists():
         return None
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     digest = (
         _source_sha256(transcript_path)[:8]
         if transcript_path.exists()
@@ -229,7 +228,7 @@ def _archive_existing_evidence(folder, transcript_path, metadata_path):
             atomic_write_bytes(archive / path.name, path.read_bytes())
             archived_files.append(path.name)
     atomic_write_json(archive / "archive.json", {
-        "archived_at": datetime.now(timezone.utc).isoformat(),
+        "archived_at": datetime.now(UTC).isoformat(),
         "files": archived_files,
         "reason": "force_refetch",
     })
@@ -263,7 +262,7 @@ def _prepare_evidence_metadata(metadata, transcript, folder=None):
     metadata["evidence"] = {
         "schema_version": 1,
         "revision_id": uuid.uuid4().hex,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "integrity": "immutable_revision",
         "transcript_file": "原始转录.txt",
         "transcript_sha256": _text_sha256(transcript),
@@ -377,7 +376,10 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
                             }
                             for chunk in chunk_plain_transcript(transcript)
                         ],
-                        "meta": {"timestamped": False, "source_warnings": detect_source_warnings(transcript)},
+                        "meta": {
+                            "timestamped": False,
+                            "source_warnings": detect_source_warnings(transcript),
+                        },
                     }
         elif os.path.isfile(source):
             if _is_audio_file(source):
@@ -433,7 +435,10 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
                         }
                         for chunk in chunk_plain_transcript(transcript)
                     ],
-                    "meta": {"timestamped": False, "source_warnings": detect_source_warnings(transcript)},
+                    "meta": {
+                        "timestamped": False,
+                        "source_warnings": detect_source_warnings(transcript),
+                    },
                 }
         else:
             print(f"[错误] 无法识别输入源: {source}", flush=True)

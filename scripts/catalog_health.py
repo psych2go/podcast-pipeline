@@ -3,7 +3,7 @@
 import json
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 try:
@@ -37,8 +37,8 @@ def _parse_timestamp(value):
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _parse_since(value):
@@ -71,7 +71,7 @@ def _md_cell(value):
 def build_health_report(content_dir, since="7d", now=None):
     """Aggregate valid strict-mode run reports without mutating state."""
     content_dir = Path(content_dir)
-    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now = (now or datetime.now(UTC)).astimezone(UTC)
     cutoff = now - _parse_since(since)
     stage_stats = defaultdict(
         lambda: {"runs": 0, "failures": 0, "durations": []})

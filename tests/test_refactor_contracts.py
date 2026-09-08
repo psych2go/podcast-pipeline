@@ -20,7 +20,7 @@ from tts import split_sections as tts_split_sections
 from pipeline_metrics import quality_metrics
 from quality_errors import (
     AI_REVIEW_FAILED, AI_REVIEW_MISSING, AI_REVIEW_STALE,
-    SOURCE_REVIEW_STATUS, add_error, coded_errors,
+    add_error, coded_errors,
 )
 from sections import parse_markdown_sections
 from text_distance import edit_details, levenshtein_distance

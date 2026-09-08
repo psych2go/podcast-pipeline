@@ -4,7 +4,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 try:
@@ -94,7 +94,7 @@ def _write_progress(
         folder, transcript, *, target, completed, pending, failed, status):
     atomic_write_json(Path(folder) / PROGRESS_FILENAME, {
         "schema_version": 1,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
         "status": status,
         "evidence_revision": _evidence_revision(transcript),
         "target_unit_ids": sorted(target),
@@ -223,7 +223,9 @@ def _prompt(batch):
 - primary_segment_ids 只能放直接支持整条 claim 的最小片段，至少一项。
 - context_segment_ids 只放归因、限定或背景所需的相邻片段，可为空。
 - 两组 ID 只能从该 unit 提供的 segments.id 中选择，不能重复。
-- text 是不可改写的 raw evidence；corrected_text 若存在，是同一 segment 的规范化纠错文本。可用 corrected_text 理解 ASR 专名或漏词，但 segment ID 和证据哈希仍绑定 raw evidence，不得声称已听音频。
+- text 是不可改写的 raw evidence；corrected_text 若存在，是同一 segment 的规范化纠错文本。
+  可用 corrected_text 理解 ASR 专名或漏词，但 segment ID 和证据哈希仍绑定 raw evidence，
+  不得声称已听音频。
 - 禁止为了省事把整个 unit 的全部片段复制给每条 claim，除非每个片段确实都不可缺少。
 - 不要根据常识补证据；转录没有充分支持时 confidence=low。
 - rationale 用一句中文说明为什么这些片段足以支持 claim。
@@ -276,7 +278,7 @@ def _corrected_segment_texts(folder, transcript):
         return {}
     return {
         segment["id"]: paragraph
-        for segment, paragraph in zip(source_segments, paragraphs)
+        for segment, paragraph in zip(source_segments, paragraphs, strict=True)
     }
 
 
