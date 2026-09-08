@@ -14,7 +14,7 @@ try:
         CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
         CONTENT_MAP_SOURCE_SEGMENT_MISSING, CONTENT_MAP_EXCLUSION_INVALID,
         CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_AUDIT_NARRATION, NOTES_MISSING,
-        SOURCE_QUALITY_FAILED, SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
+        SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
         PREWRITE_FACT_CHECKS_INVALID,
         TRANSCRIPT_CORRECTION_MISSING, CORRECTION_MANIFEST_MISSING,
         CORRECTION_MANIFEST_INVALID, CORRECTION_UNRESOLVED_HIGH_RISK,
@@ -38,7 +38,7 @@ except ImportError:
         CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
         CONTENT_MAP_SOURCE_SEGMENT_MISSING, CONTENT_MAP_EXCLUSION_INVALID,
         CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_AUDIT_NARRATION, NOTES_MISSING,
-        SOURCE_QUALITY_FAILED, SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
+        SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
         PREWRITE_FACT_CHECKS_INVALID,
         TRANSCRIPT_CORRECTION_MISSING, CORRECTION_MANIFEST_MISSING,
         CORRECTION_MANIFEST_INVALID, CORRECTION_UNRESOLVED_HIGH_RISK,
@@ -1199,7 +1199,9 @@ def build_quality_report(folder, strict=True, *, today=None):
                 ai_error(
                     AI_REVIEW_INCOMPLETE,
                     "AI 审查缺少 audit_completion 专项完成清单")
-            for section in ("transcript_quality", "coverage", "factuality", "numbers", "attribution", "tts", "publish"):
+            for section in (
+                    "transcript_quality", "coverage", "factuality",
+                    "numbers", "attribution", "tts", "publish"):
                 if not review.get(section, {}).get("passed", False):
                     ai_error(AI_REVIEW_SECTION, f"AI 审查分项未通过: {section}")
             for section in ("transcript_quality", "coverage", "factuality"):

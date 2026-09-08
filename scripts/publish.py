@@ -1,6 +1,6 @@
 """Cloudflare Pages and R2 publish verification."""
 import html
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import httpx
@@ -47,7 +47,7 @@ def verify_publish(
     """Verify the stable Pages site and public R2 audio object."""
     report = {
         "schema_version": PUBLISH_REPORT_SCHEMA_VERSION,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_at": datetime.now(UTC).isoformat(),
         "passed": True,
         "errors": [],
         "error_details": [],

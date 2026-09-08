@@ -4,7 +4,6 @@ from pathlib import Path
 
 try:
     from atomic_io import atomic_write_json
-    from pipeline_metrics import quality_metrics as _quality_metrics
     from quality_errors import (
         AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
         AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
@@ -13,7 +12,6 @@ try:
     )
 except ImportError:
     from scripts.atomic_io import atomic_write_json
-    from scripts.pipeline_metrics import quality_metrics as _quality_metrics
     from scripts.quality_errors import (
         AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
         AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,

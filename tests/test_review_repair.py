@@ -2,7 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from unittest.mock import patch
 
@@ -103,7 +103,7 @@ class FactCheckCacheTests(unittest.TestCase):
             }
             fact_check_cache.store_fact_check(
                 folder, fact, "https://example.com", dynamic=True)
-            now = datetime(2026, 1, 20, tzinfo=timezone.utc)
+            now = datetime(2026, 1, 20, tzinfo=UTC)
             self.assertIsNone(fact_check_cache.get_cached_fact_check(
                 folder, fact["claim"], "https://example.com",
                 dynamic=True, ttl_days=7, now=now,
@@ -111,7 +111,7 @@ class FactCheckCacheTests(unittest.TestCase):
             self.assertIsNotNone(fact_check_cache.get_cached_fact_check(
                 folder, fact["claim"], "https://example.com",
                 dynamic=False, ttl_days=7,
-                now=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                now=datetime(2026, 1, 2, tzinfo=UTC),
             ))
 
     def test_cache_key_binds_claim_source_and_source_date(self):

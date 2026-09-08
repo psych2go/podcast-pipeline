@@ -164,7 +164,7 @@ def rebalance_long_chapters(briefing_text, summary_map):
     output_blocks = []
     output_mappings = []
     changed = False
-    for block, mapping in zip(blocks, mappings):
+    for block, mapping in zip(blocks, mappings, strict=True):
         if _zh_chars(block["body"]) <= MAX_CHAPTER_CHARS:
             output_blocks.append(block)
             output_mappings.append(mapping)
@@ -225,7 +225,7 @@ def synchronize_summary_chapters(briefing_text, summary_map):
             "讲稿与 summary_map 章节数量不一致: "
             f"briefing={len(titles)}, summary={len(chapters)}"
         )
-    for title, chapter in zip(titles, chapters):
+    for title, chapter in zip(titles, chapters, strict=True):
         if not isinstance(chapter, dict):
             raise ContentFinalizationError("summary_map 章节必须是对象")
         chapter["title"] = title

@@ -78,6 +78,66 @@ except ImportError:
         SITE_DIR as CONFIG_SITE_DIR,
     )
 
+# Explicit compatibility surface: the facade re-exports deep-module helpers so
+# historical importers and patch targets keep working.
+__all__ = [
+    "CATALOG",
+    "CONTENT_DIR",
+    "SITE_DIR",
+    "BASE_DIR",
+    "CatalogPaths",
+    "PAGES_BASE_URL",
+    "PAGES_PROJECT",
+    "R2_BUCKET",
+    "R2_PUBLIC_URL",
+    "_audio_duration_minutes",
+    "_catalog_text",
+    "_display_title",
+    "_episode_dirs",
+    "_find_briefing",
+    "_gen_mp3",
+    "_load_site_entries",
+    "_ordered_episode_names",
+    "_read_source",
+    "_source_cell",
+    "_zh_chars",
+    "add_to_catalog",
+    "episode_stats",
+    "rebuild_catalog",
+    "atomic_write_text",
+    "build_health_report",
+    "health",
+    "_build_health_report",
+    "_render_triage_markdown",
+    "_triage_all",
+    "_triage_episode",
+    "_PublishFailure",
+    "_batch_publish_item",
+    "_candidate_catalog_errors",
+    "_dotenv_assignments",
+    "_finish_batch_impl",
+    "_finish_impl",
+    "_is_wrangler_command",
+    "_publish_preflight",
+    "_release_report",
+    "_run",
+    "_run_with_output",
+    "_run_wrangler",
+    "_upload_r2_item",
+    "_verify_publish_with_retry",
+    "_wrangler_environment",
+    "_write_publish_failure",
+    "configure_paths",
+    "finish",
+    "finish_batch",
+    "_build_entry",
+    "_site_readiness_errors",
+    "backfill_sources",
+    "catalog_consistency_errors",
+    "gen_index",
+    "sync_site",
+]
+
 
 def _configure_cli_paths():
     """Bind the facade and deep catalog modules to one private workspace."""
@@ -113,14 +173,19 @@ def main():
     _configure_cli_paths()
     parser = argparse.ArgumentParser(description="播客台账与完整发布维护")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("stats", help="打印某期字数/时长，不写入"); p.add_argument("name")
-    p = sub.add_parser("add", help="追加/更新某期到播客目录"); p.add_argument("name")
+    p = sub.add_parser("stats", help="打印某期字数/时长，不写入")
+    p.add_argument("name")
+    p = sub.add_parser("add", help="追加/更新某期到播客目录")
+    p.add_argument("name")
     sub.add_parser("rebuild", help="从当前内容和 site 顺序全量重建播客目录")
     sub.add_parser("check", help="校验播客目录、site.json 与当前内容统计一致")
-    p = sub.add_parser("sync-site", help="同步 content.html + 重建 site.json"); p.add_argument("--only", default=None)
+    p = sub.add_parser("sync-site", help="同步 content.html + 重建 site.json")
+    p.add_argument("--only", default=None)
     sub.add_parser("gen-index", help="从 site.json 重建首页 index.html")
     sub.add_parser("backfill-sources", help="为缺来源信息的期回填来源")
-    p = sub.add_parser("health", help="汇总近期跨单集运行健康度"); p.add_argument("--since", default="7d"); p.add_argument("--output", default=None)
+    p = sub.add_parser("health", help="汇总近期跨单集运行健康度")
+    p.add_argument("--since", default="7d")
+    p.add_argument("--output", default=None)
     triage_parser = sub.add_parser(
         "triage", help="只读诊断质量门/AI 审查阻断原因并给出下一步自动动作")
     triage_parser.add_argument("name", nargs="?", default=None)
@@ -132,24 +197,40 @@ def main():
         help="仅列出被阻断单集；存在阻断时退出码为 1")
     triage_parser.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     triage_parser.add_argument("--output", default=None)
-    p = sub.add_parser("finish", help="完整发布：R2 + Pages + 远端验收"); p.add_argument("name"); p.add_argument("--dry-run", action="store_true")
-    p = sub.add_parser("finish-batch", help="批量完整发布：R2 + Pages + 逐期远端验收"); p.add_argument("names", nargs="+"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--upload-concurrency", type=int, default=3)
+    p = sub.add_parser("finish", help="完整发布：R2 + Pages + 远端验收")
+    p.add_argument("name")
+    p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser(
+        "finish-batch", help="批量完整发布：R2 + Pages + 逐期远端验收")
+    p.add_argument("names", nargs="+")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--upload-concurrency", type=int, default=3)
     args = parser.parse_args()
     if args.cmd == "stats":
-        stats = episode_stats(args.name); print(f"{args.name}: {stats['chars']//1000}K字, {stats['duration']}min")
-    elif args.cmd == "add": add_to_catalog(args.name)
-    elif args.cmd == "rebuild": rebuild_catalog()
+        stats = episode_stats(args.name)
+        print(f"{args.name}: {stats['chars']//1000}K字, {stats['duration']}min")
+    elif args.cmd == "add":
+        add_to_catalog(args.name)
+    elif args.cmd == "rebuild":
+        rebuild_catalog()
     elif args.cmd == "check":
         errors = catalog_consistency_errors()
-        for error in errors: print(f"[一致性][错误] {error}")
-        if not errors: print("[一致性] 播客目录、site.json 与当前内容统计一致")
+        for error in errors:
+            print(f"[一致性][错误] {error}")
+        if not errors:
+            print("[一致性] 播客目录、site.json 与当前内容统计一致")
         return 1 if errors else 0
-    elif args.cmd == "sync-site": sync_site(args.only)
-    elif args.cmd == "gen-index": gen_index()
-    elif args.cmd == "backfill-sources": backfill_sources()
+    elif args.cmd == "sync-site":
+        sync_site(args.only)
+    elif args.cmd == "gen-index":
+        gen_index()
+    elif args.cmd == "backfill-sources":
+        backfill_sources()
     elif args.cmd == "health":
-        try: health(args.since, args.output)
-        except ValueError as exc: parser.error(str(exc))
+        try:
+            health(args.since, args.output)
+        except ValueError as exc:
+            parser.error(str(exc))
     elif args.cmd == "triage":
         if bool(args.all_episodes) == (args.name is not None):
             triage_parser.error("name 与 --all 必须二选一")
@@ -169,8 +250,12 @@ def main():
             print(f"[Triage] 已写入 {args.output}")
         print(text, end="")
         return 1 if args.blocked and any(r["blocked"] for r in reports) else 0
-    elif args.cmd == "finish": return 0 if finish(args.name, args.dry_run) else 1
-    elif args.cmd == "finish-batch": return 0 if finish_batch(args.names, args.dry_run, upload_concurrency=args.upload_concurrency) else 1
+    elif args.cmd == "finish":
+        return 0 if finish(args.name, args.dry_run) else 1
+    elif args.cmd == "finish-batch":
+        return 0 if finish_batch(
+            args.names, args.dry_run,
+            upload_concurrency=args.upload_concurrency) else 1
     return 0
 
 

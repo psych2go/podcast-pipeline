@@ -1,5 +1,5 @@
 """Small retry helpers shared by network-facing pipeline stages."""
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from email.utils import parsedate_to_datetime
 
 
@@ -27,6 +27,6 @@ def retry_after_seconds(value, now=None, max_seconds=MAX_RETRY_AFTER_SECONDS):
     except (TypeError, ValueError, OverflowError):
         return None
     if target.tzinfo is None:
-        target = target.replace(tzinfo=timezone.utc)
-    current = now or datetime.now(timezone.utc)
+        target = target.replace(tzinfo=UTC)
+    current = now or datetime.now(UTC)
     return min(max_seconds, max(0.0, (target - current).total_seconds()))

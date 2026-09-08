@@ -13,7 +13,7 @@ try:
     )
     from atomic_io import atomic_write_json
     from fetcher import preset_model_policy
-    from prepare_ami_benchmark import EXPECTED_HASHES, prepare, verify_sources
+    from prepare_ami_benchmark import prepare, verify_sources
 except ImportError:
     from scripts.asr_benchmark_runner import (
         file_fingerprint,
@@ -23,7 +23,6 @@ except ImportError:
     from scripts.atomic_io import atomic_write_json
     from scripts.fetcher import preset_model_policy
     from scripts.prepare_ami_benchmark import (
-        EXPECTED_HASHES,
         prepare,
         verify_sources,
     )

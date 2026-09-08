@@ -564,7 +564,8 @@ class RebuildPlanTests(unittest.TestCase):
                 with mock.patch("sys.stdout", output), mock.patch(
                         "process.fetch_transcript", return_value=True), mock.patch(
                         "process.build_rebuild_plan", return_value={
-                            "needs_content": True, "reasons": ["deterministic_validation"]}), mock.patch(
+                            "needs_content": True,
+                            "reasons": ["deterministic_validation"]}), mock.patch(
                         "process.run_content_pipeline", return_value=False):
                     result = pipeline_process._process_impl(
                         source, name, folder, None, EpisodeOptions(fetch_only=fetch_only))

@@ -3,7 +3,7 @@ import sys
 import tempfile
 import unittest
 import unittest.mock
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -200,7 +200,7 @@ class HealthAttributionTests(unittest.TestCase):
         return folder
 
     def test_health_aggregates_rejections_and_prefers_codes(self):
-        now = datetime(2026, 9, 8, 12, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 8, 12, tzinfo=UTC)
         with tempfile.TemporaryDirectory() as td:
             content = Path(td)
             self._episode(content, "Blocked Episode", {

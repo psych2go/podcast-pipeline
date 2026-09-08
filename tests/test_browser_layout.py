@@ -41,7 +41,7 @@ class MobileBrowserLayoutTests(unittest.TestCase):
                 page.set_content(html, wait_until="domcontentloaded")
                 page.wait_for_timeout(50)
 
-                def read_geometry():
+                def read_geometry(page=page):
                     return page.evaluate("""
                     () => {
                       const toggle = document.querySelector('.toc-toggle')

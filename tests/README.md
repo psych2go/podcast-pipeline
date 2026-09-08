@@ -6,6 +6,7 @@
 
 ```bash
 .venv/bin/python scripts/check_public_repo.py
+.venv/bin/ruff check scripts tests
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 

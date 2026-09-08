@@ -2,7 +2,7 @@
 import hashlib
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 try:
@@ -59,7 +59,7 @@ def get_cached_fact_check(
         folder, claim, source_url, *, dynamic=False,
         ttl_days=DEFAULT_DYNAMIC_TTL_DAYS, now=None):
     """Return the newest matching entry unless a dynamic fact has expired."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     claim_hash = claim_sha256(claim)
     matches = [
         entry for entry in load_cache(folder).get("entries", {}).values()
@@ -112,7 +112,7 @@ def store_fact_check(
     }
     payload.setdefault("entries", {})[key] = entry
     payload["schema_version"] = CACHE_SCHEMA_VERSION
-    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    payload["updated_at"] = datetime.now(UTC).isoformat()
     atomic_write_json(folder / CACHE_FILENAME, payload)
     return entry
 
@@ -125,7 +125,7 @@ def build_cache_context(
     The result is deliberately non-authoritative: callers must still match the
     current source URL and independently decide the verdict.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     wanted = {claim_sha256(claim) for claim in claims if str(claim).strip()}
     matches = []
     expired = 0

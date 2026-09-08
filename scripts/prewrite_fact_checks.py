@@ -2,7 +2,7 @@
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 try:
@@ -441,7 +441,7 @@ def _write_progress(
     failed_set = set(failed)
     atomic_write_json(Path(folder) / PROGRESS_FILENAME, {
         "schema_version": 1,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
         "status": status,
         "run_fingerprint": run_fingerprint,
         "target_batches": sorted(target_set),
@@ -586,7 +586,7 @@ def run_prewrite_fact_checks(
                 "schema_version": 1,
                 "batch_index": index,
                 "fingerprint": fingerprint,
-                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "saved_at": datetime.now(UTC).isoformat(),
                 "result": result,
             })
             completed.add(index)
@@ -621,7 +621,7 @@ def run_prewrite_fact_checks(
         )
     payload = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "content_map_sha256": map_hash,
         "transcript_basis": basis,
         "claims": claims,

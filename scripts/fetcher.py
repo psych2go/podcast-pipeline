@@ -174,7 +174,8 @@ def fetch_transcript_from_url(url, return_metadata=False):
                     extractor = "podscripts_transcript_text_partial_timestamps"
                 else:
                     extractor = "podscripts_transcript_text"
-                print(f"[抓取] Podscripts 正文提取成功，{len(segments)} 段，{len(text)} 字符", flush=True)
+                print(f"[抓取] Podscripts 正文提取成功，"
+                      f"{len(segments)} 段，{len(text)} 字符", flush=True)
                 if return_metadata:
                     return {
                         "text": text,
@@ -475,7 +476,7 @@ def _try_curl(url):
                  "-H", "User-Agent: Mozilla/5.0", url, "-o", tmp_path],
                 capture_output=True, timeout=FETCH_TIMEOUT + 15, check=False)
             if os.path.exists(tmp_path):
-                html = open(tmp_path, "r", encoding="utf-8", errors="ignore").read()
+                html = open(tmp_path, encoding="utf-8", errors="ignore").read()
                 if len(html) > 1000:
                     print("[抓取] curl 成功", flush=True)
                     return html
@@ -495,7 +496,7 @@ def _try_httpx_with_metadata(url):
         r = httpx.get(url, headers={"User-Agent": "Mozilla/5.0"},
                       timeout=FETCH_TIMEOUT, follow_redirects=True)
         if r.status_code == 200 and len(r.text) > 1000:
-            print(f"[抓取] httpx 成功", flush=True)
+            print("[抓取] httpx 成功", flush=True)
             return r.text, metadata
         print(f"[抓取] httpx 返回 {r.status_code}", flush=True)
         metadata["status_code"] = r.status_code
@@ -634,9 +635,13 @@ def detect_source_warnings(text):
     warnings = []
     if re.search(r"https?://|www\.", text, re.IGNORECASE):
         warnings.append("contains_urls")
-    if re.search(r"editor[’']?s note|editorial note|full transcript|read the full transcript", text, re.IGNORECASE):
+    if re.search(
+            r"editor[’']?s note|editorial note|full transcript|"
+            r"read the full transcript", text, re.IGNORECASE):
         warnings.append("contains_editorial_intro")
-    if re.search(r"related articles|recommended|you may also like|transcript:?$", text, re.IGNORECASE | re.MULTILINE):
+    if re.search(
+            r"related articles|recommended|you may also like|transcript:?$",
+            text, re.IGNORECASE | re.MULTILINE):
         warnings.append("contains_footer_or_recommendations")
     return warnings
 
@@ -998,7 +1003,9 @@ def transcribe_mp3_timestamped(mp3_path, model_size=None, initial_prompt=None,
         item = _segment_to_dict(segment)
         raw_text = item["decoder_text"]
         raw_chars += len(raw_text)
-        item["text"] = clean_whisper_hallucinations(raw_text) if clean_hallucinations else raw_text.strip()
+        item["text"] = (
+            clean_whisper_hallucinations(raw_text)
+            if clean_hallucinations else raw_text.strip())
         changed = item["text"] != raw_text
         item["normalization"] = {
             "changed": changed,
@@ -1217,10 +1224,10 @@ def load_transcript_from_file(path):
     """从本地文件读取转录文本（兼容 .txt / .json / .srt）。"""
     ext = os.path.splitext(path)[1].lower()
     if ext == ".json":
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict) and "segments" in data:
             return render_segments(data["segments"])
         return _extract_text_from_json(data)
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         return f.read()

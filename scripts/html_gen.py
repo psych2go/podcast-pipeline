@@ -30,7 +30,7 @@ import re
 from datetime import date, datetime
 from urllib.parse import urlsplit
 
-from config import BASE_DIR, R2_PUBLIC_URL
+from config import R2_PUBLIC_URL
 from episode import public_audio_url
 from sections import parse_markdown_sections
 

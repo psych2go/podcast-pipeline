@@ -70,7 +70,6 @@ def _load_pipeline():
 
 def _read_audio_mono(path):
     """读音频为 16kHz 单声道 float32。"""
-    import numpy as np
     import soundfile as sf
     try:
         audio, sr = sf.read(path, dtype="float32")
@@ -245,7 +244,7 @@ def _split_cleaned_text(text, group_sizes):
     total = sum(group_sizes) or len(group_sizes)
     result = []
     cursor = 0
-    for index, size in enumerate(group_sizes):
+    for index, _size in enumerate(group_sizes):
         if index == len(group_sizes) - 1:
             end = len(tokens)
         else:
@@ -332,7 +331,7 @@ def _split_segment_by_words(segment, turns):
     texts = _split_cleaned_text(
         segment.get("text", ""), [len(group["words"]) for group in groups])
     result = []
-    for group, text in zip(groups, texts):
+    for group, text in zip(groups, texts, strict=True):
         result.append(_copy_segment_metadata(
             segment, group["start"], group["end"], text,
             group["words"], group["speaker"]))

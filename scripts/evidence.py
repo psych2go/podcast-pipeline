@@ -2,7 +2,7 @@
 import argparse
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -226,7 +226,7 @@ def migrate_evidence_provenance(folder):
         provenance["migration"] = {
             "kind": "metadata_only",
             "previous_raw_sha256": previous_raw_sha256,
-            "migrated_at": datetime.now(timezone.utc).isoformat(),
+            "migrated_at": datetime.now(UTC).isoformat(),
         }
     raw["provenance"] = provenance
     if provenance["origin_kind"] == "legacy_asr":

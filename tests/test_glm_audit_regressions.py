@@ -3,7 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -95,7 +95,7 @@ class EvidenceIntegrityTests(unittest.TestCase):
             context = fact_check_cache.build_cache_context(
                 folder,
                 ["Company A was founded in 2020", "different claim"],
-                now=datetime(2026, 8, 16, tzinfo=timezone.utc),
+                now=datetime(2026, 8, 16, tzinfo=UTC),
             )
             self.assertFalse(context["authoritative"])
             self.assertEqual(len(context["matched_entries"]), 1)

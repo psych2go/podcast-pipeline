@@ -5,7 +5,6 @@ import argparse
 import ctypes
 import importlib.metadata
 import json
-import os
 import resource
 import subprocess
 import sys

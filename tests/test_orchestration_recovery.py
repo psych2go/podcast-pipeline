@@ -224,7 +224,9 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                         "agent_pipeline.run_json_task",
                         return_value={"payload": {"entities": []}}))
 
-                    def check_after_repair(*args, **kwargs):
+                    def check_after_repair(
+                            *args, regenerate=regenerate, folder=folder,
+                            reusable=reusable, **kwargs):
                         regenerate.assert_called_once()
                         self.assertTrue((folder / "canonical_entities.json").exists())
                         self.assertTrue(kwargs["require_bound_inputs"])

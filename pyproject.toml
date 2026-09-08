@@ -25,3 +25,34 @@ packages = ["scripts", "scripts.pipeline"]
 
 [tool.setuptools.package-data]
 scripts = ["*.md"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [
+    ".venv",
+    ".venv-alignment",
+    "content",
+    "site",
+    "reports",
+    "benchmarks",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Entry scripts bootstrap sys.path before imports, and tests insert the
+# repository root the same way; E402 is expected there by design.
+"scripts/process.py" = ["E402"]
+"scripts/tts.py" = ["E402"]
+"scripts/html_gen.py" = ["E402", "E501"]
+"scripts/diarize.py" = ["E402"]
+"scripts/pipeline_map.py" = ["E402"]
+"tests/*.py" = ["E402"]
+# Long prose literals: the review/edit task prompts and the HTML/CSS/SVG
+# template (including unwrappable data: URIs) legitimately exceed 100
+# columns inside string literals. Code in these files stays fully checked.
+"scripts/ai_review.py" = ["E501"]
+"scripts/agent_pipeline.py" = ["E501"]
+"scripts/prewrite_fact_checks.py" = ["E501"]

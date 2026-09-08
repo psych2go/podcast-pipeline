@@ -5,7 +5,7 @@ import json
 import re
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import (
@@ -331,9 +331,9 @@ def _recent_error(entry, now=None):
         attempted = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return False
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if attempted.tzinfo is None:
-        attempted = attempted.replace(tzinfo=timezone.utc)
+        attempted = attempted.replace(tzinfo=UTC)
     if attempted > now + MAX_CLOCK_SKEW:
         return False
     return now - attempted < ERROR_RETRY_TTL
@@ -347,9 +347,9 @@ def _recent_success(entry, now=None):
         fetched = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return False
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if fetched.tzinfo is None:
-        fetched = fetched.replace(tzinfo=timezone.utc)
+        fetched = fetched.replace(tzinfo=UTC)
     if fetched > now + MAX_CLOCK_SKEW:
         return False
     return now - fetched < SUCCESS_REFRESH_TTL
@@ -386,7 +386,7 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
         if path.exists():
             payload = {
                 "schema_version": SCHEMA_VERSION,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
                 "entries": {},
             }
             atomic_write_json(path, payload)
@@ -402,8 +402,8 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
     entries = {}
     pending = []
     fetcher = fetcher or _fetch_source
-    now = datetime.now(timezone.utc)
-    for url, source_ids in references.items():
+    now = datetime.now(UTC)
+    for url, _source_ids in references.items():
         previous = old_entries.get(url) if isinstance(old_entries, dict) else None
         reused = (
             not force
@@ -446,7 +446,7 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
         return existing
     payload = {
         "schema_version": SCHEMA_VERSION,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
         "entries": entries,
     }
     atomic_write_json(path, payload)
