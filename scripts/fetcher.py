@@ -23,7 +23,7 @@ from sources import source_host
 
 # ── URL 抓取（四层降级）───────────────────────────────────────────
 
-_HTML_CACHE = {}
+_HTML_CACHE: dict[str, dict[str, object]] = {}
 _HTML_CACHE_TTL_SECONDS = 120
 
 

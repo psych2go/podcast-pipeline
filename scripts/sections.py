@@ -65,4 +65,5 @@ def chapter_body_map(markdown: str) -> dict[str, str]:
     return {
         section.title: section.body
         for section in chapter_sections(markdown)
+        if section.title is not None
     }

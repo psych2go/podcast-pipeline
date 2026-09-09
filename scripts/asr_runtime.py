@@ -26,7 +26,7 @@ except ImportError:
     from scripts.atomic_io import atomic_write_json
 
 
-_PRELOADED_CUDA_LIBRARIES = []
+_PRELOADED_CUDA_LIBRARIES: list[str] = []
 _CUDA_LIBRARY_PATTERNS = (
     "libcublasLt.so.12",
     "libcublas.so.12",

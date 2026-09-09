@@ -121,3 +121,8 @@ reports/
 5. 移动旧模块前必须保留原 import/CLI facade，并增加 package/direct-import 测试。
 6. 不为“目录好看”批量移动 stateful 模块或测试；每次只拆一个有明确测试的 seam。
 7. 修改阶段或 artifact 时，同时更新 `pipeline/stages.py`、本文和相关测试。
+8. 静态检查配置在 `pyproject.toml`（ruff + mypy）。mypy 全局是 lenient 基线；
+   `hashing/atomic_io/retry/text_distance` 为 strict 口袋，候选迁移名单：
+   `quality_errors`、`review_attribution`、`sections`、`sources`、
+   `publish_errors`、`pipeline_metrics`、`catalog_health`、`catalog_triage`、
+   `fact_check_cache`。新共享基础设施模块应直接在 strict 口袋内编写。

@@ -154,7 +154,7 @@ def build_asr_context(
             break
         add(_extract_terms(text, include_fragments=False), f"context_{index}")
 
-    bounded = []
+    bounded: list[str] = []
     used_chars = 0
     for term in ordered[:max_terms]:
         extra = len(term) + (2 if bounded else 0)

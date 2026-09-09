@@ -88,8 +88,9 @@ if __package__:
     )
     from scripts.pipeline.options import EpisodeOptions
 else:
-    from pipeline.cli import build_process_parser, episode_options_from_args
-    from pipeline.options import EpisodeOptions
+    from pipeline.cli import (  # type: ignore[no-redef]
+        build_process_parser, episode_options_from_args)
+    from pipeline.options import EpisodeOptions  # type: ignore[no-redef]
 
 
 # 讲稿文件名候选（新统一用 讲书稿.md；简报.md 仅向后兼容旧产物）

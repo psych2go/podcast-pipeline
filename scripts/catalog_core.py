@@ -39,7 +39,7 @@ def configure_paths(paths):
 
 
 MAX_DURATION_MB_PER_MIN = 1.2
-_AUDIO_DURATION_CACHE = {}
+_AUDIO_DURATION_CACHE: dict[str, int] = {}
 CATALOG_HEADER = (
     "# 播客处理台账\n\n"
     "| # | 播客 | 转录来源 | 讲稿字数 | 音频时长 |\n"

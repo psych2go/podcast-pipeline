@@ -1,12 +1,15 @@
 """Shared Levenshtein distance and detailed edit accounting."""
 
+from collections.abc import Sequence
+
 try:
     from rapidfuzz.distance import Levenshtein
 except ImportError:
-    Levenshtein = None
+    Levenshtein = None  # type: ignore[assignment]
 
 
-def _distance_fallback(reference, hypothesis):
+def _distance_fallback(
+        reference: Sequence[str], hypothesis: Sequence[str]) -> int:
     previous = list(range(len(hypothesis) + 1))
     for i, ref_item in enumerate(reference, 1):
         current = [i]
@@ -20,13 +23,16 @@ def _distance_fallback(reference, hypothesis):
     return previous[-1]
 
 
-def levenshtein_distance(reference, hypothesis):
+def levenshtein_distance(
+        reference: Sequence[str], hypothesis: Sequence[str]) -> int:
     if Levenshtein is not None:
         return Levenshtein.distance(reference, hypothesis)
     return _distance_fallback(reference, hypothesis)
 
 
-def edit_details(reference, hypothesis):
+def edit_details(
+        reference: Sequence[str], hypothesis: Sequence[str]
+) -> dict[str, int | float | None]:
     """Return deterministic insertion/deletion/substitution counts in O(m) memory."""
     previous = [(j, j, 0, 0) for j in range(len(hypothesis) + 1)]
     for i, ref_item in enumerate(reference, 1):

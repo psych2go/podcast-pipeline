@@ -4,20 +4,21 @@ import json
 import os
 import stat
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 import fcntl
 
 
-def _target_mode(path):
+def _target_mode(path: Path) -> int:
     try:
         return stat.S_IMODE(path.stat().st_mode)
     except FileNotFoundError:
         return 0o644
 
 
-def _fsync_path(path):
+def _fsync_path(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY)
     try:
         os.fsync(descriptor)
@@ -25,7 +26,7 @@ def _fsync_path(path):
         os.close(descriptor)
 
 
-def _fsync_directory(path):
+def _fsync_directory(path: Path) -> None:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     try:
         descriptor = os.open(path, flags)
@@ -41,7 +42,7 @@ def _fsync_directory(path):
 
 
 @contextmanager
-def atomic_output_path(path):
+def atomic_output_path(path: str | os.PathLike[str]) -> Iterator[Path]:
     """Yield a same-directory staging path and replace the target on success."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,23 +66,27 @@ def atomic_output_path(path):
             pass
 
 
-def atomic_write_bytes(path, data):
+def atomic_write_bytes(
+        path: str | os.PathLike[str], data: bytes) -> None:
     with atomic_output_path(path) as tmp_path:
         tmp_path.write_bytes(data)
 
 
-def atomic_write_text(path, text, encoding="utf-8"):
+def atomic_write_text(
+        path: str | os.PathLike[str], text: str,
+        encoding: str = "utf-8") -> None:
     atomic_write_bytes(path, text.encode(encoding))
 
 
-def atomic_write_json(path, payload):
+def atomic_write_json(
+        path: str | os.PathLike[str], payload: object) -> None:
     atomic_write_text(
         path,
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
     )
 
 
-def _lock_path(key):
+def _lock_path(key: object) -> Path:
     digest = hashlib.sha256(str(key).encode("utf-8")).hexdigest()
     root = Path(tempfile.gettempdir()) / "podcast-pipeline-locks"
     root.mkdir(parents=True, exist_ok=True)
@@ -89,7 +94,7 @@ def _lock_path(key):
 
 
 @contextmanager
-def exclusive_file_lock(key, blocking=True):
+def exclusive_file_lock(key: object, blocking: bool = True) -> Iterator[None]:
     """Hold a cross-process exclusive lock identified by an arbitrary key."""
     path = _lock_path(key)
     with path.open("a+", encoding="utf-8") as handle:
