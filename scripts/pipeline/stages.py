@@ -108,6 +108,7 @@ STAGES = (
         outputs=(
             "ai_review.json", "review_repair.json", "quality_report.json",
             "ai_review_failures/",  # Only created for rejected review verdicts.
+            "ai_review_contract_failures/",  # Private, non-authoritative diagnostics.
         ),
     ),
     StageSpec(

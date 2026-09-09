@@ -189,7 +189,7 @@ claim evidence 完成后，主脚本先生成 `editorial_fact_checks.json`。该
 3. 写 `summary_map.json`，绑定章节正文哈希、unit/claim ID、笔记 claim ID 和笔记正文哈希。
 4. 专有名词需要控制读音时添加 `tts_lexicon.json`，格式为 `{"原词": "朗读文本"}`。
 
-中文完整笔记和讲书稿面向读者时只保留影响理解的事实状态限定，例如“节目称”“报道称”“仍在洽谈”“这是预测”；不得出现“这里不采用”“这里不保留”“本稿未独立核实”“纠错稿已将”等后台审查决策。无法核实的精确数字应直接改成自然、带归因的概括，审查理由只留在 JSON 产物中。严格质量门分别以 `notes_audit_narration` 和 `briefing_audit_narration` 阻断明确的后台叙述；正常讨论政策审查、论文核查、机构审批或归因给节目人物的未核实声明不因领域词汇而失败。依赖语境的后台决策泄漏由独立 AI 终审继续检查。
+中文完整笔记和讲书稿面向读者时只保留影响理解的事实状态限定，例如“节目称”“报道称”“仍在洽谈”“这是预测”；不得出现“这里不采用”“这里不保留”“本稿未独立核实”“纠错稿已将”等后台审查决策。无法核实的精确数字应直接改成自然、带归因的概括，审查理由只留在 JSON 产物中。严格质量门分别以 `notes_audit_narration` 和 `briefing_audit_narration` 阻断明确的后台叙述；正常讨论政策审查、论文核查、机构审批或归因给节目人物的未核实声明不因领域词汇而失败。依赖语境的后台决策泄漏由独立 AI 终审继续检查。确定性检查另覆盖“这里应保留‘可能’”和以“公开稿/讲书稿/完整笔记”为主语的明确写作指令，不泛禁“不能”“不应”或科学不确定性措辞。外部核查的数字范围不能替换节目数字后仍归因给嘉宾；保留原话数值与归因，外部纠正另句交代来源及口径。
 
 内容 subagent 完成后，`content_finalizer.py` 是唯一允许写回讲稿和
 `summary_map.json` 的最终化阶段：它同步逐字标题、刷新正文哈希、只在自然段和
@@ -251,7 +251,12 @@ segment/evidence 哈希或 claim ID；完成后必须刷新正文、summary、�
 诊断，不依赖中文错误文案。快照保留原有 issues、
 reviewed_files 和审查元数据，后续复审不覆盖它；成功审查不另存快照。
 这些文件仅作本地排障，不进入独立审查的输入或发布产物。runner 未返回有效审查
-时不伪造快照，仍用现有 stage error 留痕；快照写入失败也会令该次运行失败。
+时不伪造有效审查快照。合同校验/机械修复失败另存非权威诊断至
+`ai_review_contract_failures/<stage-id>.json`（直接调用内部函数时用独立 UUID），
+保留归一化前输出、修复输出（若有）、初始/最终校验错误、输入哈希及调用指标；
+`metrics.contract_failure_snapshot` 链接该文件。它不代表审查通过，不进入缓存、
+后续审查输入或发布产物。原始 runner 完全失败仍用 stage error 与
+`metrics.runner_failure` 留痕；诊断或快照写入失败也会令该次运行失败。
 不自动重跑历史单集或清理快照，在下次正常处理失败时按该路径查看原因。
 
 复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定，
@@ -263,6 +268,14 @@ subclaim，并用 `parent_claim_id` / `subclaim_id` 绑定 content_map；每个�
 - `assertion_type`：fact、opinion、prediction、recommendation、explanation、definition、anecdote、allegation、inference。
 - `verification_mode`：web_required、source_document_required、web_spot_check、transcript_attribution、transcript_only、safety_cross_check、not_applicable。
 - `risk_domain`：general、medical、legal、financial、political、safety。
+
+AI 审查修复后的合同校验与最终质量门统一调用
+`claim_taxonomy.validate_review_fact_checks()`；校验只返回错误和警告，不改写
+核查模式、verdict 或发布状态。质量门不再维护另一份 v3 规则。归一化只派生 `claim_type`，不得将
+unsupported/contradicted 自动改成忠实归因 verdict。机械修复仅允许
+`claim_type`、`subclaim_id`、`verification_mode`；冻结 verdict、publication_status、
+source_urls、checked_at 和 notes 等语义字段，不联网补来源。无法在这些边界内
+修复的合同继续阻断，需要通过统一入口重新独立审查。
 
 `claim_type` 只保留为 v2 兼容派生字段；主持人观点、专家解释、第三方指控和节目
 元数据不能再硬塞进 guest/public 类别。说话人内部数据和亲历事件不强制联网，
@@ -500,6 +513,10 @@ HF_TOKEN=hf_xxx               # 可选；缺失时自动跳过 diarization 并�
 `FETCH_MAX_RETRIES`/`FETCH_TIMEOUT` 和
 `TTS_MAX_RETRIES`/`TTS_TIMEOUT` 可覆盖通用网络参数。subagent 使用独立的
 长时超时，避免把内容审查错误限制为普通 HTTP 请求时长。
+runner 失败只输出分类、退出码及可识别的 HTTP 状态，不回显提示词/原始 stderr。
+失败指标记录 task/model、runner 序号、外层实际启动次数、重试次数和累计调用耗时；
+这些次数不含底层 CLI 自身的重试。明确 model_not_found 或认证失败立即停止，
+429/未知错误仍沿用有界重试，不增加长轮询或自动换模型。
 
 subagent 默认创建隔离的临时 `CODEX_HOME`：复制 `auth.json`，并从用户
 `config.toml` 生成最小安全配置，只保留 model、自定义 model provider、认证相关

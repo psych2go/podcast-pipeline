@@ -328,6 +328,9 @@ _AUDIT_NARRATION_PATTERNS = (
                r"(?:未独立核实|不采用|不保留|删除|省略|核查发现|审查发现)"),
     re.compile(r"这里(?:不采用|不保留|只按|仅按|材料说的是)"),
     re.compile(r"纠错稿(?:已|将|把)"),
+    # Narrow editorial subjects, not general 不应/不能 or scientific uncertainty.
+    re.compile(r"这里(?:应|需|要)保留[“\"]"),
+    re.compile(r"(?:公开稿|讲书稿|完整笔记)(?:中)?(?:应|需|必须|不得|不应)"),
 )
 
 

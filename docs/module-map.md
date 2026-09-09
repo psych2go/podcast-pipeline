@@ -35,8 +35,8 @@
 | `content_map.py`、`claim_evidence.py` | source accountability 和逐 claim 证据 | 不负责外部事实纠正 |
 | `prewrite_fact_checks.py` | 写作前原子事实核查和断点恢复 | 外部纠正保留在事实台账中 |
 | `content_finalizer.py` | 讲稿、summary map、章节和 TTS 词典最终化 | AI review 前唯一允许的确定性写回阶段 |
-| `ai_review.py`、`review_repair.py` | AI 终审和受限修复 | 修复后必须重新独立审查 |
-| `quality_report.py`、`preflight.py` | 确定性质量门 | 结构、哈希、证据和新鲜度是主要约束 |
+| `ai_review.py`、`review_repair.py` | AI 终审和受限修复 | 修复后必须重新独立审查；机械修复冻结语义字段，合同失败诊断只留本地 `ai_review_contract_failures/` |
+| `quality_report.py`、`preflight.py` | 确定性质量门 | 结构、哈希、证据和新鲜度是主要约束；v3 fact-check 合同复用 `claim_taxonomy.validate_review_fact_checks()`，与 AI 审查修复校验共用单一规则 |
 | `tts.py`、`html_gen.py`、`sections.py` | 音频与阅读页 | TTS 和 HTML 共用章节解析 seam |
 | `catalog.py`、`catalog_*` | 发布事务 facade 与实现 | 已按 core/site/health/triage/publish 拆分；`catalog_triage.py` 只读诊断阻断原因 |
 | `release.py`、`publish.py` | release provenance 和远端验收 | Wrangler 成功不等于发布成功 |
@@ -58,7 +58,7 @@
 | 6 | `prewrite-fact-checks` | `prewrite_fact_checks.py` | source claims、实体、纠错稿 | `editorial_fact_checks.json`、批次和进度文件 |
 | 7 | `content-writing` | `agent_pipeline.py` | content map、实体、事实台账 | `中文完整笔记.md`、`讲书稿.md`、`summary_map.json` |
 | 8 | `content-finalization` | `content_finalizer.py` | 笔记、讲稿、summary map | 最终讲稿、最终 summary map、`tts_lexicon.json` |
-| 9 | `review-and-quality` | `ai_review.py`、`review_repair.py`、`quality_report.py` | 全部内容和证据产物 | `ai_review.json`、`review_repair.json`、`quality_report.json`；审查拒绝时另存 `ai_review_failures/<stage-id>.json` |
+| 9 | `review-and-quality` | `ai_review.py`、`review_repair.py`、`quality_report.py` | 全部内容和证据产物 | `ai_review.json`、`review_repair.json`、`quality_report.json`；审查拒绝时另存 `ai_review_failures/<stage-id>.json`；合同失败另存非权威 `ai_review_contract_failures/<stage-id>.json` |
 | 10 | `tts` | `tts.py` | 通过的质量报告和最终讲稿 | 章节音频、最终 MP3、`tts_manifest.json` |
 | 11 | `release-preparation` | `process.py`、`release.py` | 最终 MP3、讲稿、Git provenance | `release.json` 和内容哈希音频 key |
 | 12 | `reader-page` | `html_gen.py`、`episode.py` | 最终讲稿、episode、release | 使用 release 音频 key 的单集 HTML |

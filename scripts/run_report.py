@@ -176,6 +176,9 @@ class RunReport:
         try:
             yield stage
         except BaseException as exc:
+            failure_metrics = getattr(exc, "failure_metrics", None)
+            if isinstance(failure_metrics, dict) and failure_metrics:
+                stage.metrics["runner_failure"] = failure_metrics
             stage.fail(exc)
             raise
         else:

@@ -1,3 +1,4 @@
+import copy
 import sys
 import unittest
 from pathlib import Path
@@ -9,6 +10,7 @@ from scripts.claim_taxonomy import (
     atomic_subclaim_parent,
     derive_legacy_claim_type,
     is_cacheable_fact_check,
+    validate_review_fact_checks,
 )
 from scripts.quality_report import _ai_fact_check_consistency
 
@@ -52,6 +54,38 @@ class ClaimTaxonomyTests(unittest.TestCase):
             speaker_role="not_applicable",
             assertion_type="fact",
         )), "public_fact")
+
+    def test_general_recommendation_rejects_external_fact_mode(self):
+        item = fact_check(
+            assertion_type="recommendation", claim_type="guest_opinion",
+            verification_mode="web_required",
+        )
+        review = {"schema_version": 3, "fact_checks": [item]}
+        expected = validate_review_fact_checks(review, {"U0001-C01"})
+        self.assertTrue(any("普通建议核查模式" in e for e in expected[0]))
+        self.assertEqual(_ai_fact_check_consistency(review, {"U0001-C01"}), expected)
+
+    def test_explanation_and_definition_modes_agree_without_mutation(self):
+        allowed = {
+            "transcript_attribution", "transcript_only",
+            "web_spot_check", "safety_cross_check",
+        }
+        for assertion in ("explanation", "definition"):
+            for mode in (*sorted(allowed), "web_required",
+                         "source_document_required", "not_applicable"):
+                with self.subTest(assertion=assertion, mode=mode):
+                    review = {"schema_version": 3, "fact_checks": [fact_check(
+                        assertion_type=assertion, claim_type="not_applicable",
+                        verification_mode=mode, verdict="qualified",
+                        risk_domain="medical",
+                        source_urls=["https://example.com/research"],
+                    )]}
+                    before = copy.deepcopy(review)
+                    expected = validate_review_fact_checks(review, {"U0001-C01"})
+                    self.assertEqual(bool(expected[0]), mode not in allowed)
+                    self.assertEqual(
+                        _ai_fact_check_consistency(review, {"U0001-C01"}), expected)
+                    self.assertEqual(review, before)
 
     def test_atomic_subclaim_id_binds_parent(self):
         self.assertEqual(
