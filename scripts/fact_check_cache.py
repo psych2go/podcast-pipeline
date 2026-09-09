@@ -5,12 +5,8 @@ import re
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json
-    from claim_taxonomy import is_cacheable_fact_check
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
-    from scripts.claim_taxonomy import is_cacheable_fact_check
+from scripts.atomic_io import atomic_write_json
+from scripts.claim_taxonomy import is_cacheable_fact_check
 
 
 CACHE_FILENAME = "fact_check_cache.json"

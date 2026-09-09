@@ -8,22 +8,27 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT))
 
-from hashing import sha256_bytes, sha256_file, sha256_text
-from html_gen import parse_sections as html_parse_sections
-from preflight import _review_recovery_decision
-from process import (
-    EpisodeOptions, _process_impl, _quality_metrics as process_quality_metrics,
+from scripts.hashing import sha256_bytes, sha256_file, sha256_text
+from scripts.html_gen import parse_sections as html_parse_sections
+from scripts.preflight import _review_recovery_decision
+from scripts.process import (
+    EpisodeOptions,
+    _process_impl,
+    _quality_metrics as process_quality_metrics,
 )
-from tts import split_sections as tts_split_sections
-from pipeline_metrics import quality_metrics
-from quality_errors import (
-    AI_REVIEW_FAILED, AI_REVIEW_MISSING, AI_REVIEW_STALE,
-    add_error, coded_errors,
+from scripts.tts import split_sections as tts_split_sections
+from scripts.pipeline_metrics import quality_metrics
+from scripts.quality_errors import (
+    AI_REVIEW_FAILED,
+    AI_REVIEW_MISSING,
+    AI_REVIEW_STALE,
+    add_error,
+    coded_errors,
 )
-from sections import parse_markdown_sections
-from text_distance import edit_details, levenshtein_distance
+from scripts.sections import parse_markdown_sections
+from scripts.text_distance import edit_details, levenshtein_distance
 
 
 class SharedSectionParserTests(unittest.TestCase):

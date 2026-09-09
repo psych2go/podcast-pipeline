@@ -2,15 +2,15 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from claim_taxonomy import (
+from scripts.claim_taxonomy import (
     AI_REVIEW_SCHEMA_VERSION,
     atomic_subclaim_parent,
     derive_legacy_claim_type,
     is_cacheable_fact_check,
 )
-from quality_report import _ai_fact_check_consistency
+from scripts.quality_report import _ai_fact_check_consistency
 
 
 def fact_check(**overrides):

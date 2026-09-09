@@ -3,9 +3,9 @@ import unittest
 from pathlib import Path
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from asr_refinement import (  # noqa: E402
+from scripts.asr_refinement import (
     assess_segment,
     build_asr_context,
     build_refinement_ranges,

@@ -7,12 +7,8 @@ empty affected-unit/chapter lists mean unknown, not proof of no impact.
 """
 from pathlib import Path
 
-try:
-    from agent_pipeline import content_pipeline_needed
-    from content_map import body_sha256
-except ImportError:
-    from scripts.agent_pipeline import content_pipeline_needed
-    from scripts.content_map import body_sha256
+from scripts.agent_pipeline import content_pipeline_needed
+from scripts.content_map import body_sha256
 
 
 def current_transcript_basis(folder):

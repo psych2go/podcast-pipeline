@@ -13,11 +13,11 @@ import time
 import warnings
 from pathlib import Path
 
-_scripts = str(Path(__file__).resolve().parent)
+_scripts = str(Path(__file__).resolve().parents[1])
 if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
-from config import HF_TOKEN, require_hf_token
+from scripts.config import HF_TOKEN, require_hf_token
 
 _PIPELINE = None
 

@@ -2,22 +2,13 @@
 import os
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json
-    from quality_errors import (
-        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
-        AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
-        AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, AUTO_REVIEW_CODES,
-        ENTITY_ACCURACY_FAILED, quality_error_alignment,
-    )
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
-    from scripts.quality_errors import (
-        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
-        AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
-        AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, AUTO_REVIEW_CODES,
-        ENTITY_ACCURACY_FAILED, quality_error_alignment,
-    )
+from scripts.atomic_io import atomic_write_json
+from scripts.quality_errors import (
+    AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_ISSUE_EVIDENCE,
+    AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
+    AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, AUTO_REVIEW_CODES,
+    ENTITY_ACCURACY_FAILED, quality_error_alignment,
+)
 
 
 def _review_recovery_decision(report):
@@ -64,10 +55,7 @@ def quality_gate(
         )
         return True
 
-    try:
-        from source_relevance import refresh_source_relevance_cache
-    except ImportError:
-        from scripts.source_relevance import refresh_source_relevance_cache
+    from scripts.source_relevance import refresh_source_relevance_cache
     try:
         refresh_source_relevance_cache(folder)
     except Exception as exc:
@@ -76,10 +64,7 @@ def quality_gate(
             flush=True,
         )
 
-    try:
-        from quality_report import build_quality_report
-    except ImportError:
-        from scripts.quality_report import build_quality_report
+    from scripts.quality_report import build_quality_report
     report = build_quality_report(folder, strict=True)
     out = folder / "quality_report.json"
     atomic_write_json(out, report)
@@ -88,7 +73,7 @@ def quality_gate(
     if not report.get("passed", False) and auto_ai_review and can_auto_review:
         print("[质量门] AI 审查缺失或过期，自动运行 subagent...", flush=True)
         try:
-            from review_repair import review_and_repair
+            from scripts.review_repair import review_and_repair
             review_and_repair(
                 folder,
                 max_rounds=max(0, int(os.environ.get(

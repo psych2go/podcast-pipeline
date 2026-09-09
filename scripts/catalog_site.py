@@ -4,43 +4,24 @@ import os
 import sys
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
-    from episode import (
-        legacy_page_path as episode_legacy_page_path,
-        page_path as episode_page_path, quality_metadata,
-    )
-    from site_index import render_index
-except ImportError:
-    from scripts.atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
-    from scripts.episode import (
-        legacy_page_path as episode_legacy_page_path,
-        page_path as episode_page_path, quality_metadata,
-    )
-    from scripts.site_index import render_index
+from scripts import catalog_core as _core_module
+from scripts.atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
+from scripts.catalog_core import (
+    _catalog_text, _display_title,
+    _episode_dirs as _episode_dirs,
+    _find_briefing, _gen_mp3, _load_site_entries,
+    _ordered_episode_names, _read_source, episode_stats,
+)
+from scripts.episode import (
+    legacy_page_path as episode_legacy_page_path,
+    page_path as episode_page_path, quality_metadata,
+)
+from scripts.site_index import render_index
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONTENT_DIR = BASE_DIR / "content"
 SITE_DIR = BASE_DIR / "site"
 CATALOG = CONTENT_DIR / "播客目录.md"
-
-# Injected by the catalog facade; defaults keep direct module imports usable.
-try:
-    import catalog_core as _core_module
-    from catalog_core import (
-        _catalog_text, _display_title,
-        _episode_dirs as _episode_dirs,
-        _find_briefing, _gen_mp3, _load_site_entries,
-        _ordered_episode_names, _read_source, episode_stats,
-    )
-except ImportError:
-    from scripts import catalog_core as _core_module
-    from scripts.catalog_core import (
-        _catalog_text, _display_title,
-        _episode_dirs as _episode_dirs,
-        _find_briefing, _gen_mp3, _load_site_entries,
-        _ordered_episode_names, _read_source, episode_stats,
-    )
 
 
 def configure_paths(paths):
@@ -73,10 +54,7 @@ def _build_entry(name, prev):
 def _site_readiness_errors(names, existing, strict_names=None):
     errors = []
     strict_names = set(names if strict_names is None else strict_names)
-    try:
-        from quality_report import build_quality_report
-    except ImportError:
-        from scripts.quality_report import build_quality_report
+    from scripts.quality_report import build_quality_report
 
     for name in names:
         folder = CONTENT_DIR / name

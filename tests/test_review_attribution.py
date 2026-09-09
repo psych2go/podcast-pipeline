@@ -6,13 +6,13 @@ import unittest.mock
 from datetime import datetime, UTC
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import ai_review
-import catalog_health
-import catalog_triage
-import review_repair
-from review_attribution import (
+from scripts import ai_review
+from scripts import catalog_health
+from scripts import catalog_triage
+from scripts import review_repair
+from scripts.review_attribution import (
     MAX_ATTRIBUTED_ISSUES,
     STATEMENT_HEAD_CHARS,
     attribute_rejection,
@@ -175,7 +175,7 @@ class ReviewRepairAttributionTests(unittest.TestCase):
             passed = {"passed": True, "issues": [], "reviewed_files": {}}
             reviewer = unittest.mock.Mock(side_effect=[failed, passed])
             with unittest.mock.patch(
-                    "review_repair._repair_summary",
+                    "scripts.review_repair._repair_summary",
                     return_value={"action": "finalize_content_package"}):
                 result = review_repair.review_and_repair(
                     folder, reviewer=reviewer, max_rounds=1)

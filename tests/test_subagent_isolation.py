@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import subagent
+from scripts import subagent
 
 
 class SubagentIsolationTests(unittest.TestCase):
@@ -70,8 +70,8 @@ class SubagentIsolationTests(unittest.TestCase):
                     "SUBAGENT_COMMAND": "codex",
                     "SUBAGENT_MAX_RETRIES": "0",
                 }, clear=False), \
-                    patch("subagent.shutil.which", return_value="/bin/codex"), \
-                    patch("subagent._run_process", side_effect=fake_process):
+                    patch("scripts.subagent.shutil.which", return_value="/bin/codex"), \
+                    patch("scripts.subagent._run_process", side_effect=fake_process):
                 subagent._run(
                     episode,
                     "return JSON",
@@ -121,8 +121,8 @@ class SubagentIsolationTests(unittest.TestCase):
             }
             with patch.dict(os.environ, {
                     **base_env, "SUBAGENT_MODEL": "glm-5.3-flash"}, clear=False), \
-                    patch("subagent.shutil.which", return_value="/bin/codex"), \
-                    patch("subagent._run_process", side_effect=fake_process):
+                    patch("scripts.subagent.shutil.which", return_value="/bin/codex"), \
+                    patch("scripts.subagent._run_process", side_effect=fake_process):
                 subagent._run(episode, "task", task_name="env_model")
                 self.assertIn("--model", observed["cmd"])
                 self.assertEqual(
@@ -136,8 +136,8 @@ class SubagentIsolationTests(unittest.TestCase):
                     observed["cmd"][observed["cmd"].index("--model") + 1],
                     "task-model")
             with patch.dict(os.environ, base_env, clear=False), \
-                    patch("subagent.shutil.which", return_value="/bin/codex"), \
-                    patch("subagent._run_process", side_effect=fake_process):
+                    patch("scripts.subagent.shutil.which", return_value="/bin/codex"), \
+                    patch("scripts.subagent._run_process", side_effect=fake_process):
                 # Without the env override the runner keeps its config default.
                 subagent._run(episode, "task", task_name="no_model")
                 self.assertNotIn("--model", observed["cmd"])
@@ -180,9 +180,9 @@ class SubagentIsolationTests(unittest.TestCase):
         ]
         process.poll.return_value = None
 
-        with patch("subagent.subprocess.Popen", return_value=process), \
-                patch("subagent.os.getpgid", return_value=456), \
-                patch("subagent.os.killpg") as killpg:
+        with patch("scripts.subagent.subprocess.Popen", return_value=process), \
+                patch("scripts.subagent.os.getpgid", return_value=456), \
+                patch("scripts.subagent.os.killpg") as killpg:
             with self.assertRaises(subagent.subprocess.TimeoutExpired):
                 subagent._run_process(
                     ["codex"], cwd=Path("."), env={}, timeout=1)
@@ -207,7 +207,7 @@ class SubagentIsolationTests(unittest.TestCase):
                     "generated content", encoding="utf-8")
                 return {"response": "done"}
 
-            with patch("subagent._run", side_effect=fake_run):
+            with patch("scripts.subagent._run", side_effect=fake_run):
                 result = subagent.run_edit_task(
                     folder,
                     "Read input.txt and write output.md.",
@@ -240,7 +240,7 @@ class SubagentIsolationTests(unittest.TestCase):
                     "generated content", encoding="utf-8")
                 return {"response": "done"}
 
-            with patch("subagent._run", side_effect=fake_run):
+            with patch("scripts.subagent._run", side_effect=fake_run):
                 result = subagent.run_edit_task(
                     folder,
                     "Read input.txt and write output.md.",
@@ -273,7 +273,7 @@ class SubagentIsolationTests(unittest.TestCase):
                     "unauthorized", encoding="utf-8")
                 return {"response": "done"}
 
-            with patch("subagent._run", side_effect=fake_run):
+            with patch("scripts.subagent._run", side_effect=fake_run):
                 with self.assertRaisesRegex(
                         subagent.SubagentError, "未允许的文件"):
                     subagent.run_edit_task(
@@ -306,7 +306,7 @@ class SubagentIsolationTests(unittest.TestCase):
                     "generated content", encoding="utf-8")
                 return {"response": "done"}
 
-            with patch("subagent._run", side_effect=fake_run):
+            with patch("scripts.subagent._run", side_effect=fake_run):
                 with self.assertRaisesRegex(
                         subagent.SubagentError, "input_files"):
                     subagent.run_edit_task(
@@ -332,7 +332,7 @@ class SubagentIsolationTests(unittest.TestCase):
                 self.assertFalse((Path(workspace) / "optional.txt").exists())
                 return {"response": "done"}
 
-            with patch("subagent._run", side_effect=fake_run):
+            with patch("scripts.subagent._run", side_effect=fake_run):
                 result = subagent.run_edit_task(
                     folder,
                     "Delete optional.txt when no replacement is needed.",
@@ -380,9 +380,9 @@ class SubagentIsolationTests(unittest.TestCase):
                     "SUBAGENT_COMMAND": "codex",
                     "SUBAGENT_MAX_RETRIES": "1",
             }, clear=False), patch(
-                    "subagent.shutil.which", return_value="/bin/codex"), patch(
-                    "subagent._run_process", side_effect=fake_process), patch(
-                    "subagent.time.sleep"):
+                    "scripts.subagent.shutil.which", return_value="/bin/codex"), patch(
+                    "scripts.subagent._run_process", side_effect=fake_process), patch(
+                    "scripts.subagent.time.sleep"):
                 result = subagent._run(
                     workspace, "edit output", task_name="retry_restore",
                     write_files=True)

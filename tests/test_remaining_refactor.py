@@ -8,16 +8,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT))
 
-import ai_review
-import catalog
-import catalog_core
-import catalog_publish
-import content_map
-import episode
-import html_gen
-import validator
+from scripts import ai_review
+from scripts import catalog
+from scripts import catalog_core
+from scripts import catalog_publish
+from scripts import content_map
+from scripts import episode
+from scripts import html_gen
+from scripts import validator
 
 
 class CatalogModuleSplitTests(unittest.TestCase):

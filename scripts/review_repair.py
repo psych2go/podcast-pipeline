@@ -4,54 +4,31 @@ import re
 from datetime import datetime, UTC
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_bytes, atomic_write_json, atomic_write_text
-    from claim_evidence import refine_claim_evidence
-    from content_map import (
-        body_sha256,
-        enrich_content_map_evidence,
-        enrich_summary_map_evidence,
-        load_json,
-        save_json,
-    )
-    from content_finalizer import (
-        finalize_content_package,
-        generate_safe_tts_lexicon,
-        validate_tts_readiness,
-    )
-    from tts import load_tts_lexicon
-    from hashing import sha256_file
-    from prewrite_fact_checks import (
-        FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
-        validate_ledger as validate_prewrite_fact_checks,
-    )
-    from review_attribution import attribute_rejection
-except ImportError:
-    from scripts.atomic_io import (
-        atomic_write_bytes,
-        atomic_write_json,
-        atomic_write_text,
-    )
-    from scripts.claim_evidence import refine_claim_evidence
-    from scripts.content_map import (
-        body_sha256,
-        enrich_content_map_evidence,
-        enrich_summary_map_evidence,
-        load_json,
-        save_json,
-    )
-    from scripts.content_finalizer import (
-        finalize_content_package,
-        generate_safe_tts_lexicon,
-        validate_tts_readiness,
-    )
-    from scripts.tts import load_tts_lexicon
-    from scripts.hashing import sha256_file
-    from scripts.prewrite_fact_checks import (
-        FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
-        validate_ledger as validate_prewrite_fact_checks,
-    )
-    from scripts.review_attribution import attribute_rejection
+from scripts.atomic_io import (
+    atomic_write_bytes,
+    atomic_write_json,
+    atomic_write_text,
+)
+from scripts.claim_evidence import refine_claim_evidence
+from scripts.content_map import (
+    body_sha256,
+    enrich_content_map_evidence,
+    enrich_summary_map_evidence,
+    load_json,
+    save_json,
+)
+from scripts.content_finalizer import (
+    finalize_content_package,
+    generate_safe_tts_lexicon,
+    validate_tts_readiness,
+)
+from scripts.tts import load_tts_lexicon
+from scripts.hashing import sha256_file
+from scripts.prewrite_fact_checks import (
+    FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
+    validate_ledger as validate_prewrite_fact_checks,
+)
+from scripts.review_attribution import attribute_rejection
 
 
 SAFE_SUMMARY_CATEGORIES = {"summary_map", "summary", "coverage_mapping"}
@@ -426,10 +403,7 @@ def review_and_repair(
     """Review, perform bounded safe repairs, and independently re-review."""
     folder = Path(folder)
     if reviewer is None:
-        try:
-            import ai_review
-        except ImportError:
-            from scripts import ai_review
+        from scripts import ai_review
         reviewer = ai_review.review_episode
     history = []
     review = None

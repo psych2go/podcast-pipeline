@@ -6,9 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from asr_benchmark_runner import (  # noqa: E402
+from scripts.asr_benchmark_runner import (
     file_fingerprint,
     recommend_model_policy,
     rescore_manifest,
@@ -97,10 +97,10 @@ class RunnerTests(unittest.TestCase):
                 "speaker_attributed_wer": {"wer": 0.0},
             }
             with patch(
-                    "asr_benchmark_runner.transcribe",
+                    "scripts.asr_benchmark_runner.transcribe",
                     return_value=fake_result), \
                     patch(
-                        "asr_benchmark_runner.benchmark_sample",
+                        "scripts.asr_benchmark_runner.benchmark_sample",
                         return_value=fake_metrics):
                 report = run_manifest(path)
         self.assertEqual(report["runs"][0]["status"], "passed")
@@ -135,10 +135,10 @@ class RunnerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td, \
                 patch(
-                    "asr_benchmark_runner.transcribe",
+                    "scripts.asr_benchmark_runner.transcribe",
                     return_value=fake_result), \
                 patch(
-                    "asr_benchmark_runner.benchmark_sample",
+                    "scripts.asr_benchmark_runner.benchmark_sample",
                     side_effect=score):
             run_policy(
                 {
@@ -212,12 +212,12 @@ class RunnerTests(unittest.TestCase):
                 "speaker_attributed_wer": {"wer": 0.0},
             }
             with patch(
-                    "asr_benchmark_runner.transcribe",
+                    "scripts.asr_benchmark_runner.transcribe",
                     return_value=fake_result), \
                     patch(
-                        "asr_benchmark_runner.benchmark_sample",
+                        "scripts.asr_benchmark_runner.benchmark_sample",
                         return_value=fake_metrics), \
-                    patch("diarize.diarize") as diarize_mock:
+                    patch("scripts.diarize.diarize") as diarize_mock:
                 report = run_manifest(
                     path,
                     output_dir=output,
@@ -248,7 +248,7 @@ class RunnerTests(unittest.TestCase):
                 },
                 "turns": [[0.0, 1.0, "SPEAKER_00"]],
             }), encoding="utf-8")
-            from asr_benchmark_runner import load_shared_diarization
+            from scripts.asr_benchmark_runner import load_shared_diarization
 
             with self.assertRaisesRegex(ValueError, "当前音频不匹配"):
                 load_shared_diarization(
@@ -303,10 +303,10 @@ class RunnerTests(unittest.TestCase):
                 "speaker_attributed_wer": {"wer": 0.0},
             }
             with patch(
-                    "asr_benchmark_runner.benchmark_sample",
+                    "scripts.asr_benchmark_runner.benchmark_sample",
                     return_value=fake_metrics), \
                     patch(
-                        "asr_benchmark_runner.transcribe") as transcribe_mock:
+                        "scripts.asr_benchmark_runner.transcribe") as transcribe_mock:
                 report = rescore_manifest(path, output_dir=output)
         transcribe_mock.assert_not_called()
         self.assertEqual(report["schema_version"], 2)

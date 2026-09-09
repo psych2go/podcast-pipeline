@@ -3,26 +3,23 @@
 ASR 基准需要人工参考文本；本仓库不伪造参考答案。总结基准复用
 content_map.json/summary_map.json 的内容覆盖率。
 """
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 import argparse
 import json
 import re
 from collections import Counter
 from pathlib import Path
 
-try:
-    from text_distance import levenshtein_distance
-except ImportError:
-    from scripts.text_distance import levenshtein_distance
+from scripts.text_distance import levenshtein_distance
 
-try:
-    from content_map import coverage_report, load_json
-except ImportError:  # package import
-    from scripts.content_map import coverage_report, load_json
+from scripts.content_map import coverage_report, load_json
 
-try:
-    from asr_benchmark import benchmark_sample
-except ImportError:
-    from scripts.asr_benchmark import benchmark_sample
+from scripts.asr_benchmark import benchmark_sample
 
 
 def _words(text):

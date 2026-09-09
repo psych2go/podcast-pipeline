@@ -3,24 +3,15 @@ import copy
 import re
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json, atomic_write_text
-    from content_map import normalize_summary_claim_ids
-    from tts import apply_tts_lexicon, load_tts_lexicon, normalize_for_tts
-    from validator import (
-        MAX_CHAPTER_CHARS, MIN_CHAPTER_CHARS, audit_narration_issues,
-        normalize_briefing_artifacts,
-    )
-except ImportError:
-    from scripts.atomic_io import atomic_write_json, atomic_write_text
-    from scripts.content_map import normalize_summary_claim_ids
-    from scripts.tts import apply_tts_lexicon, load_tts_lexicon, normalize_for_tts
-    from scripts.validator import (
-        MAX_CHAPTER_CHARS,
-        MIN_CHAPTER_CHARS,
-        audit_narration_issues,
-        normalize_briefing_artifacts,
-    )
+from scripts.atomic_io import atomic_write_json, atomic_write_text
+from scripts.content_map import normalize_summary_claim_ids
+from scripts.tts import apply_tts_lexicon, load_tts_lexicon, normalize_for_tts
+from scripts.validator import (
+    MAX_CHAPTER_CHARS,
+    MIN_CHAPTER_CHARS,
+    audit_narration_issues,
+    normalize_briefing_artifacts,
+)
 
 
 class ContentFinalizationError(RuntimeError):

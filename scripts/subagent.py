@@ -18,12 +18,8 @@ import time
 import tomllib
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_bytes
-    from retry import exponential_delay
-except ImportError:
-    from scripts.atomic_io import atomic_write_bytes
-    from scripts.retry import exponential_delay
+from scripts.atomic_io import atomic_write_bytes
+from scripts.retry import exponential_delay
 
 
 class SubagentError(RuntimeError):

@@ -1,4 +1,10 @@
 """Evidence provenance and legacy ASR migration."""
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 import argparse
 import json
 import subprocess
@@ -6,15 +12,9 @@ from datetime import datetime, UTC
 from difflib import SequenceMatcher
 from pathlib import Path
 
-try:
-    from hashing import sha256_file as _sha256_file
-except ImportError:
-    from scripts.hashing import sha256_file as _sha256_file
+from scripts.hashing import sha256_file as _sha256_file
 
-try:
-    from atomic_io import atomic_write_json
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
+from scripts.atomic_io import atomic_write_json
 
 
 PROVENANCE_SCHEMA_VERSION = 1

@@ -1,169 +1,94 @@
 """生成转录和中文讲稿的可审计质量报告。"""
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 import argparse
 import hashlib
 import json
 import re
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json
-    from quality_errors import (
-        ASR_QUALITY_FAILED, ASR_COMPLETENESS_MISSING,
-        ASR_SPEECH_COVERAGE_FAILED, ASR_TIMELINE_INVALID,
-        BRIEFING_AUDIT_NARRATION, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
-        CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
-        CONTENT_MAP_SOURCE_SEGMENT_MISSING, CONTENT_MAP_EXCLUSION_INVALID,
-        CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_AUDIT_NARRATION, NOTES_MISSING,
-        SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
-        PREWRITE_FACT_CHECKS_INVALID,
-        TRANSCRIPT_CORRECTION_MISSING, CORRECTION_MANIFEST_MISSING,
-        CORRECTION_MANIFEST_INVALID, CORRECTION_UNRESOLVED_HIGH_RISK,
-        TRANSCRIPT_INTEGRITY_FAILED,
-        TRANSCRIPT_MISSING,
-        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_INCOMPLETE,
-        AI_REVIEW_ISSUE_EVIDENCE,
-        AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
-        AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, CONTENT_MAP_SCHEMA,
-        CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
-        EVIDENCE_PROVENANCE_FAILED, SOURCE_REVIEW_STATUS,
-        SUMMARY_MAP_VALIDATION, TTS_READINESS_FAILED, add_error, coded_errors,
-        extend_errors, quality_error_alignment,
-    )
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
-    from scripts.quality_errors import (
-        ASR_QUALITY_FAILED, ASR_COMPLETENESS_MISSING,
-        ASR_SPEECH_COVERAGE_FAILED, ASR_TIMELINE_INVALID,
-        BRIEFING_AUDIT_NARRATION, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
-        CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
-        CONTENT_MAP_SOURCE_SEGMENT_MISSING, CONTENT_MAP_EXCLUSION_INVALID,
-        CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_AUDIT_NARRATION, NOTES_MISSING,
-        SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
-        PREWRITE_FACT_CHECKS_INVALID,
-        TRANSCRIPT_CORRECTION_MISSING, CORRECTION_MANIFEST_MISSING,
-        CORRECTION_MANIFEST_INVALID, CORRECTION_UNRESOLVED_HIGH_RISK,
-        TRANSCRIPT_INTEGRITY_FAILED,
-        TRANSCRIPT_MISSING,
-        AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_INCOMPLETE,
-        AI_REVIEW_ISSUE_EVIDENCE,
-        AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
-        AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, CONTENT_MAP_SCHEMA,
-        CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
-        EVIDENCE_PROVENANCE_FAILED, SOURCE_REVIEW_STATUS,
-        SUMMARY_MAP_VALIDATION, TTS_READINESS_FAILED, add_error, coded_errors,
-        extend_errors, quality_error_alignment,
-    )
+from scripts.atomic_io import atomic_write_json
+from scripts.quality_errors import (
+    ASR_QUALITY_FAILED, ASR_COMPLETENESS_MISSING,
+    ASR_SPEECH_COVERAGE_FAILED, ASR_TIMELINE_INVALID,
+    BRIEFING_AUDIT_NARRATION, BRIEFING_MISSING, BRIEFING_STRUCTURE_FAILED,
+    CLAIM_EVIDENCE_FALLBACK, CONTENT_MAP_MISSING,
+    CONTENT_MAP_SOURCE_SEGMENT_MISSING, CONTENT_MAP_EXCLUSION_INVALID,
+    CONTENT_MAP_MODE_MISMATCH, COVERAGE_FAILED, NOTES_AUDIT_NARRATION, NOTES_MISSING,
+    SUMMARY_MAP_MISSING, SUMMARY_MAP_SCHEMA,
+    PREWRITE_FACT_CHECKS_INVALID,
+    TRANSCRIPT_CORRECTION_MISSING, CORRECTION_MANIFEST_MISSING,
+    CORRECTION_MANIFEST_INVALID, CORRECTION_UNRESOLVED_HIGH_RISK,
+    TRANSCRIPT_INTEGRITY_FAILED,
+    TRANSCRIPT_MISSING,
+    AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_INCOMPLETE,
+    AI_REVIEW_ISSUE_EVIDENCE,
+    AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
+    AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, CONTENT_MAP_SCHEMA,
+    CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
+    EVIDENCE_PROVENANCE_FAILED, SOURCE_REVIEW_STATUS,
+    SUMMARY_MAP_VALIDATION, TTS_READINESS_FAILED, add_error, coded_errors,
+    extend_errors, quality_error_alignment,
+)
 
-try:
-    from content_map import (
-        CONTENT_MAP_SCHEMA_VERSION,
-        body_sha256, content_map_evidence_mode, coverage_report, load_json,
-        source_segment_accountability, transcript_evidence_mode,
-        unit_claim_ids, validate_content_map,
-        validate_summary_map,
-    )
-    from validator import audit_narration_issues, structure_report
-    from episode import (
-        LEGACY_EVIDENCE_READ_CUTOFF, inspect_episode_state,
-        legacy_evidence_frozen_before_cutoff, legacy_evidence_read_allowed,
-    )
-    from evidence import (
-        ASR_SOURCE_KINDS,
-        correction_metrics,
-        effective_source_kind,
-        validate_provenance,
-    )
-    from content_finalizer import validate_tts_readiness
-    from canonical_entities import (
-        public_entity_alias_errors,
-        validate_canonical_entities,
-    )
-    from claim_evidence import PROGRESS_FILENAME, validate_progress
-    from editorial_corrections import (
-        load_editorial_corrections,
-        validate_editorial_corrections,
-    )
-    from source_relevance import (
-        CACHE_FILENAME as SOURCE_RELEVANCE_CACHE,
-        expected_source_references,
-        validate_source_relevance_cache,
-    )
-    from prewrite_fact_checks import (
-        FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
-        SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
-        validate_ledger as validate_prewrite_fact_checks,
-    )
-    from tts import load_tts_lexicon
-    from claim_taxonomy import (
-        atomic_subclaim_parent,
-        derive_legacy_claim_type,
-    )
-    from transcript_correction import (
-        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
-        correction_contract_required,
-        correction_summary,
-        validate_correction_manifest,
-    )
-    from transcript_completeness import (
-        completeness_contract_required,
-        completeness_enforcement_mode,
-        validate_completeness_result,
-    )
-except ImportError:  # package import
-    from scripts.content_map import (
-        CONTENT_MAP_SCHEMA_VERSION,
-        body_sha256, content_map_evidence_mode, coverage_report, load_json,
-        source_segment_accountability, transcript_evidence_mode,
-        unit_claim_ids, validate_content_map,
-        validate_summary_map,
-    )
-    from scripts.validator import audit_narration_issues, structure_report
-    from scripts.episode import (
-        LEGACY_EVIDENCE_READ_CUTOFF, inspect_episode_state,
-        legacy_evidence_frozen_before_cutoff, legacy_evidence_read_allowed,
-    )
-    from scripts.evidence import (
-        ASR_SOURCE_KINDS,
-        correction_metrics,
-        effective_source_kind,
-        validate_provenance,
-    )
-    from scripts.content_finalizer import validate_tts_readiness
-    from scripts.canonical_entities import (
-        public_entity_alias_errors,
-        validate_canonical_entities,
-    )
-    from scripts.claim_evidence import PROGRESS_FILENAME, validate_progress
-    from scripts.editorial_corrections import (
-        load_editorial_corrections,
-        validate_editorial_corrections,
-    )
-    from scripts.source_relevance import (
-        CACHE_FILENAME as SOURCE_RELEVANCE_CACHE,
-        expected_source_references,
-        validate_source_relevance_cache,
-    )
-    from scripts.prewrite_fact_checks import (
-        FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
-        SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
-        validate_ledger as validate_prewrite_fact_checks,
-    )
-    from scripts.tts import load_tts_lexicon
-    from scripts.claim_taxonomy import (
-        atomic_subclaim_parent,
-        derive_legacy_claim_type,
-    )
-    from scripts.transcript_correction import (
-        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
-        correction_contract_required,
-        correction_summary,
-        validate_correction_manifest,
-    )
-    from scripts.transcript_completeness import (
-        completeness_contract_required,
-        completeness_enforcement_mode,
-        validate_completeness_result,
-    )
+from scripts.content_map import (
+    CONTENT_MAP_SCHEMA_VERSION,
+    body_sha256, content_map_evidence_mode, coverage_report, load_json,
+    source_segment_accountability, transcript_evidence_mode,
+    unit_claim_ids, validate_content_map,
+    validate_summary_map,
+)
+from scripts.validator import audit_narration_issues, structure_report
+from scripts.episode import (
+    LEGACY_EVIDENCE_READ_CUTOFF, inspect_episode_state,
+    legacy_evidence_frozen_before_cutoff, legacy_evidence_read_allowed,
+)
+from scripts.evidence import (
+    ASR_SOURCE_KINDS,
+    correction_metrics,
+    effective_source_kind,
+    validate_provenance,
+)
+from scripts.content_finalizer import validate_tts_readiness
+from scripts.canonical_entities import (
+    public_entity_alias_errors,
+    validate_canonical_entities,
+)
+from scripts.claim_evidence import PROGRESS_FILENAME, validate_progress
+from scripts.editorial_corrections import (
+    load_editorial_corrections,
+    validate_editorial_corrections,
+)
+from scripts.source_relevance import (
+    CACHE_FILENAME as SOURCE_RELEVANCE_CACHE,
+    expected_source_references,
+    validate_source_relevance_cache,
+)
+from scripts.prewrite_fact_checks import (
+    FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
+    SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
+    validate_ledger as validate_prewrite_fact_checks,
+)
+from scripts.tts import load_tts_lexicon
+from scripts.claim_taxonomy import (
+    atomic_subclaim_parent,
+    derive_legacy_claim_type,
+)
+from scripts.transcript_correction import (
+    MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
+    correction_contract_required,
+    correction_summary,
+    validate_correction_manifest,
+)
+from scripts.transcript_completeness import (
+    completeness_contract_required,
+    completeness_enforcement_mode,
+    validate_completeness_result,
+)
 
 
 MIN_NOTES_TO_BRIEFING_RATIO = 1.15
@@ -1165,10 +1090,7 @@ def build_quality_report(folder, strict=True, *, today=None):
         if not review_path.exists():
             add_error(report, AI_REVIEW_MISSING, "缺少 ai_review.json，不能自动发布")
         else:
-            try:
-                from ai_review import reviewed_hashes
-            except ImportError:  # package import
-                from scripts.ai_review import reviewed_hashes
+            from scripts.ai_review import reviewed_hashes
             review = load_json(review_path)
             ai_errors = []
             ai_error_details = []

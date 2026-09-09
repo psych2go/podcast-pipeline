@@ -6,12 +6,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
-try:
-    from run_report import RUN_REPORT_SCHEMA_VERSION
-    from sources import source_host
-except ImportError:
-    from scripts.run_report import RUN_REPORT_SCHEMA_VERSION
-    from scripts.sources import source_host
+from scripts.run_report import RUN_REPORT_SCHEMA_VERSION
+from scripts.sources import source_host
 
 
 def _quality_code(quality):

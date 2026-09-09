@@ -9,66 +9,36 @@ from datetime import datetime, UTC
 from pathlib import Path
 from urllib.parse import quote
 
-try:
-    from atomic_io import atomic_write_json
-    import catalog_core as _core_module
-    import catalog_site as _site_module
-    from catalog_core import (
-        CatalogPaths as CatalogPaths,
-        _catalog_text, _display_title, _find_briefing, _gen_mp3,
-        _load_site_entries, _ordered_episode_names, rebuild_catalog,
-    )
-    from catalog_site import (
-        _build_entry, _site_readiness_errors, catalog_consistency_errors,
-        gen_index, sync_site,
-    )
-    from config import (
-        PAGES_BASE_URL, PAGES_PROJECT, R2_BUCKET, R2_PUBLIC_URL,
-        validate_for_stage,
-    )
-    from episode import (
-        audio_key as episode_audio_key, page_path as episode_page_path,
-        public_audio_url,
-    )
-    from publish import (
-        PUBLISH_REPORT_SCHEMA_VERSION, verify_publish, write_publish_report,
-    )
-    from publish_errors import RETRYABLE_PAGE_CODES, publish_error_codes
-    from quality_report import build_quality_report
-    from release import active_audio_key, load_release, update_release_state
-    from run_report import RunReport
-    from tts import validate_tts_manifest
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
-    from scripts import catalog_core as _core_module
-    from scripts import catalog_site as _site_module
-    from scripts.catalog_core import (
-        CatalogPaths as CatalogPaths,
-        _catalog_text, _display_title, _find_briefing, _gen_mp3,
-        _load_site_entries, _ordered_episode_names, rebuild_catalog,
-    )
-    from scripts.catalog_site import (
-        _build_entry, _site_readiness_errors, catalog_consistency_errors,
-        gen_index, sync_site,
-    )
-    from scripts.config import (
-        PAGES_BASE_URL, PAGES_PROJECT, R2_BUCKET, R2_PUBLIC_URL,
-        validate_for_stage,
-    )
-    from scripts.episode import (
-        audio_key as episode_audio_key, page_path as episode_page_path,
-        public_audio_url,
-    )
-    from scripts.publish import (
-        PUBLISH_REPORT_SCHEMA_VERSION, verify_publish, write_publish_report,
-    )
-    from scripts.publish_errors import (
-        RETRYABLE_PAGE_CODES, publish_error_codes,
-    )
-    from scripts.quality_report import build_quality_report
-    from scripts.release import active_audio_key, load_release, update_release_state
-    from scripts.run_report import RunReport
-    from scripts.tts import validate_tts_manifest
+from scripts.atomic_io import atomic_write_json
+from scripts import catalog_core as _core_module
+from scripts import catalog_site as _site_module
+from scripts.catalog_core import (
+    CatalogPaths as CatalogPaths,
+    _catalog_text, _display_title, _find_briefing, _gen_mp3,
+    _load_site_entries, _ordered_episode_names, rebuild_catalog,
+)
+from scripts.catalog_site import (
+    _build_entry, _site_readiness_errors, catalog_consistency_errors,
+    gen_index, sync_site,
+)
+from scripts.config import (
+    PAGES_BASE_URL, PAGES_PROJECT, R2_BUCKET, R2_PUBLIC_URL,
+    validate_for_stage,
+)
+from scripts.episode import (
+    audio_key as episode_audio_key, page_path as episode_page_path,
+    public_audio_url,
+)
+from scripts.publish import (
+    PUBLISH_REPORT_SCHEMA_VERSION, verify_publish, write_publish_report,
+)
+from scripts.publish_errors import (
+    RETRYABLE_PAGE_CODES, publish_error_codes,
+)
+from scripts.quality_report import build_quality_report
+from scripts.release import active_audio_key, load_release, update_release_state
+from scripts.run_report import RunReport
+from scripts.tts import validate_tts_manifest
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONTENT_DIR = BASE_DIR / "content"
@@ -93,20 +63,14 @@ _DEFAULT_VALIDATE_TTS_MANIFEST = validate_tts_manifest
 def _live_quality_report_builder():
     if build_quality_report is not _DEFAULT_BUILD_QUALITY_REPORT:
         return build_quality_report
-    try:
-        import quality_report as module
-    except ImportError:
-        from scripts import quality_report as module
+    from scripts import quality_report as module
     return module.build_quality_report
 
 
 def _live_tts_manifest_validator():
     if validate_tts_manifest is not _DEFAULT_VALIDATE_TTS_MANIFEST:
         return validate_tts_manifest
-    try:
-        import tts as module
-    except ImportError:
-        from scripts import tts as module
+    from scripts import tts as module
     return module.validate_tts_manifest
 
 

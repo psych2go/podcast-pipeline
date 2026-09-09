@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from asr_benchmark_workflow import (  # noqa: E402
+from scripts.asr_benchmark_workflow import (
     check_policy_contract,
     rescore_benchmark_workflow,
     run_benchmark_workflow,
@@ -166,17 +166,17 @@ class PolicyContractTests(unittest.TestCase):
                 },
             }), encoding="utf-8")
             with patch(
-                    "asr_benchmark_workflow.prepare") as prepare_mock, \
+                    "scripts.asr_benchmark_workflow.prepare") as prepare_mock, \
                     patch(
-                        "asr_benchmark_workflow.check_policy_contract",
+                        "scripts.asr_benchmark_workflow.check_policy_contract",
                         return_value={"passed": True},
                     ), \
                     patch(
-                        "asr_benchmark_workflow.run_manifest",
+                        "scripts.asr_benchmark_workflow.run_manifest",
                         return_value={"recommendation": {"status": "ready"}},
                     ) as run_mock, \
                     patch(
-                        "asr_benchmark_workflow.verify_report_payload",
+                        "scripts.asr_benchmark_workflow.verify_report_payload",
                         return_value=[]):
                 result = run_benchmark_workflow(
                     contract_path,
@@ -209,15 +209,15 @@ class PolicyContractTests(unittest.TestCase):
                 "default_manifest": "manifest.json",
             }), encoding="utf-8")
             with patch(
-                    "asr_benchmark_workflow.check_policy_contract",
+                    "scripts.asr_benchmark_workflow.check_policy_contract",
                     return_value={"passed": True},
                     ), \
                     patch(
-                    "asr_benchmark_workflow.rescore_manifest",
+                    "scripts.asr_benchmark_workflow.rescore_manifest",
                     return_value={"recommendation": {"status": "ready"}},
                     ) as rescore_mock, \
                     patch(
-                        "asr_benchmark_workflow.verify_report_payload",
+                        "scripts.asr_benchmark_workflow.verify_report_payload",
                         return_value=[]):
                 result = rescore_benchmark_workflow(contract_path)
         rescore_mock.assert_called_once_with(manifest_path)
@@ -239,9 +239,9 @@ class PolicyContractTests(unittest.TestCase):
                     "duration_seconds": 20.0,
                 },
             }), encoding="utf-8")
-            with patch("asr_benchmark_workflow.prepare"), \
+            with patch("scripts.asr_benchmark_workflow.prepare"), \
                     patch(
-                        "asr_benchmark_workflow.check_policy_contract",
+                        "scripts.asr_benchmark_workflow.check_policy_contract",
                         return_value={
                             "passed": False,
                             "errors": ["preset drift"],
@@ -249,7 +249,7 @@ class PolicyContractTests(unittest.TestCase):
                         },
                     ), \
                     patch(
-                        "asr_benchmark_workflow.run_manifest") as run_mock:
+                        "scripts.asr_benchmark_workflow.run_manifest") as run_mock:
                 result = run_benchmark_workflow(contract_path)
         run_mock.assert_not_called()
         self.assertEqual(result["stage"], "contract_check")

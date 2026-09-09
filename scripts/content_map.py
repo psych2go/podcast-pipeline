@@ -4,6 +4,12 @@
 本模块不调用 LLM。subagent/人工可以根据提示词生成 content_map.json 和
 summary_map.json，本模块负责 schema 校验、覆盖率统计和失败阻断。
 """
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 import argparse
 import hashlib
 import json
@@ -12,15 +18,9 @@ from collections import Counter
 from datetime import datetime, UTC
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
+from scripts.atomic_io import atomic_write_json
 
-try:
-    from sections import chapter_body_map
-except ImportError:
-    from scripts.sections import chapter_body_map
+from scripts.sections import chapter_body_map
 
 
 STATUS_VALUES = {

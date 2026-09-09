@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 # Ensure scripts/ is in sys.path for direct execution
-_scripts = str(Path(__file__).resolve().parent)
+_scripts = str(Path(__file__).resolve().parents[1])
 if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
@@ -37,16 +37,16 @@ from contextlib import nullcontext
 from datetime import datetime, UTC
 from urllib.parse import urlsplit, urlunsplit
 
-from atomic_io import (
+from scripts.atomic_io import (
     atomic_write_bytes,
     atomic_write_json,
     atomic_write_text,
     exclusive_file_lock,
 )
-from config import BASE_DIR, validate_for_stage
-from evidence import build_provenance, original_audio_files
-from asr_refinement import build_asr_context
-from fetcher import (
+from scripts.config import BASE_DIR, validate_for_stage
+from scripts.evidence import build_provenance, original_audio_files
+from scripts.asr_refinement import build_asr_context
+from scripts.fetcher import (
     fetch_transcript_from_url,
     transcribe,
     load_transcript_from_file,
@@ -55,42 +55,29 @@ from fetcher import (
     discover_official_episode_url,
     chunk_plain_transcript,
 )
-from tts import run_tts
-from tts import load_tts_lexicon
-from html_gen import md_to_html
-try:
-    from hashing import (
-        sha256_file as _source_sha256, sha256_text as _text_sha256)
-except ImportError:
-    from scripts.hashing import (
-        sha256_file as _source_sha256, sha256_text as _text_sha256)
-from preflight import quality_gate as shared_quality_gate
-from agent_pipeline import run_content_pipeline
-from rebuild_plan import build_rebuild_plan
-from release import prepare_release
-from run_report import RunReport
-from tts import build_tts_plan
-from content_finalizer import (
+from scripts.tts import run_tts
+from scripts.tts import load_tts_lexicon
+from scripts.html_gen import md_to_html
+from scripts.hashing import (
+    sha256_file as _source_sha256, sha256_text as _text_sha256)
+from scripts.preflight import quality_gate as shared_quality_gate
+from scripts.agent_pipeline import run_content_pipeline
+from scripts.rebuild_plan import build_rebuild_plan
+from scripts.release import prepare_release
+from scripts.run_report import RunReport
+from scripts.tts import build_tts_plan
+from scripts.content_finalizer import (
     ContentFinalizationError,
     finalize_content_artifacts,
     validate_tts_readiness,
 )
-from pipeline_metrics import quality_metrics as _quality_metrics
-from validator import (
-    normalize_briefing_artifacts,
-    structure_report,
-    validate_and_fix,
+from scripts.pipeline_metrics import quality_metrics as _quality_metrics
+from scripts.validator import normalize_briefing_artifacts, structure_report, validate_and_fix
+from scripts.pipeline.cli import (
+    build_process_parser,
+    episode_options_from_args,
 )
-if __package__:
-    from scripts.pipeline.cli import (
-        build_process_parser,
-        episode_options_from_args,
-    )
-    from scripts.pipeline.options import EpisodeOptions
-else:
-    from pipeline.cli import (  # type: ignore[no-redef]
-        build_process_parser, episode_options_from_args)
-    from pipeline.options import EpisodeOptions  # type: ignore[no-redef]
+from scripts.pipeline.options import EpisodeOptions
 
 
 # 讲稿文件名候选（新统一用 讲书稿.md；简报.md 仅向后兼容旧产物）
@@ -531,7 +518,7 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
         text = _upsert_source_field(text, "ASR 质量", quality)
         atomic_write_text(source_path, text)
 
-    from episode import ensure_episode, sync_episode_state
+    from scripts.episode import ensure_episode, sync_episode_state
     ensure_episode(
         folder,
         display_title=display_title or name,
@@ -700,7 +687,7 @@ def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
 def _display_title(name):
     """从 episode.json 读取展示标题；旧期自动从现有元数据回退。"""
     try:
-        from episode import display_title
+        from scripts.episode import display_title
         return display_title(BASE_DIR / name)
     except Exception:
         return name

@@ -8,17 +8,10 @@ no mutation of review verdicts.
 """
 from collections import Counter
 
-try:
-    from quality_errors import (
-        AI_REVIEW_SCORE,
-        AI_REVIEW_SECTION,
-        AI_REVIEW_SEVERE_ISSUE,
-    )
-except ImportError:
-    from scripts.quality_errors import (
-        AI_REVIEW_SCORE,
-        AI_REVIEW_SECTION,
-        AI_REVIEW_SEVERE_ISSUE,
+from scripts.quality_errors import (
+    AI_REVIEW_SCORE,
+    AI_REVIEW_SECTION,
+    AI_REVIEW_SEVERE_ISSUE,
 )
 
 

@@ -7,9 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from content_map import (  # noqa: E402
+from scripts.content_map import (
     coverage_report,
     enrich_content_map_evidence,
     segment_evidence_sha256,
@@ -17,14 +17,14 @@ from content_map import (  # noqa: E402
     validate_content_map,
     validate_summary_map,
 )
-from transcript_completeness import (  # noqa: E402
+from scripts.transcript_completeness import (
     CompletenessPolicy,
     analyze_audio_completeness,
     calculate_completeness,
     faster_whisper_vad,
     validate_completeness_result,
 )
-from transcript_correction import (  # noqa: E402
+from scripts.transcript_correction import (
     CorrectionValidationError,
     build_manifest,
     correction_batches,
@@ -32,10 +32,10 @@ from transcript_correction import (  # noqa: E402
     render_corrected_transcript,
     validate_correction_manifest,
 )
-from quality_report import build_quality_report  # noqa: E402
-import agent_pipeline  # noqa: E402
-import fetcher  # noqa: E402
-import process as pipeline_process  # noqa: E402
+from scripts.quality_report import build_quality_report
+from scripts import agent_pipeline
+from scripts import fetcher
+from scripts import process as pipeline_process
 
 
 def _raw(count=3, *, contract=True, completeness_mode="report_only",
@@ -583,7 +583,7 @@ class CorrectionManifestTests(unittest.TestCase):
     def test_id_only_runner_payload_is_rejected_before_writes(self):
         raw = _raw(1)
         with tempfile.TemporaryDirectory() as td, patch(
-                "agent_pipeline.run_json_task",
+                "scripts.agent_pipeline.run_json_task",
                 return_value={"payload": {"segments": [
                     {"segment_id": "S0001"}
                 ]}},
@@ -666,7 +666,7 @@ class FaithfulEvidenceTests(unittest.TestCase):
             "discussion that must remain in immutable source evidence. " * 3
         ).strip()
         with tempfile.TemporaryDirectory() as td, patch(
-                "process.fetch_transcript_from_url",
+                "scripts.process.fetch_transcript_from_url",
                 return_value={
                     "text": source_text,
                     "segments": [{
@@ -695,7 +695,7 @@ class FaithfulEvidenceTests(unittest.TestCase):
     def test_official_url_is_separate_from_transcript_evidence_source(self):
         source_text = ("Official source separation transcript evidence. " * 10).strip()
         with tempfile.TemporaryDirectory() as td, patch(
-                "process.fetch_transcript_from_url",
+                "scripts.process.fetch_transcript_from_url",
                 return_value={
                     "text": source_text,
                     "segments": [{
@@ -732,8 +732,8 @@ class FaithfulEvidenceTests(unittest.TestCase):
         )
         model = SimpleNamespace(transcribe=lambda *_args, **_kwargs: (
             iter([segment]), SimpleNamespace(language="en", language_probability=1.0)))
-        with patch("fetcher._load_whisper_model", return_value=model), \
-                patch("asr_runtime.resolve_runtime", return_value=SimpleNamespace(
+        with patch("scripts.fetcher._load_whisper_model", return_value=model), \
+                patch("scripts.asr_runtime.resolve_runtime", return_value=SimpleNamespace(
                     device="cpu", compute_type="int8")):
             result = fetcher.transcribe_mp3_timestamped(
                 "fake.mp3", quality="fast")

@@ -8,20 +8,17 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import ai_review
-import agent_pipeline
-import catalog as catalog_cli
-import catalog_core
-import catalog_publish
-import catalog_site
-from canonical_entities import (
-    public_entity_alias_errors,
-    validate_canonical_entities,
-)
-from editorial_corrections import validate_editorial_corrections
-from content_map import (
+from scripts import ai_review
+from scripts import agent_pipeline
+from scripts import catalog as catalog_cli
+from scripts import catalog_core
+from scripts import catalog_publish
+from scripts import catalog_site
+from scripts.canonical_entities import public_entity_alias_errors, validate_canonical_entities
+from scripts.editorial_corrections import validate_editorial_corrections
+from scripts.content_map import (
     apply_claim_evidence_mapping,
     coverage_report,
     enrich_content_map_evidence,
@@ -29,21 +26,21 @@ from content_map import (
     unit_detail_ids,
     validate_content_map,
 )
-from episode import _source_heading
-import claim_evidence
-import source_relevance
-import process as pipeline_process
-from pipeline.options import EpisodeOptions
-from run_report import RunReport
-from rebuild_plan import build_rebuild_plan
-from source_relevance import (
+from scripts.episode import _source_heading
+from scripts import claim_evidence
+from scripts import source_relevance
+from scripts import process as pipeline_process
+from scripts.pipeline.options import EpisodeOptions
+from scripts.run_report import RunReport
+from scripts.rebuild_plan import build_rebuild_plan
+from scripts.source_relevance import (
     expected_source_references,
     normalize_source_url,
     refresh_source_relevance_cache,
     validate_source_relevance_cache,
 )
-from transcript_correction import build_manifest, render_corrected_transcript
-from tts import build_tts_plan
+from scripts.transcript_correction import build_manifest, render_corrected_transcript
+from scripts.tts import build_tts_plan
 
 
 def review_payload():
@@ -510,7 +507,7 @@ class RebuildPlanTests(unittest.TestCase):
                 },
                 "chapters": [],
             }), encoding="utf-8")
-            with mock.patch("agent_pipeline.quality_metadata", return_value={
+            with mock.patch("scripts.agent_pipeline.quality_metadata", return_value={
                     "transcript_status": "已纠错"}):
                 plan = build_rebuild_plan(folder)
         self.assertTrue(plan["needs_content"])
@@ -524,7 +521,7 @@ class RebuildPlanTests(unittest.TestCase):
             folder = Path(td)
             for needed, force in ((False, False), (True, False), (True, True)):
                 with self.subTest(needed=needed, force=force), mock.patch(
-                        "rebuild_plan.content_pipeline_needed",
+                        "scripts.rebuild_plan.content_pipeline_needed",
                         return_value=needed) as check:
                     plan = build_rebuild_plan(folder, force=force)
                     check.assert_called_once_with(folder, force=force)
@@ -541,10 +538,10 @@ class RebuildPlanTests(unittest.TestCase):
             with self.subTest(needed=needed), tempfile.TemporaryDirectory() as td:
                 folder = Path(td)
                 report = RunReport(folder, "process", {})
-                with mock.patch("process.fetch_transcript", return_value=True), \
-                        mock.patch("rebuild_plan.content_pipeline_needed",
+                with mock.patch("scripts.process.fetch_transcript", return_value=True), \
+                        mock.patch("scripts.rebuild_plan.content_pipeline_needed",
                                    return_value=needed) as check, \
-                        mock.patch("process.run_content_pipeline",
+                        mock.patch("scripts.process.run_content_pipeline",
                                    return_value=True) as run:
                     self.assertTrue(pipeline_process._process_impl(
                         "source.txt", "Episode", folder, report, EpisodeOptions()))
@@ -562,11 +559,11 @@ class RebuildPlanTests(unittest.TestCase):
                 folder = Path(td)
                 output = io.StringIO()
                 with mock.patch("sys.stdout", output), mock.patch(
-                        "process.fetch_transcript", return_value=True), mock.patch(
-                        "process.build_rebuild_plan", return_value={
+                        "scripts.process.fetch_transcript", return_value=True), mock.patch(
+                        "scripts.process.build_rebuild_plan", return_value={
                             "needs_content": True,
                             "reasons": ["deterministic_validation"]}), mock.patch(
-                        "process.run_content_pipeline", return_value=False):
+                        "scripts.process.run_content_pipeline", return_value=False):
                     result = pipeline_process._process_impl(
                         source, name, folder, None, EpisodeOptions(fetch_only=fetch_only))
                 self.assertEqual(result, fetch_only)
@@ -588,9 +585,9 @@ class RebuildPlanTests(unittest.TestCase):
                 folder = Path(td)
                 # A broken downstream file must not affect source-only work.
                 (folder / "summary_map.json").write_text("{", encoding="utf-8")
-                with mock.patch("process.fetch_transcript", return_value=True), \
-                        mock.patch("process.build_rebuild_plan") as plan, \
-                        mock.patch("process.run_content_pipeline") as run:
+                with mock.patch("scripts.process.fetch_transcript", return_value=True), \
+                        mock.patch("scripts.process.build_rebuild_plan") as plan, \
+                        mock.patch("scripts.process.run_content_pipeline") as run:
                     self.assertTrue(pipeline_process._process_impl(
                         "source.txt", "Episode", folder, None, options))
                 plan.assert_not_called()

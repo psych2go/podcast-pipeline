@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest import mock
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agent_pipeline import (
+from scripts.agent_pipeline import (
     _env_positive_int,
     _transcript_basis_is_current,
     _validate_content_map_stage_statuses,
@@ -19,10 +19,10 @@ from agent_pipeline import (
     content_pipeline_needed,
     run_content_pipeline,
 )
-from claim_evidence import _unit_payloads
-from content_map import body_sha256, init_content_map, validate_content_map
-from episode import load_episode, update_transcript_status
-from quality_report import _transcript_status_accepted
+from scripts.claim_evidence import _unit_payloads
+from scripts.content_map import body_sha256, init_content_map, validate_content_map
+from scripts.episode import load_episode, update_transcript_status
+from scripts.quality_report import _transcript_status_accepted
 
 
 class OrchestrationRecoveryTests(unittest.TestCase):
@@ -92,9 +92,9 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                 "chapters": [],
             }), encoding="utf-8")
             with mock.patch(
-                    "agent_pipeline.validate_content_map",
+                    "scripts.agent_pipeline.validate_content_map",
                     return_value=([], [])), mock.patch(
-                    "agent_pipeline.validate_summary_map",
+                    "scripts.agent_pipeline.validate_summary_map",
                     return_value=[]):
                 self.assertTrue(_writing_artifacts_are_current(folder))
 
@@ -124,9 +124,9 @@ class OrchestrationRecoveryTests(unittest.TestCase):
             (folder / "summary_map.json").write_text(
                 json.dumps(summary), encoding="utf-8")
             with mock.patch(
-                    "agent_pipeline.validate_content_map",
+                    "scripts.agent_pipeline.validate_content_map",
                     return_value=([], [])), mock.patch(
-                    "agent_pipeline.validate_summary_map",
+                    "scripts.agent_pipeline.validate_summary_map",
                     return_value=[]):
                 self.assertTrue(_writing_artifacts_are_current(folder))
                 (folder / "canonical_entities.json").write_text(
@@ -169,10 +169,10 @@ class OrchestrationRecoveryTests(unittest.TestCase):
             }
             summary_path = folder / "summary_map.json"
             summary_path.write_text(json.dumps(summary), encoding="utf-8")
-            with mock.patch("agent_pipeline.validate_content_map",
+            with mock.patch("scripts.agent_pipeline.validate_content_map",
                             return_value=([], [])), mock.patch(
-                    "agent_pipeline.validate_summary_map", return_value=[]), mock.patch(
-                    "agent_pipeline.ledger_is_current", return_value=True):
+                    "scripts.agent_pipeline.validate_summary_map", return_value=[]), mock.patch(
+                    "scripts.agent_pipeline.ledger_is_current", return_value=True):
                 # Regenerate entity metadata without changing the canonical name.
                 entities_path = folder / "canonical_entities.json"
                 entities_path.write_text(json.dumps({"entities": [{
@@ -185,7 +185,7 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                 self.assertFalse(_writing_artifacts_are_current(
                     folder, require_bound_inputs=True))
                 entities_path.write_text(files["canonical_entities.json"], encoding="utf-8")
-                with mock.patch("agent_pipeline.ledger_is_current", return_value=False):
+                with mock.patch("scripts.agent_pipeline.ledger_is_current", return_value=False):
                     self.assertFalse(_writing_artifacts_are_current(
                         folder, require_bound_inputs=True))
                 (folder / "editorial_fact_checks.json").write_text(
@@ -219,9 +219,9 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                         ("ledger_is_current", True),
                     ):
                         stack.enter_context(mock.patch(
-                            "agent_pipeline." + target, return_value=result))
+                            "scripts.agent_pipeline." + target, return_value=result))
                     regenerate = stack.enter_context(mock.patch(
-                        "agent_pipeline.run_json_task",
+                        "scripts.agent_pipeline.run_json_task",
                         return_value={"payload": {"entities": []}}))
 
                     def check_after_repair(
@@ -233,13 +233,13 @@ class OrchestrationRecoveryTests(unittest.TestCase):
                         return reusable
 
                     check = stack.enter_context(mock.patch(
-                        "agent_pipeline._writing_artifacts_are_current",
+                        "scripts.agent_pipeline._writing_artifacts_are_current",
                         side_effect=check_after_repair))
-                    writer = stack.enter_context(mock.patch("agent_pipeline.run_edit_task"))
+                    writer = stack.enter_context(mock.patch("scripts.agent_pipeline.run_edit_task"))
                     # Stop at the next stage: this test exercises orchestration,
                     # not the independently tested content finalizer.
                     stack.enter_context(mock.patch(
-                        "agent_pipeline.finalize_content_package",
+                        "scripts.agent_pipeline.finalize_content_package",
                         side_effect=RuntimeError("reached finalization")))
                     with self.assertRaisesRegex(RuntimeError, "reached finalization"):
                         run_content_pipeline(folder, "Episode")

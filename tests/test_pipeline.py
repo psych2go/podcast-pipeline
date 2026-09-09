@@ -14,41 +14,50 @@ from pathlib import Path
 import httpx
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import atomic_io
-import config
-import fetcher
-import quality_report
-import tts
-from asr_refinement import build_asr_context
-from content_map import (
-    apply_claim_evidence_mapping, body_sha256, coverage_report,
+from scripts import atomic_io
+from scripts import config
+from scripts import fetcher
+from scripts import quality_report
+from scripts import tts
+from scripts.asr_refinement import build_asr_context
+from scripts.content_map import (
+    apply_claim_evidence_mapping,
+    body_sha256,
+    coverage_report,
     enrich_content_map_evidence,
-    enrich_summary_map_evidence, init_content_map, validate_content_map, validate_summary_map,
+    enrich_summary_map_evidence,
+    init_content_map,
+    validate_content_map,
+    validate_summary_map,
 )
-from diarize import merge_segments_with_speakers
-from benchmark import asr_metrics
-from quality_report import (
+from scripts.diarize import merge_segments_with_speakers
+from scripts.benchmark import asr_metrics
+from scripts.quality_report import (
     _ai_entity_accuracy_consistency,
     _ai_fact_check_consistency,
     build_quality_report,
 )
-from tts import apply_tts_lexicon, run_tts, validate_tts_manifest
-import process as pipeline_process
-from ai_review import rebind_provenance_review, reviewed_hashes
-import catalog_core
-import catalog_health
-import catalog_publish
-import catalog_site
-from html_gen import _build_html, md_to_html
-from publish import verify_publish
-from episode import (
-    inspect_episode_state, load_episode, stable_slug, sync_episode_state, update_review_status,
+from scripts.tts import apply_tts_lexicon, run_tts, validate_tts_manifest
+from scripts import process as pipeline_process
+from scripts.ai_review import rebind_provenance_review, reviewed_hashes
+from scripts import catalog_core
+from scripts import catalog_health
+from scripts import catalog_publish
+from scripts import catalog_site
+from scripts.html_gen import _build_html, md_to_html
+from scripts.publish import verify_publish
+from scripts.episode import (
+    inspect_episode_state,
+    load_episode,
+    stable_slug,
+    sync_episode_state,
+    update_review_status,
 )
-from evidence import migrate_evidence_provenance
-from release import load_release, prepare_release
-from fetcher import (
+from scripts.evidence import migrate_evidence_provenance
+from scripts.release import load_release, prepare_release
+from scripts.fetcher import (
     _HTML_CACHE,
     _extract_podscripts_segments,
     _is_certificate_verification_error,
@@ -60,8 +69,8 @@ from fetcher import (
     chunk_plain_transcript,
     transcribe,
 )
-from run_report import RunReport
-from sources import source_label
+from scripts.run_report import RunReport
+from scripts.sources import source_label
 
 
 class FetcherTests(unittest.TestCase):
@@ -162,8 +171,8 @@ class FetcherTests(unittest.TestCase):
             f'<span class="transcript-text">{text}</span>'
             "</div>"
         )
-        with patch("fetcher._try_rss_transcript", return_value=None), \
-                patch("fetcher._fetch_html", return_value=(html, {})):
+        with patch("scripts.fetcher._try_rss_transcript", return_value=None), \
+                patch("scripts.fetcher._fetch_html", return_value=(html, {})):
             result = fetch_transcript_from_url(
                 "https://podscripts.co/example", return_metadata=True)
         self.assertFalse(result["meta"]["timestamped"])
@@ -183,9 +192,9 @@ class FetcherTests(unittest.TestCase):
         )
         _HTML_CACHE.clear()
         with patch(
-                "fetcher._try_curl_cffi_with_metadata",
+                "scripts.fetcher._try_curl_cffi_with_metadata",
                 return_value=(html, {"transport": "curl_cffi"})) as fetch, \
-                patch("fetcher._try_rss_transcript", return_value=None):
+                patch("scripts.fetcher._try_rss_transcript", return_value=None):
             self.assertEqual(
                 extract_title_from_url("https://podscripts.co/example"),
                 "Episode",
@@ -199,18 +208,18 @@ class FetcherTests(unittest.TestCase):
         html = "<html>" + ("content " * 200) + "</html>"
         _HTML_CACHE.clear()
         with patch(
-                "fetcher._try_curl_cffi_with_metadata",
+                "scripts.fetcher._try_curl_cffi_with_metadata",
                 side_effect=[
                     (None, {"status_code": 503}),
                     (html, {"transport": "curl_cffi"}),
                 ]), \
-                patch("fetcher._try_curl", return_value=None), \
+                patch("scripts.fetcher._try_curl", return_value=None), \
                 patch(
-                    "fetcher._try_httpx_with_metadata",
+                    "scripts.fetcher._try_httpx_with_metadata",
                     return_value=(None, {"status_code": 503})), \
-                patch("fetcher.FETCH_MAX_RETRIES", 2), \
-                patch("fetcher.API_RETRY_BACKOFF", 2), \
-                patch("fetcher.time.sleep") as sleep:
+                patch("scripts.fetcher.FETCH_MAX_RETRIES", 2), \
+                patch("scripts.fetcher.API_RETRY_BACKOFF", 2), \
+                patch("scripts.fetcher.time.sleep") as sleep:
             result, metadata = fetcher._fetch_html(
                 "https://example.com/transcript")
         self.assertEqual(result, html)
@@ -267,7 +276,7 @@ class FetcherTests(unittest.TestCase):
                 return iter([segment]), info
 
         fake = FakeModel()
-        with patch("fetcher._load_whisper_model", return_value=fake):
+        with patch("scripts.fetcher._load_whisper_model", return_value=fake):
             result = transcribe(
                 "fake.mp3", quality="max", asr_model="large-v3-turbo",
                 diarize_audio=False, return_metadata=True,
@@ -296,9 +305,9 @@ class FetcherTests(unittest.TestCase):
                 return iter([segment]), info
 
         fake = FakeModel()
-        with patch("fetcher._load_whisper_model", return_value=fake), \
+        with patch("scripts.fetcher._load_whisper_model", return_value=fake), \
                 patch(
-                    "config.require_hf_token",
+                    "scripts.config.require_hf_token",
                     side_effect=RuntimeError("HF_TOKEN missing"),
                 ):
             result = transcribe(
@@ -373,9 +382,9 @@ class FetcherTests(unittest.TestCase):
             title="Example Corp Revenue",
             hotwords="Example Corp",
         )
-        with patch("fetcher._load_whisper_model", return_value=FakeModel()), \
+        with patch("scripts.fetcher._load_whisper_model", return_value=FakeModel()), \
                 patch(
-                    "fetcher._transcribe_audio_range",
+                    "scripts.fetcher._transcribe_audio_range",
                     return_value=candidate,
                 ) as range_decode:
             result = transcribe(
@@ -406,8 +415,8 @@ class FetcherTests(unittest.TestCase):
             def transcribe(self, _audio, **_kwargs):
                 return iter([segment]), info
 
-        with patch("fetcher._load_whisper_model", return_value=FakeModel()), \
-                patch("fetcher._transcribe_audio_range") as range_decode:
+        with patch("scripts.fetcher._load_whisper_model", return_value=FakeModel()), \
+                patch("scripts.fetcher._transcribe_audio_range") as range_decode:
             result = transcribe(
                 "fake.mp3",
                 quality="balanced",
@@ -462,8 +471,8 @@ class FetcherTests(unittest.TestCase):
                 },
             }
 
-        with patch("fetcher._load_whisper_model", return_value=FakeModel()), \
-                patch("asr_alignment.align_segments", return_value={
+        with patch("scripts.fetcher._load_whisper_model", return_value=FakeModel()), \
+                patch("scripts.asr_alignment.align_segments", return_value={
                     "segments": [aligned_segment],
                     "meta": {
                         "enabled": True,
@@ -472,9 +481,9 @@ class FetcherTests(unittest.TestCase):
                         "word_timestamp_coverage": 1.0,
                     },
                 }), \
-                patch("config.require_hf_token", return_value="token"), \
+                patch("scripts.config.require_hf_token", return_value="token"), \
                 patch(
-                    "diarize.diarize_and_merge",
+                    "scripts.diarize.diarize_and_merge",
                     side_effect=diarize_after_alignment,
                 ):
             result = transcribe(
@@ -1608,10 +1617,10 @@ class TTSTests(unittest.TestCase):
                 return [b"ID3" + b"a" * 2048]
 
             with patch(
-                    "tts.synth_chunks_concurrent",
+                    "scripts.tts.synth_chunks_concurrent",
                     side_effect=synth_section), \
-                    patch("tts.merge_mp3s") as merge, \
-                    patch("tts.time.sleep"):
+                    patch("scripts.tts.merge_mp3s") as merge, \
+                    patch("scripts.tts.time.sleep"):
                 result = run_tts(
                     str(folder), "讲书稿.md", "episode", concurrency=1)
 
@@ -1634,10 +1643,10 @@ class TTSTests(unittest.TestCase):
             final.write_bytes(b"previous-final-audio")
 
             with patch(
-                    "tts.synth_chunks_concurrent",
+                    "scripts.tts.synth_chunks_concurrent",
                     return_value=[b"ID3" + b"a" * 2048]), \
-                    patch("tts.merge_mp3s", return_value=False), \
-                    patch("tts.time.sleep"):
+                    patch("scripts.tts.merge_mp3s", return_value=False), \
+                    patch("scripts.tts.time.sleep"):
                 result = run_tts(
                     str(folder), "讲书稿.md", "episode", concurrency=1)
 
@@ -1662,10 +1671,10 @@ class TTSTests(unittest.TestCase):
                 return True
 
             with patch(
-                    "tts.synth_chunks_concurrent",
+                    "scripts.tts.synth_chunks_concurrent",
                     return_value=[b"ID3" + b"a" * 2048]) as synth, \
-                    patch("tts.merge_mp3s", side_effect=fake_merge), \
-                    patch("tts.time.sleep"):
+                    patch("scripts.tts.merge_mp3s", side_effect=fake_merge), \
+                    patch("scripts.tts.time.sleep"):
                 first = run_tts(
                     str(folder), "讲书稿.md", "episode",
                     speed=1.0, concurrency=1)
@@ -1722,9 +1731,9 @@ class TTSTests(unittest.TestCase):
                 return True
 
             with patch(
-                    "tts.synth_chunks_concurrent",
+                    "scripts.tts.synth_chunks_concurrent",
                     side_effect=fake_synth), patch(
-                    "tts.merge_mp3s", side_effect=fake_merge), patch.dict(
+                    "scripts.tts.merge_mp3s", side_effect=fake_merge), patch.dict(
                     os.environ, {"TTS_SECTION_CONCURRENCY": "2"}):
                 result = run_tts(
                     str(folder), "讲书稿.md", "episode", concurrency=4)
@@ -1752,10 +1761,10 @@ class TTSTests(unittest.TestCase):
                 return True
 
             with patch(
-                    "tts.synth_chunks_concurrent",
+                    "scripts.tts.synth_chunks_concurrent",
                     return_value=[b"ID3" + b"a" * 2048]), \
-                    patch("tts.merge_mp3s", side_effect=fake_merge), \
-                    patch("tts.time.sleep"):
+                    patch("scripts.tts.merge_mp3s", side_effect=fake_merge), \
+                    patch("scripts.tts.time.sleep"):
                 result = run_tts(
                     str(folder), "讲书稿.md", "episode", concurrency=1)
 
@@ -1784,9 +1793,9 @@ class TTSTests(unittest.TestCase):
         ]
         client = SimpleNamespace(post=lambda *_args, **_kwargs: responses.pop(0))
         usage = tts.TTSUsage()
-        with patch("tts.MAX_RETRIES", 3), \
-                patch("tts.RETRY_BACKOFF", 2), \
-                patch("tts.time.sleep") as sleep:
+        with patch("scripts.tts.MAX_RETRIES", 3), \
+                patch("scripts.tts.RETRY_BACKOFF", 2), \
+                patch("scripts.tts.time.sleep") as sleep:
             result = tts.synth_chunk(client, "hello", usage=usage)
         self.assertEqual(result, b"audio")
         self.assertEqual(
@@ -1798,9 +1807,9 @@ class TTSTests(unittest.TestCase):
         response = SimpleNamespace(
             status_code=500, headers={}, text="", content=b"")
         client = SimpleNamespace(post=lambda *_args, **_kwargs: response)
-        with patch("tts.MAX_RETRIES", 3), \
-                patch("tts.RETRY_BACKOFF", 1), \
-                patch("tts.time.sleep") as sleep:
+        with patch("scripts.tts.MAX_RETRIES", 3), \
+                patch("scripts.tts.RETRY_BACKOFF", 1), \
+                patch("scripts.tts.time.sleep") as sleep:
             with self.assertRaisesRegex(RuntimeError, "重试 3 次"):
                 tts.synth_chunk(client, "hello")
         self.assertEqual(
@@ -1849,7 +1858,7 @@ class ProcessTests(unittest.TestCase):
             self._write_evidence(folder, old_text, source)
             original_raw = (
                 folder / "transcript.raw.json").read_bytes()
-            with patch("process.fetch_transcript_from_url") as fetch:
+            with patch("scripts.process.fetch_transcript_from_url") as fetch:
                 self.assertTrue(pipeline_process.fetch_transcript(
                     source, folder, "Episode", None))
             fetch.assert_not_called()
@@ -1885,7 +1894,7 @@ class ProcessTests(unittest.TestCase):
             new_text = "new evidence " * 30
             self._write_evidence(folder, old_text, source)
             with patch(
-                    "process.fetch_transcript_from_url",
+                    "scripts.process.fetch_transcript_from_url",
                     return_value={
                         "text": new_text,
                         "segments": [{
@@ -1923,7 +1932,7 @@ class ProcessTests(unittest.TestCase):
             self._write_evidence(folder, old_text, source)
             old_raw = (folder / "transcript.raw.json").read_bytes()
             with patch(
-                    "process.fetch_transcript_from_url",
+                    "scripts.process.fetch_transcript_from_url",
                     return_value=None):
                 self.assertFalse(pipeline_process.fetch_transcript(
                     source,
@@ -1948,8 +1957,8 @@ class ProcessTests(unittest.TestCase):
                 "## 第一章\n这是第一章的正文内容。",
                 encoding="utf-8",
             )
-            with patch("process._run_quality_gate", return_value=False), \
-                    patch("process.md_to_html") as html:
+            with patch("scripts.process._run_quality_gate", return_value=False), \
+                    patch("scripts.process.md_to_html") as html:
                 self.assertFalse(
                     pipeline_process.run_html_step(folder, "episode", "讲书稿.md"))
                 html.assert_not_called()
@@ -1975,9 +1984,9 @@ class ProcessTests(unittest.TestCase):
             passed = {"passed": True, "errors": [],
                       "error_details": [], "warnings": []}
             with patch(
-                    "quality_report.build_quality_report",
+                    "scripts.quality_report.build_quality_report",
                     side_effect=[missing, passed]), \
-                    patch("ai_review.review_episode") as review:
+                    patch("scripts.ai_review.review_episode") as review:
                 self.assertTrue(pipeline_process._run_quality_gate(folder))
                 review.assert_called_once()
 
@@ -1994,9 +2003,9 @@ class ProcessTests(unittest.TestCase):
                 "warnings": [],
             }
             with patch(
-                    "quality_report.build_quality_report",
+                    "scripts.quality_report.build_quality_report",
                     return_value=failed), \
-                    patch("ai_review.review_episode") as review:
+                    patch("scripts.ai_review.review_episode") as review:
                 self.assertFalse(pipeline_process._run_quality_gate(folder))
                 review.assert_not_called()
 
@@ -2025,8 +2034,8 @@ class ProcessTests(unittest.TestCase):
             }), encoding="utf-8")
             before = briefing.read_bytes()
             report = RunReport(folder, "test-auto-fix")
-            with patch("process._run_structure_check"), \
-                    patch("process._run_quality_gate", return_value=False):
+            with patch("scripts.process._run_structure_check"), \
+                    patch("scripts.process._run_quality_gate", return_value=False):
                 self.assertFalse(pipeline_process.run_html_step(
                     folder,
                     folder.name,
@@ -2050,7 +2059,7 @@ class ProcessTests(unittest.TestCase):
 class CatalogTests(unittest.TestCase):
     def test_audio_duration_prefers_ffprobe(self):
         result = SimpleNamespace(returncode=0, stdout="1186.5\n")
-        with patch("catalog_core.subprocess.run", return_value=result):
+        with patch("scripts.catalog_core.subprocess.run", return_value=result):
             self.assertEqual(
                 catalog_core._audio_duration_minutes(Path("episode.mp3")), 20)
 
@@ -2427,7 +2436,7 @@ class AtomicIOTests(unittest.TestCase):
             target = Path(td) / "report.json"
             target.write_text("old", encoding="utf-8")
             with patch(
-                    "atomic_io.os.replace",
+                    "scripts.atomic_io.os.replace",
                     side_effect=OSError("simulated failure")):
                 with self.assertRaisesRegex(OSError, "simulated failure"):
                     atomic_io.atomic_write_text(target, "new")

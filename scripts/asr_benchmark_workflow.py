@@ -1,31 +1,28 @@
 """Contract-driven entry point for the ASR benchmark workflow."""
+
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 
 import argparse
 import json
 from pathlib import Path
 
-try:
-    from asr_benchmark_runner import (
-        file_fingerprint,
-        rescore_manifest,
-        run_manifest,
-    )
-    from atomic_io import atomic_write_json
-    from fetcher import preset_model_policy
-    from prepare_ami_benchmark import prepare, verify_sources
-except ImportError:
-    from scripts.asr_benchmark_runner import (
-        file_fingerprint,
-        rescore_manifest,
-        run_manifest,
-    )
-    from scripts.atomic_io import atomic_write_json
-    from scripts.fetcher import preset_model_policy
-    from scripts.prepare_ami_benchmark import (
-        prepare,
-        verify_sources,
-    )
+from scripts.asr_benchmark_runner import (
+    file_fingerprint,
+    rescore_manifest,
+    run_manifest,
+)
+from scripts.atomic_io import atomic_write_json
+from scripts.fetcher import preset_model_policy
+from scripts.prepare_ami_benchmark import (
+    prepare,
+    verify_sources,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

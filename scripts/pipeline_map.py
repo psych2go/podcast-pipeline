@@ -5,11 +5,11 @@ import json
 import sys
 from pathlib import Path
 
-_scripts = str(Path(__file__).resolve().parent)
+_scripts = str(Path(__file__).resolve().parents[1])
 if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
-from pipeline.stages import STAGES, validate_stage_map
+from scripts.pipeline.stages import STAGES, validate_stage_map
 
 
 def _text_map() -> str:

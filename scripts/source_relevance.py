@@ -19,10 +19,7 @@ from urllib.parse import (
 
 import httpx
 
-try:
-    from atomic_io import atomic_write_json
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
+from scripts.atomic_io import atomic_write_json
 
 
 SCHEMA_VERSION = 1

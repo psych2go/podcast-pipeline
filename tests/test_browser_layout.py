@@ -5,10 +5,10 @@ from playwright.sync_api import sync_playwright
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from html_gen import _build_html
-from playwright_runtime import playwright_launch_env
+from scripts.html_gen import _build_html
+from scripts.playwright_runtime import playwright_launch_env
 
 
 class MobileBrowserLayoutTests(unittest.TestCase):

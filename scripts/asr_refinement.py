@@ -7,10 +7,7 @@ from difflib import SequenceMatcher
 from statistics import fmean
 from collections.abc import Callable, Iterable, Sequence
 
-try:
-    from hashing import sha256_text as _text_sha256
-except ImportError:
-    from scripts.hashing import sha256_text as _text_sha256
+from scripts.hashing import sha256_text as _text_sha256
 
 
 _GENERIC_WORDS = frozenset({

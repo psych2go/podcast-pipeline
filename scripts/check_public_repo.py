@@ -2,7 +2,6 @@
 """Reject files that must not be present in a public Git tree."""
 
 from __future__ import annotations
-
 import argparse
 import os
 import re
