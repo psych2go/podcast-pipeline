@@ -49,13 +49,25 @@ select = ["E", "F", "W", "B", "UP"]
 "scripts/html_gen.py" = ["E402", "E501"]
 "scripts/diarize.py" = ["E402"]
 "scripts/pipeline_map.py" = ["E402"]
+"scripts/ai_review.py" = ["E402", "E501"]
+"scripts/agent_pipeline.py" = ["E501"]
+"scripts/prewrite_fact_checks.py" = ["E501"]
+"scripts/asr_benchmark_runner.py" = ["E402"]
+"scripts/asr_benchmark_workflow.py" = ["E402"]
+"scripts/asr_runtime.py" = ["E402"]
+"scripts/benchmark.py" = ["E402"]
+"scripts/catalog.py" = ["E402"]
+"scripts/claim_evidence.py" = ["E402"]
+"scripts/content_map.py" = ["E402"]
+"scripts/episode.py" = ["E402"]
+"scripts/evidence.py" = ["E402"]
+"scripts/prepare_ami_benchmark.py" = ["E402"]
+"scripts/quality_report.py" = ["E402"]
+"scripts/release.py" = ["E402"]
 "tests/*.py" = ["E402"]
 # Long prose literals: the review/edit task prompts and the HTML/CSS/SVG
 # template (including unwrappable data: URIs) legitimately exceed 100
 # columns inside string literals. Code in these files stays fully checked.
-"scripts/ai_review.py" = ["E501"]
-"scripts/agent_pipeline.py" = ["E501"]
-"scripts/prewrite_fact_checks.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

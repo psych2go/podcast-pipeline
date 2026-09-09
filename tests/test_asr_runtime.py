@@ -6,9 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from asr_runtime import (  # noqa: E402
+from scripts.asr_runtime import (
     RuntimeSpec,
     benchmark_transcription,
     resolve_runtime,
@@ -81,7 +81,7 @@ class BenchmarkTests(unittest.TestCase):
             audio = Path(td) / "clip.wav"
             audio.write_bytes(b"fake")
             with patch(
-                    "asr_runtime._audio_duration_seconds",
+                    "scripts.asr_runtime._audio_duration_seconds",
                     return_value=10.0):
                 result = benchmark_transcription(
                     audio,

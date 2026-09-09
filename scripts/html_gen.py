@@ -13,12 +13,9 @@ HTML 生成模块 — 将讲书稿.md 转为精美、自包含的 HTML 阅读页
 import sys
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_text
-except ImportError:
-    from scripts.atomic_io import atomic_write_text
+from scripts.atomic_io import atomic_write_text
 
-_scripts = str(Path(__file__).resolve().parent)
+_scripts = str(Path(__file__).resolve().parents[1])
 if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
@@ -30,9 +27,9 @@ import re
 from datetime import date, datetime
 from urllib.parse import urlsplit
 
-from config import R2_PUBLIC_URL
-from episode import public_audio_url
-from sections import parse_markdown_sections
+from scripts.config import R2_PUBLIC_URL
+from scripts.episode import public_audio_url
+from scripts.sections import parse_markdown_sections
 
 
 # ── Markdown 解析 ─────────────────────────────────────────────────
@@ -1283,8 +1280,8 @@ def cli_main():
         print(f"❌ 找不到 {input_md}")
         sys.exit(1)
 
-    from preflight import quality_gate
-    from run_report import RunReport
+    from scripts.preflight import quality_gate
+    from scripts.run_report import RunReport
     folder = Path(input_md).parent
     report = RunReport(folder, "html.cli", {
         "entry_point": "html.cli",

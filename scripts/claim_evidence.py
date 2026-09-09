@@ -1,4 +1,10 @@
 """Use a subagent to refine each content-map claim to minimal source segments."""
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 import argparse
 import json
 import os
@@ -7,36 +13,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, UTC
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json
-    from content_map import (
-        apply_claim_evidence_mapping,
-        enrich_content_map_evidence,
-        load_json,
-        save_json,
-        validate_content_map,
-    )
-    from run_report import RunReport
-    from subagent import run_json_task
-    from transcript_correction import (
-        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
-        validate_correction_manifest,
-    )
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
-    from scripts.content_map import (
-        apply_claim_evidence_mapping,
-        enrich_content_map_evidence,
-        load_json,
-        save_json,
-        validate_content_map,
-    )
-    from scripts.run_report import RunReport
-    from scripts.subagent import run_json_task
-    from scripts.transcript_correction import (
-        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
-        validate_correction_manifest,
-    )
+from scripts.atomic_io import atomic_write_json
+from scripts.content_map import (
+    apply_claim_evidence_mapping,
+    enrich_content_map_evidence,
+    load_json,
+    save_json,
+    validate_content_map,
+)
+from scripts.run_report import RunReport
+from scripts.subagent import run_json_task
+from scripts.transcript_correction import (
+    MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
+    validate_correction_manifest,
+)
 
 
 CLAIM_EVIDENCE_SCHEMA = {

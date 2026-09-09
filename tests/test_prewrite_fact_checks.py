@@ -5,12 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import prewrite_fact_checks
-import review_repair
-from hashing import sha256_file
-from quality_report import build_quality_report
+from scripts import prewrite_fact_checks
+from scripts import review_repair
+from scripts.hashing import sha256_file
+from scripts.quality_report import build_quality_report
 
 
 class PrewriteFactCheckTests(unittest.TestCase):
@@ -447,7 +447,7 @@ class ExactEntityRepairTests(unittest.TestCase):
                 ],
                 "source_urls": ["https://example.com/book"],
             }
-            with patch("review_repair._refresh_semantic_bindings"):
+            with patch("scripts.review_repair._refresh_semantic_bindings"):
                 action = review_repair._repair_exact_entities(folder, [issue])
 
             updated = json.loads(

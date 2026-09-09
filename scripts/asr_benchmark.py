@@ -8,10 +8,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-try:
-    from text_distance import edit_details
-except ImportError:
-    from scripts.text_distance import edit_details
+from scripts.text_distance import edit_details
 
 
 def words(text):

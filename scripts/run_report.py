@@ -7,10 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, UTC
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json, exclusive_file_lock
-except ImportError:
-    from scripts.atomic_io import atomic_write_json, exclusive_file_lock
+from scripts.atomic_io import atomic_write_json, exclusive_file_lock
 
 
 RUN_REPORT_SCHEMA_VERSION = 1

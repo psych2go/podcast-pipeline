@@ -5,13 +5,9 @@ from pathlib import Path
 from zipfile import ZipFile
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from prepare_ami_benchmark import (  # noqa: E402
-    meeting_speakers,
-    meeting_words,
-    reference_segments,
-)
+from scripts.prepare_ami_benchmark import meeting_speakers, meeting_words, reference_segments
 
 
 class AmiReferenceTests(unittest.TestCase):

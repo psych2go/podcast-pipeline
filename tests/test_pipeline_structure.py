@@ -10,10 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import process
-from pipeline.cli import build_process_parser, episode_options_from_args
-from pipeline.options import EpisodeOptions
-from pipeline.stages import (
+from scripts import process
+from scripts.pipeline.cli import build_process_parser, episode_options_from_args
+from scripts.pipeline.options import EpisodeOptions
+from scripts.pipeline.stages import (
     STAGES,
     artifact_consumers,
     artifact_producers,
@@ -54,27 +54,29 @@ class ProcessFacadeTests(unittest.TestCase):
         self.assertEqual(options.official_url, "https://example.com/episode")
 
     def test_direct_and_package_import_modes_keep_facade(self):
-        commands = (
-            (
-                "import sys; sys.path.insert(0, 'scripts'); "
-                "import process; from pipeline.options import EpisodeOptions; "
-                "assert process.EpisodeOptions is EpisodeOptions"
-            ),
-            (
-                "import scripts.process as process; "
-                "from scripts.pipeline.options import EpisodeOptions; "
-                "assert process.EpisodeOptions is EpisodeOptions"
-            ),
+        # Direct script execution keeps working via the repo-root bootstrap.
+        direct = subprocess.run(
+            [sys.executable, "scripts/process.py", "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        for command in commands:
-            result = subprocess.run(
-                [sys.executable, "-c", command],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(direct.returncode, 0, direct.stderr)
+        # Package mode resolves the facade to the same option class.
+        package = (
+            "import scripts.process as process; "
+            "from scripts.pipeline.options import EpisodeOptions; "
+            "assert process.EpisodeOptions is EpisodeOptions"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", package],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class PipelineStageMapTests(unittest.TestCase):

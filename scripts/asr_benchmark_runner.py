@@ -6,19 +6,19 @@ import hashlib
 import importlib.metadata
 import json
 import platform
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 import time
 from pathlib import Path
 
-try:
-    from asr_benchmark import benchmark_sample, normalize_turns
-    from asr_refinement import build_asr_context
-    from atomic_io import atomic_write_json
-    from fetcher import render_segments, transcribe
-except ImportError:
-    from scripts.asr_benchmark import benchmark_sample, normalize_turns
-    from scripts.asr_refinement import build_asr_context
-    from scripts.atomic_io import atomic_write_json
-    from scripts.fetcher import render_segments, transcribe
+from scripts.asr_benchmark import benchmark_sample, normalize_turns
+from scripts.asr_refinement import build_asr_context
+from scripts.atomic_io import atomic_write_json
+from scripts.fetcher import render_segments, transcribe
 
 
 def resolve_manifest_paths(manifest, manifest_path):
@@ -199,7 +199,7 @@ def run_policy(
         return_metadata=True,
     )
     if shared_diarization is not None:
-        from diarize import merge_segments_with_speakers
+        from scripts.diarize import merge_segments_with_speakers
 
         result["diarization_turns"] = normalize_turns(
             shared_diarization["turns"])
@@ -352,7 +352,7 @@ def run_manifest(
                 max_speakers=manifest.get("max_speakers"),
             )
         else:
-            from diarize import diarize
+            from scripts.diarize import diarize
 
             started = time.perf_counter()
             shared_diarization = diarize(

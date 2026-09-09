@@ -6,14 +6,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_text
-    from episode import display_title as episode_display_title, source_metadata
-    from sources import source_label
-except ImportError:
-    from scripts.atomic_io import atomic_write_text
-    from scripts.episode import display_title as episode_display_title, source_metadata
-    from scripts.sources import source_label
+from scripts.atomic_io import atomic_write_text
+from scripts.episode import display_title as episode_display_title, source_metadata
+from scripts.sources import source_label
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONTENT_DIR = BASE_DIR / "content"

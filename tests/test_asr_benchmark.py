@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from asr_benchmark import (  # noqa: E402
+from scripts.asr_benchmark import (
     benchmark_sample,
     cp_word_error_rate,
     diarization_metrics,

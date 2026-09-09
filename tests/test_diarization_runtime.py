@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from diarize import _output_turns, diarize_and_merge  # noqa: E402
+from scripts.diarize import _output_turns, diarize_and_merge
 
 
 class FakeAnnotation:
@@ -55,7 +55,7 @@ class DiarizationOutputTests(unittest.TestCase):
                 "end": 1.0,
             }],
         }]
-        with patch("diarize.diarize", return_value={
+        with patch("scripts.diarize.diarize", return_value={
             "turns": [(0.0, 1.0, "SPEAKER_00")],
             "meta": {
                 "model": "community-1",

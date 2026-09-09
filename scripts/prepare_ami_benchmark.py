@@ -1,5 +1,12 @@
 """Prepare a clipped AMI meeting benchmark from official artifacts."""
+
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 
 import argparse
 import json
@@ -7,18 +14,11 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-try:
-    from hashing import sha256_file
-except ImportError:
-    from scripts.hashing import sha256_file
+from scripts.hashing import sha256_file
 from zipfile import ZipFile
 
-try:
-    from asr_benchmark import read_rttm
-    from atomic_io import atomic_write_json, atomic_write_text
-except ImportError:
-    from scripts.asr_benchmark import read_rttm
-    from scripts.atomic_io import atomic_write_json, atomic_write_text
+from scripts.asr_benchmark import read_rttm
+from scripts.atomic_io import atomic_write_json, atomic_write_text
 
 
 EXPECTED_HASHES = {

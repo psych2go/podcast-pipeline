@@ -5,14 +5,9 @@ import re
 from difflib import SequenceMatcher
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json, atomic_write_text
-    from hashing import sha256_text
-    from transcript_completeness import parse_contract_version
-except ImportError:
-    from scripts.atomic_io import atomic_write_json, atomic_write_text
-    from scripts.hashing import sha256_text
-    from scripts.transcript_completeness import parse_contract_version
+from scripts.atomic_io import atomic_write_json, atomic_write_text
+from scripts.hashing import sha256_text
+from scripts.transcript_completeness import parse_contract_version
 
 
 CORRECTION_SCHEMA_VERSION = 1

@@ -9,20 +9,20 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT))
 
-import ai_review
-import catalog
-import catalog_core
-import catalog_site
-import catalog_publish
-import fact_check_cache
-from claim_taxonomy import normalize_review_fact_checks
-import process as pipeline_process
-import tts
-import validator
-from content_finalizer import ContentFinalizationError, finalize_content_package
-from content_map import enrich_summary_map_evidence
+from scripts import ai_review
+from scripts import catalog
+from scripts import catalog_core
+from scripts import catalog_site
+from scripts import catalog_publish
+from scripts import fact_check_cache
+from scripts.claim_taxonomy import normalize_review_fact_checks
+from scripts import process as pipeline_process
+from scripts import tts
+from scripts import validator
+from scripts.content_finalizer import ContentFinalizationError, finalize_content_package
+from scripts.content_map import enrich_summary_map_evidence
 
 
 class StableContractTests(unittest.TestCase):

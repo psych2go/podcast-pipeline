@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 # Ensure scripts/ is in sys.path for direct execution or when imported
-_scripts = str(Path(__file__).resolve().parent)
+_scripts = str(Path(__file__).resolve().parents[1])
 if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
@@ -29,8 +29,8 @@ from threading import Lock
 import httpx
 from tqdm import tqdm
 
-from atomic_io import atomic_output_path, atomic_write_json
-from config import (
+from scripts.atomic_io import atomic_output_path, atomic_write_json
+from scripts.config import (
     API_RETRY_BACKOFF,
     FISH_MODEL,
     FISH_VOICE,
@@ -39,15 +39,11 @@ from config import (
     require_fish_key,
     validate_for_stage,
 )
-from retry import exponential_delay, retry_after_seconds
-try:
-    from hashing import (
-        sha256_bytes as _sha256_bytes, sha256_file as _sha256_file)
-except ImportError:
-    from scripts.hashing import (
-        sha256_bytes as _sha256_bytes, sha256_file as _sha256_file)
-from sections import parse_markdown_sections
-from validator import smart_chunk
+from scripts.retry import exponential_delay, retry_after_seconds
+from scripts.hashing import (
+    sha256_bytes as _sha256_bytes, sha256_file as _sha256_file)
+from scripts.sections import parse_markdown_sections
+from scripts.validator import smart_chunk
 
 
 API_URL = "https://api.fish.audio/v1/tts"
@@ -898,8 +894,8 @@ def cli_main():
     if not merged_name:
         merged_name = Path(input_md).stem
 
-    from preflight import quality_gate
-    from run_report import RunReport
+    from scripts.preflight import quality_gate
+    from scripts.run_report import RunReport
     report = RunReport(folder, "tts.cli", {
         "entry_point": "tts.cli",
         "allow_unchecked": parsed.allow_unchecked,
@@ -938,7 +934,7 @@ def cli_main():
                 concurrency=parsed.concurrency,
             )
         if result.ok:
-            from release import prepare_release
+            from scripts.release import prepare_release
             release = prepare_release(
                 folder,
                 folder / f"{merged_name}.mp3",

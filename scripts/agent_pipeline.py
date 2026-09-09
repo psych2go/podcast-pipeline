@@ -6,118 +6,61 @@ import re
 from contextlib import nullcontext
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json
-    from canonical_entities import (
-        GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
-        SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
-        public_entity_alias_errors,
-        validate_canonical_entities,
-    )
-    from claim_evidence import refine_claim_evidence
-    from content_map import (
-        body_sha256,
-        enrich_content_map_evidence,
-        enrich_summary_map_evidence,
-        init_content_map,
-        load_json,
-        normalize_detail_items,
-        normalize_summary_claim_ids,
-        save_json,
-        CLAIM_MODALITIES,
-        STATUS_VALUES,
-        validate_content_map,
-        validate_summary_map,
-    )
-    from content_finalizer import (
-        finalize_content_package,
-        validate_tts_readiness,
-    )
-    from episode import (
-        quality_metadata,
-        sync_episode_state,
-        update_transcript_status,
-    )
-    from evidence import ASR_SOURCE_KINDS, effective_source_kind
-    from subagent import run_edit_task, run_json_task
-    from prewrite_fact_checks import (
-        FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
-        SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
-        ledger_is_current,
-        run_prewrite_fact_checks,
-    )
-    from tts import load_tts_lexicon
-    from transcript_correction import (
-        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
-        batch_output_schema,
-        build_manifest,
-        correction_batches,
-        correction_contract_required,
-        validate_correction_batch,
-        validate_correction_manifest,
-        write_correction_artifacts,
-    )
-    from transcript_completeness import (
-        completeness_contract_required,
-        completeness_enforcement_mode,
-        validate_completeness_result,
-    )
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
-    from scripts.canonical_entities import (
-        GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
-        SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
-        public_entity_alias_errors,
-        validate_canonical_entities,
-    )
-    from scripts.claim_evidence import refine_claim_evidence
-    from scripts.content_map import (
-        body_sha256,
-        enrich_content_map_evidence,
-        enrich_summary_map_evidence,
-        init_content_map,
-        load_json,
-        normalize_detail_items,
-        normalize_summary_claim_ids,
-        save_json,
-        CLAIM_MODALITIES,
-        STATUS_VALUES,
-        validate_content_map,
-        validate_summary_map,
-    )
-    from scripts.content_finalizer import (
-        finalize_content_package,
-        validate_tts_readiness,
-    )
-    from scripts.episode import (
-        quality_metadata,
-        sync_episode_state,
-        update_transcript_status,
-    )
-    from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
-    from scripts.subagent import run_edit_task, run_json_task
-    from scripts.prewrite_fact_checks import (
-        FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
-        SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
-        ledger_is_current,
-        run_prewrite_fact_checks,
-    )
-    from scripts.tts import load_tts_lexicon
-    from scripts.transcript_correction import (
-        MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
-        batch_output_schema,
-        build_manifest,
-        correction_batches,
-        correction_contract_required,
-        validate_correction_batch,
-        validate_correction_manifest,
-        write_correction_artifacts,
-    )
-    from scripts.transcript_completeness import (
-        completeness_contract_required,
-        completeness_enforcement_mode,
-        validate_completeness_result,
-    )
+from scripts.atomic_io import atomic_write_json
+from scripts.canonical_entities import (
+    GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
+    SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
+    public_entity_alias_errors,
+    validate_canonical_entities,
+)
+from scripts.claim_evidence import refine_claim_evidence
+from scripts.content_map import (
+    body_sha256,
+    enrich_content_map_evidence,
+    enrich_summary_map_evidence,
+    init_content_map,
+    load_json,
+    normalize_detail_items,
+    normalize_summary_claim_ids,
+    save_json,
+    CLAIM_MODALITIES,
+    STATUS_VALUES,
+    validate_content_map,
+    validate_summary_map,
+)
+from scripts.content_finalizer import (
+    finalize_content_package,
+    validate_tts_readiness,
+)
+from scripts.episode import (
+    quality_metadata,
+    sync_episode_state,
+    update_transcript_status,
+)
+from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
+from scripts.subagent import run_edit_task, run_json_task
+from scripts.prewrite_fact_checks import (
+    FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
+    SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
+    ledger_is_current,
+    run_prewrite_fact_checks,
+)
+from scripts.tts import load_tts_lexicon
+from scripts.transcript_correction import (
+    MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
+    batch_output_schema,
+    build_manifest,
+    correction_batches,
+    correction_contract_required,
+    validate_correction_batch,
+    validate_correction_manifest,
+    write_correction_artifacts,
+)
+from scripts.transcript_completeness import (
+    completeness_contract_required,
+    completeness_enforcement_mode,
+    validate_completeness_result,
+)
 
 
 def _stage(report, name, metrics=None):

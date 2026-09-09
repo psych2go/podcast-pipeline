@@ -1,4 +1,10 @@
 """Episode metadata manifest and legacy migration helpers."""
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 import argparse
 import hashlib
 import json
@@ -8,22 +14,13 @@ from datetime import date, datetime, timedelta, timezone, UTC
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 
-try:
-    from atomic_io import atomic_write_json, atomic_write_text
-    from evidence import (
-        ASR_SOURCE_KINDS,
-        effective_source_kind,
-        migrate_evidence_provenance,
-    )
-    from sources import source_label
-except ImportError:
-    from scripts.atomic_io import atomic_write_json, atomic_write_text
-    from scripts.evidence import (
-        ASR_SOURCE_KINDS,
-        effective_source_kind,
-        migrate_evidence_provenance,
-    )
-    from scripts.sources import source_label
+from scripts.atomic_io import atomic_write_json, atomic_write_text
+from scripts.evidence import (
+    ASR_SOURCE_KINDS,
+    effective_source_kind,
+    migrate_evidence_provenance,
+)
+from scripts.sources import source_label
 
 
 EPISODE_SCHEMA_VERSION = 1
@@ -300,18 +297,11 @@ def inspect_episode_state(folder, payload=None):
     corrected = (folder / "转录_纠错.txt").exists()
     if source_kind == "local_asr":
         try:
-            try:
-                from transcript_correction import (
-                    MANIFEST_NAME as correction_manifest_name,
-                    correction_contract_required,
-                    validate_correction_manifest,
-                )
-            except ImportError:
-                from scripts.transcript_correction import (
-                    MANIFEST_NAME as correction_manifest_name,
-                    correction_contract_required,
-                    validate_correction_manifest,
-                )
+            from scripts.transcript_correction import (
+                MANIFEST_NAME as correction_manifest_name,
+                correction_contract_required,
+                validate_correction_manifest,
+            )
             if correction_contract_required(raw):
                 manifest_path = folder / correction_manifest_name
                 if not manifest_path.exists():
@@ -540,10 +530,7 @@ def audio_key(folder):
 
 def public_audio_url(folder, base_url):
     fallback = audio_key(folder)
-    try:
-        from release import active_audio_key
-    except ImportError:
-        from scripts.release import active_audio_key
+    from scripts.release import active_audio_key
     key = active_audio_key(folder, fallback)
     return f"{base_url.rstrip('/')}/{quote(key, safe='/')}"
 

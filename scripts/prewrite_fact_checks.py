@@ -5,16 +5,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, UTC
 from pathlib import Path
 
-try:
-    from atomic_io import atomic_write_json
-    from content_map import body_sha256
-    from hashing import sha256_file
-    from subagent import run_json_task
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
-    from scripts.content_map import body_sha256
-    from scripts.hashing import sha256_file
-    from scripts.subagent import run_json_task
+from scripts.atomic_io import atomic_write_json
+from scripts.content_map import body_sha256
+from scripts.hashing import sha256_file
+from scripts.subagent import run_json_task
 
 
 FILENAME = "editorial_fact_checks.json"

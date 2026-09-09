@@ -6,11 +6,11 @@ from datetime import datetime, UTC
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import fact_check_cache
-import ai_review
-import review_repair
+from scripts import fact_check_cache
+from scripts import ai_review
+from scripts import review_repair
 
 
 class ReviewRepairTests(unittest.TestCase):
@@ -34,7 +34,7 @@ class ReviewRepairTests(unittest.TestCase):
             }
             reviewer = unittest.mock.Mock(side_effect=[failed, passed])
             with patch(
-                    "review_repair._repair_summary",
+                    "scripts.review_repair._repair_summary",
                     return_value={"action": "finalize_content_package"}) as repair:
                 result = review_repair.review_and_repair(
                     folder, reviewer=reviewer, max_rounds=2)

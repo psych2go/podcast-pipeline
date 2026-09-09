@@ -14,11 +14,11 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from asr_refinement import AsrContext, build_asr_context, refine_segments
-from config import FETCH_MAX_RETRIES, FETCH_TIMEOUT, API_RETRY_BACKOFF
-from playwright_runtime import playwright_launch_env
-from retry import exponential_delay, retry_after_seconds
-from sources import source_host
+from scripts.asr_refinement import AsrContext, build_asr_context, refine_segments
+from scripts.config import FETCH_MAX_RETRIES, FETCH_TIMEOUT, API_RETRY_BACKOFF
+from scripts.playwright_runtime import playwright_launch_env
+from scripts.retry import exponential_delay, retry_after_seconds
+from scripts.sources import source_host
 
 
 # ── URL 抓取（四层降级）───────────────────────────────────────────
@@ -731,7 +731,7 @@ def preset_model_policy():
 
 def resolve_asr_config(quality="balanced", model_size=None):
     """解析最终 ASR 配置；显式模型参数永远优先。"""
-    from config import ASR_MODEL
+    from scripts.config import ASR_MODEL
 
     if quality not in ASR_PRESETS:
         raise ValueError(f"未知 ASR 质量预设: {quality}")
@@ -801,7 +801,7 @@ def clean_whisper_hallucinations(text):
 
 def _model_path(model_size):
     """解析模型路径，不写死某台机器的用户目录。"""
-    from config import ASR_MODEL_CACHE
+    from scripts.config import ASR_MODEL_CACHE
 
     if os.path.isdir(model_size):
         return model_size
@@ -877,10 +877,10 @@ def _segment_to_dict(segment):
 
 
 def _load_whisper_model(model_size, runtime=None):
-    from config import ASR_COMPUTE_TYPE, ASR_DEVICE
+    from scripts.config import ASR_COMPUTE_TYPE, ASR_DEVICE
 
     if runtime is None:
-        from asr_runtime import resolve_runtime
+        from scripts.asr_runtime import resolve_runtime
         runtime = resolve_runtime(ASR_DEVICE, ASR_COMPUTE_TYPE)
     import faster_whisper
 
@@ -980,8 +980,8 @@ def transcribe_mp3_timestamped(mp3_path, model_size=None, initial_prompt=None,
         f"file={os.path.basename(mp3_path)}",
         flush=True,
     )
-    from config import ASR_COMPUTE_TYPE, ASR_DEVICE
-    from asr_runtime import resolve_runtime
+    from scripts.config import ASR_COMPUTE_TYPE, ASR_DEVICE
+    from scripts.asr_runtime import resolve_runtime
 
     runtime = resolve_runtime(ASR_DEVICE, ASR_COMPUTE_TYPE)
     model = _load_whisper_model(config["model_size"], runtime=runtime)
@@ -1028,7 +1028,7 @@ def transcribe_mp3_timestamped(mp3_path, model_size=None, initial_prompt=None,
         ),
     }
     if adaptive_refinement and quality in {"balanced", "max"}:
-        from config import ASR_REFINE_MAX_RANGES
+        from scripts.config import ASR_REFINE_MAX_RANGES
 
         print("[ASR] 评估困难片段并执行定向重解码...", flush=True)
         refined = refine_segments(
@@ -1134,8 +1134,8 @@ def transcribe(mp3_path, engine="whisper", quality="balanced", asr_model=None,
     )
 
     if align_audio and effective_quality in {"balanced", "max"}:
-        from asr_alignment import align_segments
-        from config import ALIGNMENT_DEVICE, ALIGNMENT_MODE, ALIGNMENT_MODEL
+        from scripts.asr_alignment import align_segments
+        from scripts.config import ALIGNMENT_DEVICE, ALIGNMENT_MODE, ALIGNMENT_MODEL
 
         print("[Align] 执行词级强制对齐...", flush=True)
         aligned = align_segments(
@@ -1171,7 +1171,7 @@ def transcribe(mp3_path, engine="whisper", quality="balanced", asr_model=None,
         }
 
     if diarize_audio:
-        from config import require_hf_token
+        from scripts.config import require_hf_token
         try:
             require_hf_token()
         except RuntimeError as exc:
@@ -1182,7 +1182,7 @@ def transcribe(mp3_path, engine="whisper", quality="balanced", asr_model=None,
             result["meta"]["diarization"] = False
             result["meta"]["diarization_warning"] = "missing_hf_token"
         else:
-            from diarize import diarize_and_merge
+            from scripts.diarize import diarize_and_merge
             diarized = diarize_and_merge(
                 mp3_path,
                 result["segments"],
@@ -1205,11 +1205,8 @@ def transcribe(mp3_path, engine="whisper", quality="balanced", asr_model=None,
     else:
         result["meta"]["diarization"] = False
 
-    try:
-        from transcript_completeness import analyze_audio_completeness
-    except ImportError:
-        from scripts.transcript_completeness import analyze_audio_completeness
-    from config import ASR_COMPLETENESS_MODE
+    from scripts.transcript_completeness import analyze_audio_completeness
+    from scripts.config import ASR_COMPLETENESS_MODE
     result["meta"]["completeness_contract_version"] = 1
     result["meta"]["correction_contract_version"] = 1
     result["meta"]["completeness_mode"] = ASR_COMPLETENESS_MODE

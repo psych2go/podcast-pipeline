@@ -6,77 +6,48 @@ catalog_triage, and catalog_publish. Callers that need alternate paths should
 configure a CatalogPaths instance explicitly instead of monkeypatching this
 facade.
 """
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 import argparse
 import json
 
-try:
-    from atomic_io import atomic_write_text
-    from catalog_core import (
-        CATALOG, CONTENT_DIR, SITE_DIR, CatalogPaths, _audio_duration_minutes,
-        _catalog_text, _display_title, _episode_dirs, _find_briefing,
-        _gen_mp3, _load_site_entries, _ordered_episode_names, _read_source,
-        _source_cell, _zh_chars, add_to_catalog,
-        episode_stats, rebuild_catalog,
-    )
-    from catalog_health import build_health_report as _build_health_report
-    from catalog_triage import (
-        render_markdown as _render_triage_markdown,
-        triage_all as _triage_all,
-        triage_episode as _triage_episode,
-    )
-    from catalog_publish import (
-        BASE_DIR, PAGES_BASE_URL, PAGES_PROJECT, R2_BUCKET, R2_PUBLIC_URL,
-        _PublishFailure, _batch_publish_item, _candidate_catalog_errors,
-        _dotenv_assignments, _finish_batch_impl, _finish_impl,
-        _is_wrangler_command, _publish_preflight, _release_report, _run,
-        _run_with_output, _run_wrangler, _upload_r2_item,
-        _verify_publish_with_retry, _wrangler_environment,
-        _write_publish_failure, configure_paths, finish, finish_batch,
-    )
-    from catalog_site import (
-        _build_entry, _site_readiness_errors, backfill_sources,
-        catalog_consistency_errors, gen_index, sync_site,
-    )
-    from config import (
-        BASE_DIR as CONFIG_CONTENT_DIR,
-        CATALOG_PATH as CONFIG_CATALOG,
-        PROJECT_ROOT as CONFIG_ROOT,
-        SITE_DIR as CONFIG_SITE_DIR,
-    )
-except ImportError:
-    from scripts.atomic_io import atomic_write_text
-    from scripts.catalog_core import (
-        CATALOG, CONTENT_DIR, SITE_DIR, CatalogPaths, _audio_duration_minutes,
-        _catalog_text, _display_title, _episode_dirs, _find_briefing,
-        _gen_mp3, _load_site_entries, _ordered_episode_names, _read_source,
-        _source_cell, _zh_chars, add_to_catalog,
-        episode_stats, rebuild_catalog,
-    )
-    from scripts.catalog_health import build_health_report as _build_health_report
-    from scripts.catalog_triage import (
-        render_markdown as _render_triage_markdown,
-        triage_all as _triage_all,
-        triage_episode as _triage_episode,
-    )
-    from scripts.catalog_publish import (
-        BASE_DIR, PAGES_BASE_URL, PAGES_PROJECT, R2_BUCKET, R2_PUBLIC_URL,
-        _PublishFailure, _batch_publish_item, _candidate_catalog_errors,
-        _dotenv_assignments, _finish_batch_impl, _finish_impl,
-        _is_wrangler_command, _publish_preflight, _release_report, _run,
-        _run_with_output, _run_wrangler, _upload_r2_item,
-        _verify_publish_with_retry, _wrangler_environment,
-        _write_publish_failure, configure_paths, finish, finish_batch,
-    )
-    from scripts.catalog_site import (
-        _build_entry, _site_readiness_errors, backfill_sources,
-        catalog_consistency_errors, gen_index, sync_site,
-    )
-    from scripts.config import (
-        BASE_DIR as CONFIG_CONTENT_DIR,
-        CATALOG_PATH as CONFIG_CATALOG,
-        PROJECT_ROOT as CONFIG_ROOT,
-        SITE_DIR as CONFIG_SITE_DIR,
-    )
+from scripts.atomic_io import atomic_write_text
+from scripts.catalog_core import (
+    CATALOG, CONTENT_DIR, SITE_DIR, CatalogPaths, _audio_duration_minutes,
+    _catalog_text, _display_title, _episode_dirs, _find_briefing,
+    _gen_mp3, _load_site_entries, _ordered_episode_names, _read_source,
+    _source_cell, _zh_chars, add_to_catalog,
+    episode_stats, rebuild_catalog,
+)
+from scripts.catalog_health import build_health_report as _build_health_report
+from scripts.catalog_triage import (
+    render_markdown as _render_triage_markdown,
+    triage_all as _triage_all,
+    triage_episode as _triage_episode,
+)
+from scripts.catalog_publish import (
+    BASE_DIR, PAGES_BASE_URL, PAGES_PROJECT, R2_BUCKET, R2_PUBLIC_URL,
+    _PublishFailure, _batch_publish_item, _candidate_catalog_errors,
+    _dotenv_assignments, _finish_batch_impl, _finish_impl,
+    _is_wrangler_command, _publish_preflight, _release_report, _run,
+    _run_with_output, _run_wrangler, _upload_r2_item,
+    _verify_publish_with_retry, _wrangler_environment,
+    _write_publish_failure, configure_paths, finish, finish_batch,
+)
+from scripts.catalog_site import (
+    _build_entry, _site_readiness_errors, backfill_sources,
+    catalog_consistency_errors, gen_index, sync_site,
+)
+from scripts.config import (
+    BASE_DIR as CONFIG_CONTENT_DIR,
+    CATALOG_PATH as CONFIG_CATALOG,
+    PROJECT_ROOT as CONFIG_ROOT,
+    SITE_DIR as CONFIG_SITE_DIR,
+)
 
 # Explicit compatibility surface: the facade re-exports deep-module helpers so
 # historical importers and patch targets keep working.

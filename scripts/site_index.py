@@ -5,10 +5,7 @@ import json
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-try:
-    from atomic_io import atomic_write_text
-except ImportError:
-    from scripts.atomic_io import atomic_write_text
+from scripts.atomic_io import atomic_write_text
 
 
 STATS_START = "<!-- STATS:START -->"

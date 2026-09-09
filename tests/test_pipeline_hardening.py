@@ -7,21 +7,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import agent_pipeline
-import catalog_publish as catalog
-import claim_evidence
-import process
-import subagent
-from content_finalizer import (
+from scripts import agent_pipeline
+from scripts import catalog_publish as catalog
+from scripts import claim_evidence
+from scripts import process
+from scripts import subagent
+from scripts.content_finalizer import (
     ContentFinalizationError,
     finalize_content_artifacts,
     generate_safe_tts_lexicon,
     validate_tts_lexicon_semantics,
     validate_tts_readiness,
 )
-from content_map import (
+from scripts.content_map import (
     apply_claim_evidence_mapping,
     body_sha256,
     canonicalize_claim_evidence_order,
@@ -30,7 +30,7 @@ from content_map import (
     validate_content_map,
     validate_summary_map,
 )
-from validator import integer_to_chinese, normalize_briefing_artifacts
+from scripts.validator import integer_to_chinese, normalize_briefing_artifacts
 
 
 class DeterministicPreReviewTests(unittest.TestCase):
@@ -152,7 +152,7 @@ class SubagentRecoveryTests(unittest.TestCase):
                     "A/B": "A B",
                 }), encoding="utf-8")
 
-            with patch("agent_pipeline.run_edit_task", side_effect=repair):
+            with patch("scripts.agent_pipeline.run_edit_task", side_effect=repair):
                 result = agent_pipeline._ensure_tts_lexicon_ready(
                     folder, briefing)
         self.assertTrue(result["repaired"])
@@ -174,7 +174,7 @@ class SubagentRecoveryTests(unittest.TestCase):
                     "血液pH、LinkedIn和A/B测试需要准确朗读": "完全不同事实",
                 }), encoding="utf-8")
 
-            with patch("agent_pipeline.run_edit_task", side_effect=repair):
+            with patch("scripts.agent_pipeline.run_edit_task", side_effect=repair):
                 with self.assertRaisesRegex(RuntimeError, "key 范围过大"):
                     agent_pipeline._ensure_tts_lexicon_ready(folder, briefing)
             restored = json.loads(
@@ -215,7 +215,7 @@ class SubagentRecoveryTests(unittest.TestCase):
             error = RuntimeError(
                 "U10000-C01: claim evidence confidence=low，需人工复核")
             with patch(
-                    "agent_pipeline.run_json_task",
+                    "scripts.agent_pipeline.run_json_task",
                     return_value=response) as repair:
                 unit_ids = agent_pipeline._repair_low_confidence_claims(
                     folder, raw, error)
@@ -272,8 +272,8 @@ class SubagentRecoveryTests(unittest.TestCase):
                     "SUBAGENT_FALLBACK_COMMAND": "backup-agent",
                     "SUBAGENT_MAX_RETRIES": "0",
                 }, clear=False), \
-                patch("subagent.shutil.which", side_effect=lambda name: f"/bin/{name}"), \
-                patch("subagent._run_process") as run:
+                patch("scripts.subagent.shutil.which", side_effect=lambda name: f"/bin/{name}"), \
+                patch("scripts.subagent._run_process") as run:
             run.side_effect = [
                 type("Result", (), {
                     "returncode": 1,
@@ -359,7 +359,7 @@ class SubagentRecoveryTests(unittest.TestCase):
             (folder / "content_map.json").write_text(
                 json.dumps(content_map), encoding="utf-8")
             with patch(
-                    "claim_evidence._run_batch",
+                    "scripts.claim_evidence._run_batch",
                     side_effect=RuntimeError("502 Bad Gateway")):
                 with self.assertRaisesRegex(
                         RuntimeError, "strict mode forbids fallback"):
@@ -411,7 +411,7 @@ class SubagentRecoveryTests(unittest.TestCase):
             (folder / "content_map.json").write_text(
                 json.dumps(content_map), encoding="utf-8")
             with patch(
-                    "claim_evidence._run_batch",
+                    "scripts.claim_evidence._run_batch",
                     side_effect=RuntimeError("502 Bad Gateway")):
                 metrics = claim_evidence.refine_claim_evidence(
                     folder, concurrency=1, allow_fallback=True)
@@ -445,7 +445,7 @@ class SubagentRecoveryTests(unittest.TestCase):
             "rationale": "单元复核确认原文直接支持该主张。",
         }]
         with patch(
-                "claim_evidence._run_batch",
+                "scripts.claim_evidence._run_batch",
                 return_value=({"claims": high}, {"duration_ms": 1})) as run:
             mappings, wrappers = (
                 claim_evidence._retry_low_confidence_units(
@@ -517,7 +517,7 @@ class SubagentRecoveryTests(unittest.TestCase):
                     "task_name": str(batch_index),
                 })
 
-            with patch("claim_evidence._run_batch", side_effect=run_batch):
+            with patch("scripts.claim_evidence._run_batch", side_effect=run_batch):
                 metrics = claim_evidence.refine_claim_evidence(
                     folder,
                     concurrency=1,
@@ -725,11 +725,11 @@ class ArtifactNormalizationTests(unittest.TestCase):
                 "__str__": lambda self: "ok",
             })()
 
-            with patch("process.validate_for_stage"), \
-                    patch("process._run_quality_gate", return_value=True), \
-                    patch("process.run_tts", return_value=tts_result), \
-                    patch("process.prepare_release", return_value={}), \
-                    patch("process.md_to_html", return_value=folder / "out.html"):
+            with patch("scripts.process.validate_for_stage"), \
+                    patch("scripts.process._run_quality_gate", return_value=True), \
+                    patch("scripts.process.run_tts", return_value=tts_result), \
+                    patch("scripts.process.prepare_release", return_value={}), \
+                    patch("scripts.process.md_to_html", return_value=folder / "out.html"):
                 self.assertTrue(process.run_tts_step(
                     folder, "Episode", "讲书稿.md", 1.0, False, True,
                 ))

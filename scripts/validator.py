@@ -5,10 +5,7 @@ import copy
 import hashlib
 import re
 
-try:
-    from sections import chapter_sections, parse_markdown_sections, preamble_text
-except ImportError:
-    from scripts.sections import chapter_sections, parse_markdown_sections, preamble_text
+from scripts.sections import chapter_sections, parse_markdown_sections, preamble_text
 
 
 def validate_and_fix(text, return_details=False):

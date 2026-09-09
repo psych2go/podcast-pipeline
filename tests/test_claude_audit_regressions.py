@@ -11,24 +11,24 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT))
 
-import agent_pipeline
-import catalog_publish as catalog
-import catalog_site
-import fetcher
-import process as pipeline_process
-import setup_alignment_env
-import subagent
-from content_map import coverage_report
-from html_gen import _build_html, parse_sections
-from quality_report import _ai_fact_check_consistency, build_quality_report
-from retry import retry_after_seconds
-from episode import set_claim_evidence_mode
-import tts
-import check_public_repo
-import release
-from validator import normalize_briefing_artifacts
+from scripts import agent_pipeline
+from scripts import catalog_publish as catalog
+from scripts import catalog_site
+from scripts import fetcher
+from scripts import process as pipeline_process
+from scripts import setup_alignment_env
+from scripts import subagent
+from scripts.content_map import coverage_report
+from scripts.html_gen import _build_html, parse_sections
+from scripts.quality_report import _ai_fact_check_consistency, build_quality_report
+from scripts.retry import retry_after_seconds
+from scripts.episode import set_claim_evidence_mode
+from scripts import tts
+from scripts import check_public_repo
+from scripts import release
+from scripts.validator import normalize_briefing_artifacts
 
 
 class HtmlInjectionRegressionTests(unittest.TestCase):
@@ -112,14 +112,14 @@ class FetchSecurityRegressionTests(unittest.TestCase):
     def test_terminal_404_does_not_retry_transport_chain(self):
         fetcher._HTML_CACHE.clear()
         with patch(
-                "fetcher._try_curl_cffi_with_metadata",
+                "scripts.fetcher._try_curl_cffi_with_metadata",
                 return_value=(None, {"status_code": 404})) as cffi, \
-                patch("fetcher._try_curl", return_value=None), \
+                patch("scripts.fetcher._try_curl", return_value=None), \
                 patch(
-                    "fetcher._try_httpx_with_metadata",
+                    "scripts.fetcher._try_httpx_with_metadata",
                     return_value=(None, {"status_code": 404})), \
-                patch("fetcher.FETCH_MAX_RETRIES", 3), \
-                patch("fetcher.time.sleep") as sleep:
+                patch("scripts.fetcher.FETCH_MAX_RETRIES", 3), \
+                patch("scripts.fetcher.time.sleep") as sleep:
             html, metadata = fetcher._fetch_html(
                 "https://example.com/missing")
         self.assertIsNone(html)
@@ -314,7 +314,7 @@ class ContractRegressionTests(unittest.TestCase):
                 self.assertEqual(payload["runs"][-1]["status"], "passed")
 
     def test_detached_head_without_ci_branch_context_is_unknown(self):
-        with patch("check_public_repo.current_branch", return_value=""), \
+        with patch("scripts.check_public_repo.current_branch", return_value=""), \
                 patch.dict(os.environ, {
                     "GITHUB_HEAD_REF": "",
                     "GITHUB_REF_NAME": "",
@@ -323,9 +323,9 @@ class ContractRegressionTests(unittest.TestCase):
         self.assertTrue(check_public_repo.is_private_branch("private/test"))
         self.assertTrue(check_public_repo.is_private_branch("origin/private-test"))
         self.assertFalse(check_public_repo.is_private_branch("main"))
-        with patch("check_public_repo.branch_context", return_value=""), \
-                patch("check_public_repo.tracked_files", return_value=[]), \
-                patch("check_public_repo.find_violations", return_value=[]), \
+        with patch("scripts.check_public_repo.branch_context", return_value=""), \
+                patch("scripts.check_public_repo.tracked_files", return_value=[]), \
+                patch("scripts.check_public_repo.find_violations", return_value=[]), \
                 patch.object(sys, "argv", ["check_public_repo.py"]):
             self.assertEqual(check_public_repo.main(), 3)
 
@@ -383,7 +383,7 @@ class RuntimeHardeningRegressionTests(unittest.TestCase):
                 "sections": [],
             }), encoding="utf-8")
             with patch(
-                    "process.build_tts_plan",
+                    "scripts.process.build_tts_plan",
                     side_effect=RuntimeError("bad manifest")):
                 self.assertEqual(
                     pipeline_process._tts_metrics(folder, "讲书稿.md"), {})
@@ -395,7 +395,7 @@ class RuntimeHardeningRegressionTests(unittest.TestCase):
             audio.mkdir()
             stale = audio / ".01_section.mp3.random.tmp.mp3"
             stale.write_bytes(b"partial")
-            with patch("tts.validate_for_stage"):
+            with patch("scripts.tts.validate_for_stage"):
                 result = tts.run_tts(
                     str(folder), "missing.md", "episode", concurrency=1)
             self.assertFalse(result.ok)

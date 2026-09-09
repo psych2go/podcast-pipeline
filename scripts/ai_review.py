@@ -1,4 +1,10 @@
 """使用 subagent 对单集转录、内容台账和中文讲稿执行全自动 AI 审查。"""
+
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = str(_Path(__file__).resolve().parents[1])
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
 import argparse
 import json
 import os
@@ -9,58 +15,30 @@ from contextlib import contextmanager
 from datetime import datetime, UTC
 from pathlib import Path
 
-try:
-    from review_attribution import attribute_rejection
-except ImportError:
-    from scripts.review_attribution import attribute_rejection
+from scripts.review_attribution import attribute_rejection
 
-try:
-    from hashing import sha256_file as sha256
-except ImportError:
-    from scripts.hashing import sha256_file as sha256
+from scripts.hashing import sha256_file as sha256
 
-try:
-    from atomic_io import atomic_write_json
-    from evidence import ASR_SOURCE_KINDS, effective_source_kind
-    from run_report import RunReport
-    from source_relevance import refresh_source_relevance_cache
-    from subagent import run_json_task
-    from fact_check_cache import (
-        CACHE_FILENAME, build_cache_context, update_cache_from_review)
-    from claim_taxonomy import (
-        AI_REVIEW_SCHEMA_VERSION,
-        ASSERTION_TYPES,
-        CLAIM_ORIGINS,
-        LEGACY_CLAIM_TYPES,
-        normalize_review_fact_checks,
-        validate_review_fact_checks,
-        PUBLICATION_STATUSES,
-        RISK_DOMAINS,
-        SPEAKER_ROLES,
-        VERDICTS,
-        VERIFICATION_MODES,
-    )
-except ImportError:
-    from scripts.atomic_io import atomic_write_json
-    from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
-    from scripts.run_report import RunReport
-    from scripts.source_relevance import refresh_source_relevance_cache
-    from scripts.subagent import run_json_task
-    from scripts.fact_check_cache import (
-        CACHE_FILENAME, build_cache_context, update_cache_from_review)
-    from scripts.claim_taxonomy import (
-        AI_REVIEW_SCHEMA_VERSION,
-        ASSERTION_TYPES,
-        CLAIM_ORIGINS,
-        LEGACY_CLAIM_TYPES,
-        normalize_review_fact_checks,
-        validate_review_fact_checks,
-        PUBLICATION_STATUSES,
-        RISK_DOMAINS,
-        SPEAKER_ROLES,
-        VERDICTS,
-        VERIFICATION_MODES,
-    )
+from scripts.atomic_io import atomic_write_json
+from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
+from scripts.run_report import RunReport
+from scripts.source_relevance import refresh_source_relevance_cache
+from scripts.subagent import run_json_task
+from scripts.fact_check_cache import (
+    CACHE_FILENAME, build_cache_context, update_cache_from_review)
+from scripts.claim_taxonomy import (
+    AI_REVIEW_SCHEMA_VERSION,
+    ASSERTION_TYPES,
+    CLAIM_ORIGINS,
+    LEGACY_CLAIM_TYPES,
+    normalize_review_fact_checks,
+    validate_review_fact_checks,
+    PUBLICATION_STATUSES,
+    RISK_DOMAINS,
+    SPEAKER_ROLES,
+    VERDICTS,
+    VERIFICATION_MODES,
+)
 
 REVIEW_FILES = (
     "episode.json",
@@ -838,12 +816,8 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
 
 
 def review_status_transition(folder, passed):
-    try:
-        from episode import (
-            apply_review_status_update, build_review_status_update)
-    except ImportError:
-        from scripts.episode import (
-            apply_review_status_update, build_review_status_update)
+    from scripts.episode import (
+        apply_review_status_update, build_review_status_update)
     payload, source_text = build_review_status_update(folder, passed)
     return payload, source_text, apply_review_status_update
 

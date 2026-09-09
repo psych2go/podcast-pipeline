@@ -11,11 +11,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import catalog_publish as catalog
-import release as release_module
-from release import load_release, prepare_release, update_release_state
+from scripts import catalog_publish as catalog
+from scripts import release as release_module
+from scripts.release import load_release, prepare_release, update_release_state
 
 
 class ReleaseStateTests(unittest.TestCase):
@@ -221,11 +221,11 @@ class CatalogReleaseFlowTests(unittest.TestCase):
         )
 
         with patch.object(catalog, "CONTENT_DIR", self.content), \
-                patch("quality_report.build_quality_report", return_value={
+                patch("scripts.quality_report.build_quality_report", return_value={
                     "passed": True,
                     "errors": [],
                 }), \
-                patch("tts.validate_tts_manifest", return_value=[]), \
+                patch("scripts.tts.validate_tts_manifest", return_value=[]), \
                 patch.object(catalog.subprocess, "run", return_value=ffprobe):
             self.assertTrue(catalog._publish_preflight("Episode"))
 
