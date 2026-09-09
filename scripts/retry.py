@@ -6,12 +6,16 @@ from email.utils import parsedate_to_datetime
 MAX_RETRY_AFTER_SECONDS = 300.0
 
 
-def exponential_delay(attempt, backoff):
+def exponential_delay(attempt: int, backoff: float) -> float:
     """Return the delay before retrying after a 1-based failed attempt."""
-    return max(0.0, float(backoff)) * (2 ** max(0, attempt - 1))
+    factor = float(2 ** max(0, attempt - 1))
+    return max(0.0, float(backoff)) * factor
 
 
-def retry_after_seconds(value, now=None, max_seconds=MAX_RETRY_AFTER_SECONDS):
+def retry_after_seconds(
+        value: object, now: datetime | None = None,
+        max_seconds: float = MAX_RETRY_AFTER_SECONDS,
+) -> float | None:
     """Parse Retry-After and cap untrusted server-controlled delays."""
     if value is None:
         return None

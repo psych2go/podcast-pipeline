@@ -173,7 +173,7 @@ def normalize_intervals(intervals: Iterable[tuple[float, float]], duration=None)
         if end > start >= 0:
             cleaned.append((start, end))
     cleaned.sort()
-    merged = []
+    merged: list[tuple[float, float]] = []
     for start, end in cleaned:
         if merged and start <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
