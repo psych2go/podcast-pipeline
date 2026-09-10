@@ -1032,6 +1032,7 @@ class ReviewMechanicalRetryTests(unittest.TestCase):
             folder = Path(td)
             self._workspace(folder)
             first = review_payload()
+            first["fact_checks"][0]["source_urls"] = ["https://example.com/legal-safety"]
             corrected = copy.deepcopy(first)
             check = corrected["fact_checks"][0]
             check["verification_mode"] = "safety_cross_check"

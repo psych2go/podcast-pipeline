@@ -147,6 +147,10 @@ class PublicBriefingBoundaryTests(unittest.TestCase):
             "由于样本不足，研究者因此不采用这种估算方法。",
             "记者表示尚未独立核实相关数字，节目引用了这一声明。",
             "本次审查涉及机构审批流程，而非产品定价。",
+            "嘉宾没有确认这个例子，机制仍存在不确定性。",
+            "不能把所有疗法都归入同一种机制。",
+            "这里需要保留样本，以便研究者复测。",
+            "老师认为写作课不应写成背诵课。",
         ):
             with self.subTest(text=text):
                 self.assertEqual(validator.audit_narration_issues(text), [])
@@ -158,11 +162,16 @@ class PublicBriefingBoundaryTests(unittest.TestCase):
             "本次审查发现该稿缺少来源，因此删除。",
             "这里不采用该精确金额。",
             "纠错稿已将名称替换为官方写法。",
+            "这里应保留“可能”和“推断”，不扩写为确定结论。",
+            '这里需保留"可能"这个限定词。',
+            "公开稿应保留节目归因。",
+            "讲书稿中不得写成确定结论。",
+            "完整笔记必须说明核查状态。",
         ):
             with self.subTest(text=text):
                 self.assertTrue(validator.audit_narration_issues(text))
 
-    def test_review_taxonomy_normalizes_attributed_speaker_reports(self):
+    def test_review_taxonomy_preserves_attributed_speaker_verdicts(self):
         review = {"fact_checks": [{
             "subclaim_id": "U0001-C01-F01",
             "claim_origin": "speaker_reported",
@@ -175,9 +184,9 @@ class PublicBriefingBoundaryTests(unittest.TestCase):
         }]}
         changes = normalize_review_fact_checks(review)
         item = review["fact_checks"][0]
-        self.assertEqual(item["verdict"], "accurately_reported")
+        self.assertEqual(item["verdict"], "contradicted")
         self.assertEqual(item["claim_type"], "not_applicable")
-        self.assertEqual(len(changes), 2)
+        self.assertEqual(len(changes), 1)
 
     def test_content_finalizer_rejects_public_audit_narration(self):
         with tempfile.TemporaryDirectory() as td:

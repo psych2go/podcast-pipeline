@@ -9,6 +9,7 @@ import hashlib
 import copy
 import json
 import os
+import re
 import signal
 import shlex
 import shutil
@@ -24,6 +25,39 @@ from scripts.retry import exponential_delay
 
 class SubagentError(RuntimeError):
     """Raised when a subagent cannot complete a pipeline task."""
+
+    def __init__(self, message, *, metrics=None):
+        super().__init__(message)
+        self.failure_metrics = metrics or {}
+
+
+def _runner_failure(stderr, stdout):
+    """Recognize error records only; never echo prompts, URLs or credentials."""
+    for line in reversed(((stdout or "") + "\n" + (stderr or "")).splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                error = json.loads(line).get("error")
+            except (ValueError, AttributeError):
+                continue
+            if isinstance(error, dict):
+                code = error.get("code")
+                if not isinstance(code, str):
+                    continue
+                if code == "model_not_found":
+                    return "model_not_found", None
+                if code in {"invalid_api_key", "authentication_error"}:
+                    return "authentication", None
+            continue
+        if not line.startswith("ERROR:"):
+            continue
+        match = re.search(r"(?:last status:|HTTP(?: status)?[: ]+)\s*(401|403|429|5\d\d)\b", line)
+        if match:
+            status = int(match[1])
+            kind = "rate_limit" if status == 429 else (
+                "authentication" if status in {401, 403} else "server_error")
+            return kind, status
+    return "unknown", None
 
 
 _SAFE_CODEX_CONFIG_KEYS = frozenset({
@@ -514,6 +548,18 @@ def _run(
     max_retries = int(os.environ.get("SUBAGENT_MAX_RETRIES", "2"))
     output_path = None
     workspace_snapshot = _workspace_snapshot(folder) if write_files else None
+    attempts = 0
+    total_duration_ms = 0
+    total_retries = 0
+    runner_index = 0
+    failure_kind, http_status = "unknown", None
+
+    def failure_metrics():
+        return {"task_name": task_name, "model": model or "",
+                "attempt_count": attempts, "retry_count": total_retries,
+                "duration_ms": total_duration_ms, "runner_index": runner_index,
+                "failure_kind": failure_kind, "http_status": http_status}
+
     try:
         with tempfile.TemporaryDirectory(
                 prefix=f"podcast-subagent-{task_name}-") as tmp:
@@ -523,8 +569,6 @@ def _run(
                 schema_path = None
             output_path = Path(tmp) / "last_message.txt"
             last_detail = ""
-            total_duration_ms = 0
-            total_retries = 0
             for runner_index, command in enumerate(commands):
                 runner_env = _runner_environment(tmp, command)
                 cmd = [
@@ -559,6 +603,7 @@ def _run(
                         _restore_workspace(folder, workspace_snapshot)
                     output_path.unlink(missing_ok=True)
                     started = time.monotonic()
+                    attempts += 1
                     try:
                         result = _run_process(
                             cmd,
@@ -569,6 +614,7 @@ def _run(
                     except subprocess.TimeoutExpired:
                         total_duration_ms += round(
                             (time.monotonic() - started) * 1000)
+                        failure_kind, http_status = "timeout", None
                         last_detail = f"timeout after {timeout}s"
                     else:
                         total_duration_ms += round(
@@ -588,9 +634,15 @@ def _run(
                                 "model": model or "",
                                 "task_name": task_name,
                             }
-                        last_detail = (
-                            result.stderr or result.stdout or ""
-                        ).strip()[-1500:]
+                        failure_kind, http_status = _runner_failure(
+                            result.stderr, result.stdout)
+                        last_detail = f"{failure_kind}; exit={result.returncode}"
+                        if http_status:
+                            last_detail += f"; HTTP {http_status}"
+                        if failure_kind in {"model_not_found", "authentication"}:
+                            raise SubagentError(
+                                f"{task_name} subagent 失败: {last_detail}",
+                                metrics=failure_metrics())
                     if attempt < max_retries:
                         total_retries += 1
                         wait = exponential_delay(attempt + 1, 2.0)
@@ -608,14 +660,18 @@ def _run(
                     )
             raise SubagentError(
                 f"{task_name} subagent 失败，所有 runner 均不可用: "
-                f"{last_detail}"
+                f"{last_detail}", metrics=failure_metrics(),
             )
     except subprocess.TimeoutExpired as exc:
+        failure_kind, http_status = "timeout", None
         raise SubagentError(
-            f"{task_name} subagent 超时 ({timeout}s)"
+            f"{task_name} subagent 超时 ({timeout}s)", metrics=failure_metrics(),
         ) from exc
     except OSError as exc:
-        raise SubagentError(f"{task_name} subagent 启动失败: {exc}") from exc
+        failure_kind, http_status = "launch_error", None
+        raise SubagentError(
+            f"{task_name} subagent 启动失败: {type(exc).__name__}",
+            metrics=failure_metrics()) from exc
 
 
 def run_json_task(

@@ -6,6 +6,8 @@ _ROOT = str(_Path(__file__).resolve().parents[1])
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 import argparse
+import copy
+import uuid
 import json
 import os
 import shutil
@@ -665,6 +667,7 @@ def _review_semantic_fingerprint(review):
             for key in (
                 "claim", "parent_claim_id", "claim_origin", "speaker_role",
                 "assertion_type", "risk_domain", "evidence_segment_ids",
+                "verdict", "publication_status", "source_urls", "checked_at", "notes",
             )
         })
     semantic["fact_checks"] = fact_checks
@@ -673,11 +676,12 @@ def _review_semantic_fingerprint(review):
 
 def _mechanical_retry_prompt(review, errors):
     return f"""上一次 AI review 的语义结论已经冻结，但 fact_checks 违反确定性合同。
-只允许修正 fact_checks 的机械字段，例如 claim_type、subclaim_id、verification_mode、
-verdict、publication_status、source_urls、checked_at 和 notes。不得改变 passed、summary、
-任何分项分数或 passed、issues、claim 文本、parent_claim_id、claim_origin、speaker_role、
-assertion_type、risk_domain 或 evidence_segment_ids。需要 URL 时必须联网找到真实来源，
-不得编造。返回完整 REVIEW_SCHEMA JSON，不修改文件。
+只允许修正 fact_checks 的 claim_type、subclaim_id、verification_mode。
+不得改变 passed、summary、任何分项分数或 passed、issues、claim 文本、parent_claim_id、
+claim_origin、speaker_role、assertion_type、risk_domain、evidence_segment_ids、verdict、
+publication_status、source_urls、checked_at 或 notes。不允许补充或替换来源。
+若错误必须改变事实判断或证据才能解决，保留原输出，由主流程阻断并要求独立复审。
+返回完整 REVIEW_SCHEMA JSON，不修改文件。
 
 确定性错误：
 {json.dumps(errors, ensure_ascii=False)}
@@ -687,50 +691,63 @@ assertion_type、risk_domain 或 evidence_segment_ids。需要 URL 时必须联�
 """
 
 
+class ReviewContractError(RuntimeError):
+    """Non-authoritative diagnostic data; never a usable review verdict."""
+
+    def __init__(self, message, diagnostic):
+        super().__init__(message)
+        self.diagnostic = diagnostic
+        self.diagnostic_path = None
+
+
+def _call_metrics(result):
+    return {key: result.get(key) for key in (
+        "task_name", "model", "duration_ms", "retry_count", "runner_index")}
+
+
 def _validate_or_retry_review(workspace, review, *, model, effort):
-    normalize_review_fact_checks(review)
-    claim_ids = _content_map_claim_ids(workspace)
-    errors, warnings = validate_review_fact_checks(
-        review, valid_claim_ids=claim_ids)
-    audit = {
-        "initial_errors": errors,
-        "initial_warnings": warnings,
-        "retry_count": 0,
-    }
-    if not errors:
-        return review, audit, None
-    semantic = _review_semantic_fingerprint(review)
-    retry_result = run_json_task(
-        workspace,
-        _mechanical_retry_prompt(review, errors) + (
-            f"\n本次机械纠错 effort 要求：{effort}。只返回 JSON。"),
-        REVIEW_SCHEMA,
-        task_name="ai_review_mechanical_retry",
-        enable_search=True,
-        model=model or None,
-        timeout=900,
-    )
-    corrected = retry_result.get("payload")
-    if not isinstance(corrected, dict):
-        raise RuntimeError("AI review 机械纠错输出必须是对象")
-    normalize_review_fact_checks(corrected)
-    if _review_semantic_fingerprint(corrected) != semantic:
-        raise RuntimeError("AI review 机械纠错修改了冻结的语义结论")
-    final_errors, final_warnings = validate_review_fact_checks(
-        corrected, valid_claim_ids=claim_ids)
-    audit.update({
-        "retry_count": 1,
-        "final_errors": final_errors,
-        "final_warnings": final_warnings,
-    })
-    if final_errors:
-        raise RuntimeError(
-            "AI review 机械纠错后仍不符合合同: "
-            + "; ".join(final_errors[:10]))
-    return corrected, audit, retry_result
+    diagnostic = {"original_output": copy.deepcopy(review), "corrected_output": None,
+                  "audit": {"retry_count": 0}}
+    audit = diagnostic["audit"]
+    try:
+        normalize_review_fact_checks(review)
+        claim_ids = _content_map_claim_ids(workspace)
+        errors, warnings = validate_review_fact_checks(review, valid_claim_ids=claim_ids)
+        audit.update(initial_errors=errors, initial_warnings=warnings)
+        if not errors:
+            return review, audit, None
+        semantic = copy.deepcopy(_review_semantic_fingerprint(review))
+        audit["retry_count"] = 1
+        retry_result = run_json_task(
+            workspace,
+            _mechanical_retry_prompt(review, errors) + (
+                f"\n本次机械纠错 effort 要求：{effort}。只返回 JSON。"),
+            REVIEW_SCHEMA, task_name="ai_review_mechanical_retry",
+            enable_search=False, model=model or None, timeout=900,
+        )
+        corrected = retry_result.get("payload")
+        diagnostic["corrected_output"] = copy.deepcopy(corrected)
+        diagnostic["retry_call"] = _call_metrics(retry_result)
+        if not isinstance(corrected, dict):
+            raise RuntimeError("AI review 机械纠错输出必须是对象")
+        normalize_review_fact_checks(corrected)
+        final_errors, final_warnings = validate_review_fact_checks(
+            corrected, valid_claim_ids=claim_ids)
+        audit.update(final_errors=final_errors, final_warnings=final_warnings)
+        if _review_semantic_fingerprint(corrected) != semantic:
+            raise RuntimeError("AI review 机械纠错修改了冻结的语义结论")
+        if final_errors:
+            raise RuntimeError("AI review 机械纠错后仍不符合合同: "
+                               + "; ".join(final_errors[:10]))
+        return corrected, audit, retry_result
+    except Exception as exc:
+        if getattr(exc, "failure_metrics", None):
+            diagnostic["retry_failure"] = exc.failure_metrics
+        raise ReviewContractError(str(exc), diagnostic) from exc
 
 
-def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True):
+def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True,
+                  diagnostic_id=None):
     folder = Path(folder).resolve()
     missing = [name for name in REVIEW_FILES if not (folder / name).exists()]
     if missing:
@@ -760,12 +777,22 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
                 schema_path, task_name="ai_review", enable_search=True,
                 model=model or None, timeout=1800)
             review = result["payload"]
-            review, mechanical_audit, retry_result = _validate_or_retry_review(
-                workspace,
-                review,
-                model=model,
-                effort=effort,
-            )
+            try:
+                review, mechanical_audit, retry_result = _validate_or_retry_review(
+                    workspace, review, model=model, effort=effort)
+            except ReviewContractError as exc:
+                path = folder / "ai_review_contract_failures" / (
+                    f"{diagnostic_id or uuid.uuid4().hex}.json")
+                atomic_write_json(path, {
+                    "schema_version": 1, "authoritative": False,
+                    "kind": "review_contract_failure", "error": str(exc),
+                    "recorded_at": datetime.now(UTC).isoformat(),
+                    "reviewed_files": input_snapshot, "review_context": context_snapshot,
+                    "initial_call": _call_metrics(result), "effort": effort,
+                    **exc.diagnostic,
+                })
+                exc.diagnostic_path = path.relative_to(folder).as_posix()
+                raise
             if retry_result is not None:
                 result = {
                     **retry_result,
@@ -839,8 +866,13 @@ def review_episode(
     })
     try:
         with report.stage("ai_review") as stage:
-            review = run_ai_review(
-                folder, output, model, effort, persist=False)
+            try:
+                review = run_ai_review(
+                    folder, output, model, effort, persist=False,
+                    diagnostic_id=stage.payload["id"])
+            except ReviewContractError as exc:
+                stage.metrics["contract_failure_snapshot"] = exc.diagnostic_path
+                raise
             before_status = dict(review["reviewed_files"])
             context_snapshot = dict(review.get("review_context", {}))
             expected_episode, expected_source, apply_update = (

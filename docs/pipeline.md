@@ -338,6 +338,16 @@ recommendation 使用 safety cross-check；explanation/definition 根据风险�
 
 AI 不检查 HTML、MP3、R2 或 Pages；这些机械状态由确定性流程负责。
 
+机械归一化只派生 `claim_type`，不改 verdict。受限机械重试只允许修改
+`claim_type`、`subclaim_id`、`verification_mode`，冻结事实结论、发布状态、
+来源 URL、核查日期和 notes，不允许联网补证据。合同仍不满足则阻断。
+合同失败的首次原始输出、修复输出（若有）、校验错误、输入哈希和调用指标
+写到本地 `ai_review_contract_failures/<stage-id>.json`，并由
+`run_report.metrics.contract_failure_snapshot` 链接。该诊断标记
+`authoritative=false`，不是 `ai_review.json`，不写入事实缓存或传给后续审查。
+runner 失败使用短分类摘要，并在对应 stage 的 `metrics.runner_failure` 保留
+模型、任务、外层调用次数与耗时；不记录原始 stderr、提示词或环境密钥。
+
 ASR 单集额外区分原始 ASR、纠错后转录及准确率依据。没有人工参考逐字稿时，
 `accuracy_basis` 必须是抽样或语义审查，不能把综合分数表述成 WER。
 
