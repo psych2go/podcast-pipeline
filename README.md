@@ -22,6 +22,8 @@
 
 ## 目录结构与公开范围
 
+完整的可视化目录树、推送决策表和提交前检查清单见 [`docs/repository-layout.md`](docs/repository-layout.md)。
+
 | 路径 | 用途 | 可公开推送 |
 |---|---|---|
 | `scripts/` | 流水线代码 | 是 |

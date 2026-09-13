@@ -48,6 +48,7 @@
 
 1. 当前用户指令。
 2. 本文件的入口、私有数据和安全规则。
-3. `docs/module-map.md` 的模块、owner 和 artifact 导航。
-4. `CLAUDE.md` 的完整流程规则。
-5. `docs/pipeline.md` 的详细实现说明。
+3. `docs/repository-layout.md` 的目录树和 GitHub 推送边界。
+4. `docs/module-map.md` 的模块、owner 和 artifact 导航。
+5. `CLAUDE.md` 的完整流程规则。
+6. `docs/pipeline.md` 的详细实现说明。

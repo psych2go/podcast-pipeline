@@ -1,6 +1,7 @@
 # Podcast Pipeline 模块与产物流转地图
 
-> 本文是维护者的导航入口。业务细节和质量不变量见
+> 本文是维护者的导航入口。仓库目录和 GitHub 推送边界见
+> [`repository-layout.md`](repository-layout.md)。业务细节和质量不变量见
 > [`pipeline.md`](pipeline.md)，日常命令见 [`../README.md`](../README.md)，
 > 测试入口见 [`../tests/README.md`](../tests/README.md)。
 
