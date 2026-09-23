@@ -171,6 +171,51 @@ class SubagentIsolationTests(unittest.TestCase):
             self.assertFalse(profile["features"]["plugins"])
             self.assertNotIn("mcp_servers", profile)
 
+    def test_pi_runner_extracts_final_message_and_translates_contract(self):
+        events = (
+            '{"type":"message_end","message":{"role":"assistant",'
+            '"content":[{"type":"text","text":"draft"}]}}\n'
+            '{"type":"message_end","message":{"role":"assistant",'
+            '"content":[{"type":"text","text":"{\\"ok\\":true}"}]}}\n'
+        )
+        self.assertEqual(
+            subagent._extract_pi_response(events), '{"ok":true}')
+        with patch.dict(os.environ, {
+                "SUBAGENT_PI_PROVIDER": "test-provider",
+                "SUBAGENT_PI_MODEL": "test-model",
+        }, clear=False), patch.object(
+                subagent, "_pi_web_extension", return_value="/tmp/web.ts"):
+            command = subagent._pi_command(
+                ["/bin/pi"],
+                task="return JSON",
+                schema_path=None,
+                write_files=False,
+                enable_search=True,
+                model="test-provider/test-model",
+            )
+        self.assertIn("--mode", command)
+        self.assertIn("json", command)
+        self.assertIn("--no-session", command)
+        self.assertIn("--extension", command)
+        self.assertIn("web_search", command[command.index("--tools") + 1])
+
+    def test_pi_runner_uses_disposable_agent_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source-pi-agent"
+            source.mkdir()
+            (source / "auth.json").write_text("secret", encoding="utf-8")
+            (source / "models.json").write_text("{}", encoding="utf-8")
+            (source / "session.jsonl").write_text("private", encoding="utf-8")
+            with patch.dict(os.environ, {
+                    "PI_CODING_AGENT_DIR": str(source),
+            }, clear=False):
+                env = subagent._runner_environment(tmp, ["/bin/pi"])
+            isolated = Path(env["PI_CODING_AGENT_DIR"])
+            self.assertNotEqual(isolated, source)
+            self.assertEqual((isolated / "auth.json").read_text(), "secret")
+            self.assertFalse((isolated / "session.jsonl").exists())
+            self.assertNotIn("PI_SESSION_FILE", env)
+
     def test_process_timeout_terminates_the_process_group(self):
         process = MagicMock()
         process.pid = 123

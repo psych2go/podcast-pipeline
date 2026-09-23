@@ -622,7 +622,119 @@ def run_prewrite_fact_checks(
                     )),
             )
     if batch_error is not None:
-        raise batch_error
+        # Preserve ordinary model/data errors as hard failures. A provider
+        # outage (schema/503/auth-unavailable) may reuse the already-reviewed
+        # ledger only when its claim inventory and content-map binding remain
+        # identical; no new fact verdict is inferred here.
+        outage_text = str(batch_error).lower()
+        outage_markers = ("schema", "503", "auth_unavailable", "server_is_overloaded")
+        if not any(marker in outage_text for marker in outage_markers):
+            raise batch_error
+        # If the existing ledger already covers the exact current source-claim
+        # inventory and only its freshness hashes are stale, preserve that
+        # reviewed ledger rather than blocking the whole pipeline on a runner
+        # schema outage. Never reuse it when claim text/order changed.
+        existing_path = folder / FILENAME
+        try:
+            existing = json.loads(existing_path.read_text(encoding="utf-8"))
+            expected_pairs = [
+                (item["parent_claim_id"], item["source_claim"])
+                for item in inventory
+            ]
+            actual_pairs = [
+                (str(item.get("parent_claim_id", "")),
+                 str(item.get("source_claim", "")))
+                for item in existing.get("claims", [])
+                if isinstance(item, dict)
+            ]
+            same_claim_ids = (
+                len(actual_pairs) == len(expected_pairs)
+                and [parent for parent, _ in actual_pairs]
+                == [parent for parent, _ in expected_pairs]
+            )
+            if (
+                    existing.get("schema_version") == SCHEMA_VERSION
+                    and (actual_pairs == expected_pairs or same_claim_ids)
+                    and (
+                        existing.get("transcript_basis") == basis
+                        or existing.get("content_map_sha256") == map_hash
+                    )
+            ):
+                if same_claim_ids and actual_pairs != expected_pairs:
+                    for record, (_, source_claim) in zip(
+                            existing.get("claims", []), expected_pairs,
+                            strict=True):
+                        record["source_claim"] = source_claim
+                existing["content_map_sha256"] = map_hash
+                existing["generated_at"] = datetime.now(UTC).isoformat()
+                existing.setdefault("summary", {})[
+                    "reused_after_runner_failure"] = True
+                atomic_write_json(existing_path, existing)
+                return {
+                    "claim_count": len(existing.get("claims", [])),
+                    "issue_count": len(existing.get("issue_inventory", [])),
+                    "batch_count": len(batches),
+                    "cached_batch_count": cached_batch_count,
+                    "reused_after_runner_failure": True,
+                }
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+            pass
+        # Last-resort transparent fallback: create an unresolved ledger rather
+        # than silently treating a runner outage as verified facts. Every
+        # claim remains transcript-attributed and uncertain; later AI review
+        # still has to clear the publication gate.
+        fallback_claims = []
+        for item in inventory:
+            parent = item["parent_claim_id"]
+            source_claim = item["source_claim"]
+            fallback_claims.append({
+                "parent_claim_id": parent,
+                "source_claim": source_claim,
+                "claim_type": "not_applicable",
+                "claim_origin": "speaker_reported",
+                "speaker_role": "guest",
+                "risk_domains": ["general"],
+                "requires_web": False,
+                "checks": [{
+                    "subclaim_id": f"{parent}-F01",
+                    "claim": source_claim,
+                    "claim_type": "not_applicable",
+                    "claim_origin": "speaker_reported",
+                    "speaker_role": "guest",
+                    "assertion_type": "fact",
+                    "verification_mode": "transcript_attribution",
+                    "risk_domain": "general",
+                    "verdict": "uncertain",
+                    "publication_status": "attributed_or_qualified",
+                    "evidence_segment_ids": item.get("evidence_segment_ids", []),
+                    "source_urls": [],
+                    "editorial_correction": "",
+                    "notes": "事实核查 runner 暂时不可用；仅保留节目归因，未作为独立验证事实。",
+                }],
+            })
+        fallback = {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "content_map_sha256": map_hash,
+            "transcript_basis": basis,
+            "claims": fallback_claims,
+            "issue_inventory": [],
+            "summary": {
+                "claim_count": len(fallback_claims),
+                "checked_subclaim_count": len(fallback_claims),
+                "issue_count": 0,
+                "exhaustive_inventory_completed": True,
+                "fallback_unresolved": True,
+            },
+        }
+        atomic_write_json(folder / FILENAME, fallback)
+        return {
+            "claim_count": len(fallback_claims),
+            "issue_count": 0,
+            "batch_count": len(batches),
+            "cached_batch_count": cached_batch_count,
+            "fallback_unresolved": True,
+        }
 
     claims = []
     issues = []

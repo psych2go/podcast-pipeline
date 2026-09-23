@@ -146,6 +146,32 @@ def _segments_for_timestamps(segments, timestamps):
     return selected
 
 
+def normalize_generated_unit_ids(content_map):
+    """Assign stable unit IDs when a generator omitted them entirely."""
+    units = content_map.get("units") if isinstance(content_map, dict) else None
+    if not isinstance(units, list) or not units:
+        return content_map, False
+    used = {
+        str(unit.get("id")) for unit in units
+        if isinstance(unit, dict) and re.fullmatch(
+            r"U\d{4,}", str(unit.get("id") or ""))
+    }
+    changed = False
+    next_id = 1
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        if re.fullmatch(r"U\d{4,}", str(unit.get("id") or "")):
+            continue
+        while f"U{next_id:04d}" in used:
+            next_id += 1
+        unit["id"] = f"U{next_id:04d}"
+        used.add(unit["id"])
+        next_id += 1
+        changed = True
+    return content_map, changed
+
+
 def enrich_content_map_evidence(content_map, transcript):
     """Refresh unit evidence without inventing multi-claim evidence."""
     transcript = ensure_segment_ids(transcript)
@@ -170,8 +196,27 @@ def enrich_content_map_evidence(content_map, transcript):
                 if segment.get("start") is not None
                 and segment.get("end") is None
             }
+            raw_timestamps = unit.get("timestamps", []) or []
+            # Some transcript-only content-map generations bind segment IDs
+            # but omit the equivalent time window. Reconstruct the smallest
+            # enclosing window from those validated IDs before enrichment.
+            if not raw_timestamps and previous_ids:
+                previous_segments = [
+                    segment for segment in segments
+                    if segment.get("id") in set(previous_ids)
+                ]
+                starts = [
+                    segment.get("start") for segment in previous_segments
+                    if segment.get("start") is not None
+                ]
+                ends = [
+                    segment.get("end") for segment in previous_segments
+                    if segment.get("end") is not None
+                ]
+                if starts:
+                    raw_timestamps = [[min(starts), max(ends or starts)]]
             normalized_timestamps = []
-            for timestamp in unit.get("timestamps", []):
+            for timestamp in raw_timestamps:
                 if not isinstance(timestamp, list) or len(timestamp) != 2:
                     normalized_timestamps.append(timestamp)
                     continue
@@ -189,6 +234,19 @@ def enrich_content_map_evidence(content_map, transcript):
                 segments, normalized_timestamps)
         segment_ids = [
             segment["id"] for segment in selected if segment.get("id")]
+        if not segment_ids:
+            # Preserve an already validated segment binding when a generated
+            # timestamp window is unusable (for example, a transcript
+            # correction omitted timing metadata). The previous IDs are still
+            # checked against the current transcript before reuse.
+            previous_selected = [
+                segment for segment in segments
+                if segment.get("id") in set(previous_ids)
+            ]
+            segment_ids = [
+                segment["id"] for segment in previous_selected
+                if segment.get("id")
+            ]
         if not segment_ids:
             raise ValueError(
                 f"{unit_id}: evidence enrichment 结果为空；"

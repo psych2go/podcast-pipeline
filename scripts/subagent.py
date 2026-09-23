@@ -2,8 +2,8 @@
 
 The pipeline owns orchestration and validation.  Subagents may either return a
 structured JSON result or edit a narrowly scoped set of files.  The default
-runner is ``codex exec``; callers can replace it with a compatible command via
-``SUBAGENT_COMMAND`` without changing pipeline code.
+runner is Pi in headless JSON mode; Codex remains available as a compatible
+fallback via ``SUBAGENT_COMMAND`` without changing pipeline code.
 """
 import hashlib
 import copy
@@ -130,7 +130,7 @@ def prepare_output_schema(schema):
 
 def _runner_command(raw=None):
     raw = raw if raw is not None else os.environ.get(
-        "SUBAGENT_COMMAND", "codex")
+        "SUBAGENT_COMMAND", "pi")
     command = shlex.split(raw)
     if not command:
         raise SubagentError("SUBAGENT_COMMAND 为空")
@@ -147,9 +147,182 @@ def _runner_command(raw=None):
     if any("claude" in Path(part).name.lower() for part in command):
         raise SubagentError(
             "当前流水线禁止将 Claude CLI 作为 subagent runner；"
-            "请使用 codex exec 或兼容的 SUBAGENT_COMMAND"
+            "请使用 pi、codex exec 或兼容的 SUBAGENT_COMMAND"
         )
     return command
+
+
+def _is_runner(command, name):
+    return Path(command[0]).name.lower() == name
+
+
+def _pi_default_model():
+    provider = (
+        os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
+        or os.environ.get("PI_PROVIDER", "").strip()
+    )
+    model = (
+        os.environ.get("SUBAGENT_PI_MODEL", "").strip()
+        or os.environ.get("PI_MODEL", "").strip()
+    )
+    if provider and model:
+        return f"{provider}/{model}"
+    return model or None
+
+
+def _pi_web_extension():
+    configured = os.environ.get("SUBAGENT_PI_WEB_EXTENSION", "").strip()
+    candidate = Path(configured).expanduser() if configured else (
+        Path.home() / ".pi/agent/npm/node_modules/pi-web-access/index.ts"
+    )
+    if candidate.is_file() and not candidate.is_symlink():
+        return str(candidate.resolve())
+    return None
+
+
+def _has_option(command, *options):
+    return any(
+        item in options or any(item.startswith(option + "=") for option in options)
+        for item in command
+    )
+
+
+def _pi_command(command, *, task, schema_path, write_files,
+                enable_search, model, schema_feedback=None):
+    """Translate the pipeline runner contract to Pi's headless JSON mode."""
+    cmd = list(command)
+    required = [
+        ("--no-session",),
+        ("--no-extensions",),
+        ("--no-skills",),
+        ("--no-prompt-templates",),
+        ("--no-context-files",),
+        ("--no-approve",),
+        ("--mode", "json"),
+        ("--print",),
+    ]
+    for options in required:
+        if not _has_option(cmd, *options):
+            cmd.extend(options)
+
+    tools = ["read", "grep", "find", "ls"]
+    if write_files:
+        tools.extend(["edit", "write"])
+    if enable_search:
+        tools.extend([
+            "web_search", "fetch_content", "get_search_content", "source_check",
+        ])
+        extension = _pi_web_extension()
+        if extension and not _has_option(cmd, "--extension", "-e"):
+            cmd.extend(["--extension", extension])
+    if not _has_option(cmd, "--tools", "-t"):
+        cmd.extend(["--tools", ",".join(tools)])
+
+    if model and not _has_option(cmd, "--model"):
+        cmd.extend(["--model", model])
+
+    prompt = _base_prompt(task)
+    if schema_path:
+        try:
+            schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SubagentError(f"无法读取 Pi output schema: {exc}") from exc
+        prompt += (
+            "\n必须只输出一个符合以下 JSON Schema 的 JSON 值；"
+            "不要输出 Markdown 代码围栏、解释文字或额外字段。\n"
+            "JSON Schema:\n" + json.dumps(schema, ensure_ascii=False)
+        )
+        if schema_feedback:
+            prompt += (
+                "\n上一次输出未通过结构校验。只修复以下结构问题，"
+                "不要改变已满足要求的事实内容：\n" + schema_feedback
+            )
+    cmd.append(prompt)
+    return cmd
+
+
+def _extract_pi_response(stdout):
+    """Extract the final assistant text from Pi's JSON event stream."""
+    last_text = None
+    for line in (stdout or "").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = None
+        if event.get("type") == "message_end":
+            message = event.get("message")
+        elif event.get("type") == "agent_end":
+            messages = event.get("messages") or []
+            for candidate in reversed(messages):
+                if candidate.get("role") == "assistant":
+                    message = candidate
+                    break
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content") or []
+        text = "".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+        if text:
+            last_text = text
+    return last_text if last_text is not None else (stdout or "").strip()
+
+
+def _schema_error(value, schema, path="$", *, limit=100):
+    """Small dependency-free validator for the strict runner JSON contract."""
+    if not isinstance(schema, dict):
+        return None
+    if "enum" in schema and value not in schema["enum"]:
+        return f"{path} 不在 enum 中"
+    expected = schema.get("type")
+    type_ok = {
+        "object": lambda v: isinstance(v, dict),
+        "array": lambda v: isinstance(v, list),
+        "string": lambda v: isinstance(v, str),
+        "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+        "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+        "boolean": lambda v: isinstance(v, bool),
+        "null": lambda v: v is None,
+    }
+    if expected in type_ok and not type_ok[expected](value):
+        return f"{path} 类型应为 {expected}"
+    if isinstance(value, str):
+        if len(value) < schema.get("minLength", 0):
+            return f"{path} 字符串过短"
+        if "maxLength" in schema and len(value) > schema["maxLength"]:
+            return f"{path} 字符串过长"
+        if "pattern" in schema and not re.search(schema["pattern"], value):
+            return f"{path} 不匹配 pattern"
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            return f"{path} 数组项目不足"
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            return f"{path} 数组项目过多"
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value[:limit]):
+                error = _schema_error(item, item_schema, f"{path}[{index}]")
+                if error:
+                    return error
+    if isinstance(value, dict):
+        required = schema.get("required", [])
+        for key in required:
+            if key not in value:
+                return f"{path}.{key} 缺少必需字段"
+        properties = schema.get("properties", {})
+        if schema.get("additionalProperties") is False:
+            extra = sorted(set(value) - set(properties))
+            if extra:
+                return f"{path} 包含未允许字段"
+        for key, child_schema in properties.items():
+            if key in value:
+                error = _schema_error(value[key], child_schema, f"{path}.{key}")
+                if error:
+                    return error
+    return None
 
 
 def _runner_commands():
@@ -389,6 +562,9 @@ def _copy_sanitized_codex_config(source_home, isolated, command):
 _RUNNER_ENV_KEYS = frozenset({
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM",
     "LANG", "LANGUAGE", "TMPDIR", "TEMP", "TMP", "TZ", "NO_COLOR",
+    # Pi model selection is passed explicitly too, but keeping these values
+    # available preserves provider/model diagnostics for compatible runners.
+    "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
     "CURL_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
     "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
@@ -464,6 +640,29 @@ def _runner_environment(tmp, command):
     )
     env = _filtered_runner_environment(
         source_env, provider_keys=provider_keys)
+    if _is_runner(command, "pi"):
+        # Give each Pi attempt a disposable config directory.  Copy only
+        # authentication/model catalogs and web-search routing; never inherit
+        # the parent session, history, extensions, trust state, or hooks.
+        source_pi = Path(
+            source_env.get(
+                "PI_CODING_AGENT_DIR",
+                str(Path.home() / ".pi/agent"),
+            )
+        ).expanduser()
+        isolated = Path(tmp) / "pi-agent"
+        isolated.mkdir(parents=True, exist_ok=True)
+        for name in ("auth.json", "models.json", "models-store.json",
+                     "web-search.json"):
+            source = source_pi / name
+            if source.is_file() and not source.is_symlink():
+                destination = isolated / name
+                shutil.copy2(source, destination)
+                destination.chmod(0o600)
+        env["PI_CODING_AGENT_DIR"] = str(isolated)
+        env.pop("PI_SESSION_FILE", None)
+        env.pop("PI_SESSION_ID", None)
+        return env
     if not is_codex:
         return env
 
@@ -552,10 +751,11 @@ def _run(
     total_duration_ms = 0
     total_retries = 0
     runner_index = 0
+    runner_model = model or ""
     failure_kind, http_status = "unknown", None
 
     def failure_metrics():
-        return {"task_name": task_name, "model": model or "",
+        return {"task_name": task_name, "model": runner_model,
                 "attempt_count": attempts, "retry_count": total_retries,
                 "duration_ms": total_duration_ms, "runner_index": runner_index,
                 "failure_kind": failure_kind, "http_status": http_status}
@@ -571,34 +771,59 @@ def _run(
             last_detail = ""
             for runner_index, command in enumerate(commands):
                 runner_env = _runner_environment(tmp, command)
-                cmd = [
-                    *command,
-                    "--ephemeral",
-                    "--skip-git-repo-check",
-                    "-C",
-                    str(folder),
-                    "-s",
-                    "workspace-write" if write_files else "read-only",
-                    "-o",
-                    str(output_path),
-                ]
-                if write_files:
-                    cmd.extend(["--add-dir", str(folder)])
-                if enable_search:
-                    if (
-                            Path(command[0]).name == "codex"
-                            and len(cmd) > 1
-                            and cmd[1] == "exec"):
-                        cmd.insert(1, "--search")
-                    else:
-                        cmd.append("--search")
-                if model:
-                    cmd.extend(["--model", model])
-                if schema_path:
-                    cmd.extend(["--output-schema", str(schema_path)])
-                cmd.append(_base_prompt(task))
+                is_pi = _is_runner(command, "pi")
+                runner_model = (
+                    _pi_default_model() if is_pi and not model else model
+                ) or ""
+                if is_pi:
+                    cmd = _pi_command(
+                        command,
+                        task=task,
+                        schema_path=schema_path,
+                        write_files=write_files,
+                        enable_search=enable_search,
+                        model=runner_model or None,
+                    )
+                else:
+                    cmd = [
+                        *command,
+                        "--ephemeral",
+                        "--skip-git-repo-check",
+                        "-C",
+                        str(folder),
+                        "-s",
+                        "workspace-write" if write_files else "read-only",
+                        "-o",
+                        str(output_path),
+                    ]
+                    if write_files:
+                        cmd.extend(["--add-dir", str(folder)])
+                    if enable_search:
+                        if (
+                                Path(command[0]).name == "codex"
+                                and len(cmd) > 1
+                                and cmd[1] == "exec"):
+                            cmd.insert(1, "--search")
+                        else:
+                            cmd.append("--search")
+                    if model:
+                        cmd.extend(["--model", model])
+                    if schema_path:
+                        cmd.extend(["--output-schema", str(schema_path)])
+                    cmd.append(_base_prompt(task))
 
+                schema_feedback = None
                 for attempt in range(max_retries + 1):
+                    if is_pi and schema_feedback:
+                        cmd = _pi_command(
+                            command,
+                            task=task,
+                            schema_path=schema_path,
+                            write_files=write_files,
+                            enable_search=enable_search,
+                            model=runner_model or None,
+                            schema_feedback=schema_feedback,
+                        )
                     if workspace_snapshot is not None:
                         _restore_workspace(folder, workspace_snapshot)
                     output_path.unlink(missing_ok=True)
@@ -621,25 +846,56 @@ def _run(
                             (time.monotonic() - started) * 1000)
                         if result.returncode == 0:
                             response = (
-                                output_path.read_text(encoding="utf-8")
-                                if output_path.exists()
-                                else result.stdout
+                                _extract_pi_response(result.stdout)
+                                if is_pi else (
+                                    output_path.read_text(encoding="utf-8")
+                                    if output_path.exists()
+                                    else result.stdout
+                                )
                             )
-                            return {
-                                "response": response,
-                                "duration_ms": total_duration_ms,
-                                "retry_count": total_retries,
-                                "runner_index": runner_index,
-                                "command": " ".join(command),
-                                "model": model or "",
-                                "task_name": task_name,
-                            }
-                        failure_kind, http_status = _runner_failure(
-                            result.stderr, result.stdout)
-                        last_detail = f"{failure_kind}; exit={result.returncode}"
-                        if http_status:
-                            last_detail += f"; HTTP {http_status}"
-                        if failure_kind in {"model_not_found", "authentication"}:
+                            if not response.strip():
+                                failure_kind, http_status = "empty_output", None
+                                last_detail = "empty_output; exit=0"
+                            elif is_pi and schema_path:
+                                try:
+                                    payload = _json_from_text(response)
+                                    schema = json.loads(
+                                        schema_path.read_text(encoding="utf-8"))
+                                    schema_failure = _schema_error(payload, schema)
+                                except (OSError, json.JSONDecodeError, SubagentError):
+                                    schema_failure = "invalid_json"
+                                if schema_failure:
+                                    failure_kind, http_status = "schema", None
+                                    schema_feedback = schema_failure
+                                    last_detail = "schema; exit=0"
+                                else:
+                                    return {
+                                        "response": response,
+                                        "duration_ms": total_duration_ms,
+                                        "retry_count": total_retries,
+                                        "runner_index": runner_index,
+                                        "command": " ".join(command),
+                                        "model": runner_model,
+                                        "task_name": task_name,
+                                    }
+                            else:
+                                return {
+                                    "response": response,
+                                    "duration_ms": total_duration_ms,
+                                    "retry_count": total_retries,
+                                    "runner_index": runner_index,
+                                    "command": " ".join(command),
+                                    "model": runner_model,
+                                    "task_name": task_name,
+                                }
+                        else:
+                            failure_kind, http_status = _runner_failure(
+                                result.stderr, result.stdout)
+                            last_detail = f"{failure_kind}; exit={result.returncode}"
+                            if http_status:
+                                last_detail += f"; HTTP {http_status}"
+                        if result.returncode != 0 and failure_kind in {
+                                "model_not_found", "authentication"}:
                             raise SubagentError(
                                 f"{task_name} subagent 失败: {last_detail}",
                                 metrics=failure_metrics())
@@ -692,6 +948,18 @@ def run_json_task(
         }
     if schema_disabled:
         runner_schema = None
+        # Without runner-side schema negotiation the model never sees the
+        # contract, so it guesses an envelope shape. Embed the schema in the
+        # prompt instead; this only carries the contract, never content.
+        if schema_path is not None:
+            raw_schema = (
+                schema_path if isinstance(schema_path, dict)
+                else json.loads(Path(schema_path).read_text(encoding="utf-8")))
+            task = (
+                task
+                + "\n输出必须严格符合以下 JSON Schema：顶层字段全部必填，"
+                "不要使用其他信封或嵌套包装结构。\n"
+                + json.dumps(raw_schema, ensure_ascii=False))
     else:
         if isinstance(schema_path, dict):
             raw_schema = schema_path

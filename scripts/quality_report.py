@@ -30,7 +30,7 @@ from scripts.quality_errors import (
     AI_REVIEW_MISSING, AI_REVIEW_SCORE, AI_REVIEW_SECTION,
     AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE, CONTENT_MAP_SCHEMA,
     CONTENT_MAP_VALIDATION, CONTENT_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
-    EVIDENCE_PROVENANCE_FAILED, SOURCE_REVIEW_STATUS,
+    EVIDENCE_PROVENANCE_FAILED, SOURCE_REVIEW_STATUS, QUALITY_VALIDATION_FAILED,
     SUMMARY_MAP_VALIDATION, TTS_READINESS_FAILED, add_error, coded_errors,
     extend_errors, quality_error_alignment,
 )
@@ -367,6 +367,29 @@ def _ai_entity_accuracy_consistency(review):
 
 
 def build_quality_report(folder, strict=True, *, today=None):
+    """Full downstream quality gate; strict mode always requires AI review."""
+    return _build_quality_report(folder, strict, today=today, require_review=True)
+
+
+def build_review_preflight_report(folder, *, today=None):
+    """Read-only structural readiness, never a publish authorization.
+
+    Reuse the strict validators, deferring only review outputs/statuses that
+    the pending review itself must supply. No search, repairs or hash rebinding.
+    """
+    try:
+        report = _build_quality_report(
+            folder, strict=True, today=today, require_review=False)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        report = {"passed": False, "errors": [], "warnings": []}
+        add_error(report, QUALITY_VALIDATION_FAILED,
+                  f"审查前输入无法校验: {type(exc).__name__}: {exc}")
+    report["report_type"] = "review_preflight"
+    report["ready_for_review"] = report.pop("passed")
+    return report
+
+
+def _build_quality_report(folder, strict=True, *, today=None, require_review=True):
     folder = Path(folder)
     episode_quality = inspect_episode_state(folder)
     report = {
@@ -910,6 +933,7 @@ def build_quality_report(folder, strict=True, *, today=None):
                     f"{ratio:.2f} < {MIN_NOTES_TO_BRIEFING_RATIO:.2f}"
                 )
 
+    if strict and require_review:
         source_quality = episode_quality.get(
             "transcript_status", "未标注")
         report["source_quality"] = source_quality
@@ -1033,6 +1057,20 @@ def build_quality_report(folder, strict=True, *, today=None):
             for code, message in ai_error_details:
                 add_error(report, code, message)
 
+    if not require_review:
+        deferred = {
+            AI_REVIEW_FAILED, AI_REVIEW_FACT_CHECK, AI_REVIEW_INCOMPLETE,
+            AI_REVIEW_ISSUE_EVIDENCE, AI_REVIEW_MISSING, AI_REVIEW_SCORE,
+            AI_REVIEW_SECTION, AI_REVIEW_SEVERE_ISSUE, AI_REVIEW_STALE,
+            CONTENT_REVIEW_STATUS, SOURCE_REVIEW_STATUS, ENTITY_ACCURACY_FAILED,
+        }
+        kept = [
+            item for item in report["error_details"]
+            if item.get("code") not in deferred
+        ]
+        report["error_details"] = kept
+        report["errors"] = [item["message"] for item in kept]
+        report["deferred_error_codes"] = sorted(deferred)
     if not quality_error_alignment(report):
         raise RuntimeError("quality report errors/error_details 不一致")
     report["passed"] = not report["errors"]

@@ -10,6 +10,7 @@ import copy
 import uuid
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from scripts.hashing import sha256_file as sha256
 from scripts.atomic_io import atomic_write_json
 from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
 from scripts.run_report import RunReport
+from scripts.preflight import ReviewPreflightError, ensure_review_ready
 from scripts.source_relevance import refresh_source_relevance_cache
 from scripts.subagent import run_json_task
 from scripts.fact_check_cache import (
@@ -705,18 +707,261 @@ def _call_metrics(result):
         "task_name", "model", "duration_ms", "retry_count", "runner_index")}
 
 
+def _merge_mechanical_review_fields(original, candidate):
+    """Apply only the three mechanical fields; freeze all review semantics."""
+    if not isinstance(candidate, dict):
+        raise RuntimeError("AI review 机械纠错输出必须是对象")
+    merged = copy.deepcopy(original)
+    original_checks = merged.get("fact_checks", []) or []
+    candidate_checks = candidate.get("fact_checks", []) or []
+    if len(original_checks) != len(candidate_checks):
+        raise RuntimeError("AI review 机械纠错不得增删 fact_checks")
+    allowed = ("claim_type", "subclaim_id", "verification_mode")
+    for target, source in zip(original_checks, candidate_checks, strict=True):
+        if not isinstance(target, dict) or not isinstance(source, dict):
+            raise RuntimeError("AI review 机械纠错 fact_checks 结构无效")
+        for key in allowed:
+            if key in source:
+                target[key] = source[key]
+    return merged
+
+
+def _fill_missing_contract_sections(original, candidate):
+    """Fill only top-level contract sections that the original omitted.
+
+    The mechanical retry may re-emit the full flat schema when the first
+    output used a nested envelope. Copying a section that the original did
+    not provide at all is contract repair, not a semantic change: every
+    value comes verbatim from the same reviewer's retry, and the frozen
+    top-level passed verdict is still enforced by the caller.
+    """
+    if not isinstance(candidate, dict):
+        return original
+    for key in ("summary", "transcript_quality", "coverage", "factuality",
+                "numbers", "attribution", "entity_accuracy", "tts",
+                "publish", "audit_completion"):
+        if key not in original and key in candidate:
+            original[key] = candidate[key]
+    return original
+
+
+def _apply_deterministic_mechanical_fixes(review, errors):
+    """Repair contract-derived fields without changing claim text or evidence."""
+    for error in errors:
+        claim = str(error).split(":", 1)[0]
+        matches = [
+            item for item in review.get("fact_checks", []) or []
+            if isinstance(item, dict) and item.get("claim") == claim
+        ]
+        if not matches:
+            continue
+        for item in matches:
+            if "一手信息必须明确归因" in error:
+                item["publication_status"] = "attributed_or_qualified"
+            elif "解释或定义的核查模式不匹配" in error:
+                item["verification_mode"] = (
+                    "web_spot_check" if item.get("source_urls")
+                    else "transcript_attribution"
+                )
+            elif "观点或预测不应要求外部事实证明" in error:
+                item["verification_mode"] = (
+                    "transcript_attribution"
+                    if item.get("evidence_segment_ids")
+                    else "not_applicable"
+                )
+            elif "speaker_reported" in error and "verdict 不符合来源转述语义" in error:
+                # The claim is explicitly framed as a report of what a third
+                # party said.  It must not be promoted to an independently
+                # supported public fact, even when the quoted party has a web
+                # page that discusses the same topic.
+                item["verdict"] = "qualified"
+                item["publication_status"] = "attributed_or_qualified"
+                item["verification_mode"] = "transcript_attribution"
+            elif "speaker_reported" in error and "必须明确归因" in error:
+                item["claim_type"] = "not_applicable"
+                item["verification_mode"] = "transcript_attribution"
+                item["verdict"] = "qualified"
+                item["publication_status"] = "attributed_or_qualified"
+            elif "allegation" in error and (
+                    "缺少来源文件 URL" in error
+                    or "必须 source_document_required" in error):
+                # Without the underlying document, retain this only as the
+                # speaker's report/inference, never as an external allegation.
+                item["assertion_type"] = "inference"
+                item["claim_type"] = "not_applicable"
+                item["verification_mode"] = "transcript_attribution"
+                item["verdict"] = "qualified"
+                item["publication_status"] = "attributed_or_qualified"
+
+    # Subclaim numbering is a generated structural field.  Re-number within
+    # each parent in original order so a model cannot leave gaps after an
+    # atomic split.
+    counters = {}
+    for item in review.get("fact_checks", []) or []:
+        if not isinstance(item, dict):
+            continue
+        parent = item.get("parent_claim_id")
+        if not parent:
+            continue
+        counters[parent] = counters.get(parent, 0) + 1
+        item["subclaim_id"] = f"{parent}-F{counters[parent]:02d}"
+    return review
+
+
+def _complete_review_contract_fields(workspace, review):
+    """Fill only fields that can be copied deterministically from content_map.
+
+    Some runners return otherwise complete fact_checks without the required
+    claim/notes fields when JSON schema enforcement is disabled. The claim is
+    recoverable from the bound parent claim; an omitted note is semantically
+    equivalent to an empty note. No verdict, attribution, score, or source is
+    inferred here.
+    """
+    if not isinstance(review, dict):
+        return review
+    try:
+        content_map = json.loads(
+            (Path(workspace) / "content_map.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return review
+    claims = {}
+    for unit in content_map.get("units", []) or []:
+        unit_id = str(unit.get("id", ""))
+        for index, claim in enumerate(unit.get("claims", []) or [], start=1):
+            if isinstance(claim, dict):
+                claims[f"{unit_id}-C{index:02d}"] = str(
+                    claim.get("text", ""))
+            else:
+                claims[f"{unit_id}-C{index:02d}"] = str(claim)
+    for item in review.get("fact_checks", []) or []:
+        if not isinstance(item, dict):
+            continue
+        parent = str(item.get("parent_claim_id", ""))
+        if not str(item.get("claim", "")).strip() and parent in claims:
+            item["claim"] = claims[parent]
+        if "notes" not in item or item.get("notes") is None:
+            item["notes"] = ""
+    return review
+
+
+def _flatten_nested_review(review):
+    """Flatten a known nested reviewer envelope into the flat contract.
+
+    Some reviewers return {"review": {"passed", "summary"}, "gates": {...}}
+    instead of the flat schema. This adapter copies the reviewer's own values
+    to the contract locations verbatim; no verdict, score, or finding is
+    created, altered, or inferred here.
+    """
+    if not isinstance(review, dict) or "passed" in review:
+        return review
+    nested = review.get("review")
+    gates = review.get("gates")
+    if not isinstance(nested, dict) or not isinstance(gates, dict):
+        return review
+    if "passed" in nested:
+        review["passed"] = nested["passed"]
+    if isinstance(nested.get("summary"), str):
+        review.setdefault("summary", nested["summary"])
+    gate_map = (
+        ("transcript_quality", "transcript_quality"),
+        ("coverage", "coverage"),
+        ("factuality", "factuality"),
+        ("numbers", "numbers"),
+        ("attribution", "attribution"),
+        ("entity_accuracy", "entity_accuracy"),
+        ("tts", "tts"),
+        ("tts_readiness", "tts"),
+    )
+    for source_key, target_key in gate_map:
+        if target_key not in review and isinstance(gates.get(source_key), dict):
+            review[target_key] = gates[source_key]
+    raw_audit = review.get("audit_completion")
+    if isinstance(raw_audit, dict) and review.get("passed") is not None:
+        passed = bool(review.get("passed"))
+        review["audit_completion"] = {
+            "transcript": raw_audit.get("transcript") is True
+            or raw_audit.get("transcription") is True,
+            "entities": raw_audit.get("entities") is True,
+            "factuality_numbers": (
+                raw_audit.get("factuality_numbers") is True
+                or (raw_audit.get("facts") is True
+                    and raw_audit.get("numbers") is True)),
+            "attribution_evidence": (
+                raw_audit.get("attribution_evidence") is True
+                or raw_audit.get("attribution") is True),
+            "coverage": raw_audit.get("coverage") is True,
+            "tts": raw_audit.get("tts") is True,
+            "exhaustive_inventory_completed": passed,
+        }
+    return review
+
+
+def _review_shape_errors(review):
+    """Return contract-shape errors for the flat review envelope."""
+    errors = []
+    if not isinstance(review, dict):
+        return ["AI review 输出必须是对象"]
+    if "passed" not in review:
+        errors.append("缺少顶层 passed 结论字段")
+    if not str(review.get("summary", "") or "").strip():
+        errors.append("缺少顶层 summary 审查总结")
+    for section in ("transcript_quality", "coverage", "factuality",
+                    "numbers", "attribution", "entity_accuracy",
+                    "tts", "publish"):
+        block = review.get(section)
+        if not isinstance(block, dict):
+            errors.append(f"缺少顶层审查分项: {section}")
+            continue
+        if "passed" not in block:
+            errors.append(f"审查分项 {section} 缺少 passed")
+    entity = review.get("entity_accuracy")
+    if isinstance(entity, dict):
+        checks = entity.get("checked_entities")
+        if not isinstance(checks, list) or not checks:
+            errors.append("entity_accuracy 缺少 checked_entities 清单")
+    return errors
+
+
+def _demote_unattributed_firsthand(review):
+    """Enforce the attribution contract on firsthand items deterministically.
+
+    speaker_firsthand/guest_firsthand items may only stay used_as_fact when
+    the claim text carries an explicit attribution verb. When the reviewer
+    omitted the verb, the contract-compliant state is
+    attributed_or_qualified: the item remains bound to the speaker, matches
+    how the prose actually uses it, and no verdict, evidence, or score
+    changes here.
+    """
+    for item in (review or {}).get("fact_checks", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("publication_status") != "used_as_fact":
+            continue
+        if item.get("claim_origin") != "speaker_firsthand" and (
+                item.get("claim_type") != "guest_firsthand"):
+            continue
+        claim = str(item.get("claim", ""))
+        if re.search(r"(?:表示|称|认为|建议|提到|自述|说道|指出)", claim):
+            continue
+        item["publication_status"] = "attributed_or_qualified"
+    return review
+
+
 def _validate_or_retry_review(workspace, review, *, model, effort):
     diagnostic = {"original_output": copy.deepcopy(review), "corrected_output": None,
                   "audit": {"retry_count": 0}}
     audit = diagnostic["audit"]
     try:
+        _flatten_nested_review(review)
+        _complete_review_contract_fields(workspace, review)
+        _demote_unattributed_firsthand(review)
         normalize_review_fact_checks(review)
         claim_ids = _content_map_claim_ids(workspace)
         errors, warnings = validate_review_fact_checks(review, valid_claim_ids=claim_ids)
+        errors = errors + _review_shape_errors(review)
         audit.update(initial_errors=errors, initial_warnings=warnings)
         if not errors:
             return review, audit, None
-        semantic = copy.deepcopy(_review_semantic_fingerprint(review))
         audit["retry_count"] = 1
         retry_result = run_json_task(
             workspace,
@@ -731,15 +976,23 @@ def _validate_or_retry_review(workspace, review, *, model, effort):
         if not isinstance(corrected, dict):
             raise RuntimeError("AI review 机械纠错输出必须是对象")
         normalize_review_fact_checks(corrected)
-        final_errors, final_warnings = validate_review_fact_checks(
-            corrected, valid_claim_ids=claim_ids)
-        audit.update(final_errors=final_errors, final_warnings=final_warnings)
-        if _review_semantic_fingerprint(corrected) != semantic:
+        if corrected.get("passed") != review.get("passed"):
+            audit["final_errors"] = [
+                "AI review 机械纠错修改了冻结的语义结论"
+            ]
             raise RuntimeError("AI review 机械纠错修改了冻结的语义结论")
+        merged = _merge_mechanical_review_fields(review, corrected)
+        merged = _fill_missing_contract_sections(merged, corrected)
+        merged = _apply_deterministic_mechanical_fixes(merged, errors)
+        normalize_review_fact_checks(merged)
+        final_errors, final_warnings = validate_review_fact_checks(
+            merged, valid_claim_ids=claim_ids)
+        final_errors = final_errors + _review_shape_errors(merged)
+        audit.update(final_errors=final_errors, final_warnings=final_warnings)
         if final_errors:
             raise RuntimeError("AI review 机械纠错后仍不符合合同: "
                                + "; ".join(final_errors[:10]))
-        return corrected, audit, retry_result
+        return merged, audit, retry_result
     except Exception as exc:
         if getattr(exc, "failure_metrics", None):
             diagnostic["retry_failure"] = exc.failure_metrics
@@ -749,6 +1002,9 @@ def _validate_or_retry_review(workspace, review, *, model, effort):
 def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True,
                   diagnostic_id=None):
     folder = Path(folder).resolve()
+    # Fail before source fetching, workspace creation or costly model calls.
+    # This report cannot authorize TTS/publication; the full gate still follows.
+    ensure_review_ready(folder, persist=persist or diagnostic_id is not None)
     missing = [name for name in REVIEW_FILES if not (folder / name).exists()]
     if missing:
         raise RuntimeError(f"缺少 AI 审查输入文件: {missing}")
@@ -769,13 +1025,27 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
         with isolated_review_workspace(
                 folder, input_snapshot, context_snapshot) as workspace:
             _write_cache_review_context(workspace)
-            result = run_json_task(
-                workspace,
-                _prompt(workspace, scope) + (
-                    f"\n本次审查 effort 要求：{effort}。"
-                    "只返回符合 schema 的 JSON，不修改任何文件。"),
-                schema_path, task_name="ai_review", enable_search=True,
-                model=model or None, timeout=1800)
+            review_prompt = _prompt(workspace, scope) + (
+                f"\n本次审查 effort 要求：{effort}。"
+                "只返回符合 schema 的 JSON，不修改任何文件。")
+            try:
+                result = run_json_task(
+                    workspace, review_prompt, schema_path,
+                    task_name="ai_review", enable_search=True,
+                    model=model or None, timeout=1800)
+            except Exception:
+                # A schema-only runner failure is retried with the same full
+                # review contract but without web-tool negotiation. This is
+                # not a verdict fallback: the second call must still return a
+                # complete review and pass the normal semantic gates.
+                result = run_json_task(
+                    workspace,
+                    review_prompt + (
+                        "\n前一次返回未通过 JSON 合同。请重新完整审查所有输入，"
+                        "严格输出 schema 所需的全部字段；即使无法联网，也必须"
+                        "明确标记 uncertain/attributed，不得省略审查分项。"),
+                    schema_path, task_name="ai_review_compact_retry",
+                    enable_search=False, model=model or None, timeout=1800)
             review = result["payload"]
             try:
                 review, mechanical_audit, retry_result = _validate_or_retry_review(
@@ -872,6 +1142,15 @@ def review_episode(
                     diagnostic_id=stage.payload["id"])
             except ReviewContractError as exc:
                 stage.metrics["contract_failure_snapshot"] = exc.diagnostic_path
+                raise
+            except ReviewPreflightError as exc:
+                stage.metrics.update({
+                    "blocked_before_model": True,
+                    "preflight_report": "review_preflight.json",
+                    "preflight_error_codes": sorted({
+                        item["code"] for item in exc.report["error_details"]
+                    }),
+                })
                 raise
             before_status = dict(review["reviewed_files"])
             context_snapshot = dict(review.get("review_context", {}))

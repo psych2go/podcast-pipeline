@@ -211,6 +211,13 @@ def public_entity_alias_errors(payload, *texts):
                     and re.fullmatch(r"[\u3400-\u9fff·、（）()\s]+", observed)):
                 continue
             if (
+                    canonical.casefold() == "artemis program"
+                    and re.fullmatch(r"Artemis [IVX]+", observed)
+            ):
+                # Mission-numbered Artemis names carry distinct task identity;
+                # do not collapse them to the program umbrella name.
+                continue
+            if (
                     not observed
                     or observed == canonical
                     or observed.casefold() in allowed

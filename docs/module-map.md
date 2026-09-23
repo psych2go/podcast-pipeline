@@ -37,7 +37,7 @@
 | `prewrite_fact_checks.py` | 写作前原子事实核查和断点恢复 | 外部纠正保留在事实台账中 |
 | `content_finalizer.py` | 讲稿、summary map、章节和 TTS 词典最终化 | AI review 前唯一允许的确定性写回阶段 |
 | `ai_review.py`、`review_repair.py` | AI 终审和受限修复 | 修复后必须重新独立审查；机械修复冻结语义字段，合同失败诊断只留本地 `ai_review_contract_failures/` |
-| `quality_report.py`、`preflight.py` | 确定性质量门 | 结构、哈希、证据和新鲜度是主要约束；v3 fact-check 合同复用 `claim_taxonomy.validate_review_fact_checks()`，与 AI 审查修复校验共用单一规则 |
+| `quality_report.py`、`preflight.py` | 确定性质量门与审查前预检 | `build_review_preflight_report()` 只做读验证并延后 AI 审查本身；`ensure_review_ready()` 在联网/模型调用前阻断明显输入错误。完整 `build_quality_report()` 仍是最终发布授权，不能由预检替代；结构、哈希、证据和新鲜度是主要约束；v3 fact-check 合同复用 `claim_taxonomy.validate_review_fact_checks()`，与 AI 审查修复校验共用单一规则 |
 | `tts.py`、`html_gen.py`、`sections.py` | 音频与阅读页 | TTS 和 HTML 共用章节解析 seam |
 | `catalog.py`、`catalog_*` | 发布事务 facade 与实现 | 已按 core/site/health/triage/publish 拆分；`catalog_triage.py` 只读诊断阻断原因 |
 | `release.py`、`publish.py` | release provenance 和远端验收 | Wrangler 成功不等于发布成功 |

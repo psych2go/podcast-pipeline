@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+from difflib import SequenceMatcher
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from scripts.content_map import (
     enrich_summary_map_evidence,
     init_content_map,
     load_json,
+    normalize_generated_unit_ids,
     normalize_detail_items,
     normalize_summary_claim_ids,
     save_json,
@@ -29,6 +31,7 @@ from scripts.content_map import (
     validate_summary_map,
 )
 from scripts.content_finalizer import (
+    ContentFinalizationError,
     finalize_content_package,
     validate_tts_readiness,
 )
@@ -38,7 +41,7 @@ from scripts.episode import (
     update_transcript_status,
 )
 from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
-from scripts.subagent import run_edit_task, run_json_task
+from scripts.subagent import SubagentError, run_edit_task, run_json_task
 from scripts.prewrite_fact_checks import (
     FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
     SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
@@ -75,6 +78,24 @@ def _env_positive_int(name, default):
     if value < 1:
         raise ValueError(f"{name} 必须 >= 1，当前值: {value}")
     return value
+
+
+def _third_party_correction_is_complete(folder):
+    """Reject truncated optional corrections from third-party transcript tasks."""
+    folder = Path(folder)
+    raw_path = folder / "原始转录.txt"
+    corrected_path = folder / "转录_纠错.txt"
+    if not raw_path.exists() or not corrected_path.exists():
+        return False
+    raw = raw_path.read_text(encoding="utf-8")
+    corrected = corrected_path.read_text(encoding="utf-8")
+    if not corrected.strip():
+        return False
+    # Third-party correction is plain-text and has no segment manifest.  It may
+    # polish wording, but it must not silently become a short prefix of the
+    # evidence.  A conservative ratio catches truncated runner output while
+    # allowing normal editorial compression of whitespace and punctuation.
+    return len(corrected) >= max(1000, round(len(raw) * 0.6))
 
 
 def _transcript_basis(folder):
@@ -355,7 +376,68 @@ content_map.json、canonical_entities.json、editorial_fact_checks.json。
 按规则依次生成 中文完整笔记.md、讲书稿.md、summary_map.json。
 只允许修改这三个输出；不得修改输入台账或任何证据文件，不要运行内部阶段命令。
 summary_map 先写结构，正文哈希与 writing_inputs 绑定由主流程最终化补齐。
+
+## 交付前机械检查（优先执行）
+- 统计讲书稿.md 中所有以“## ”开头的章节标题；summary_map.json 的 chapters 必须逐项一一对应，数量必须完全相同。
+- summary_map.json 每个 chapter.title 必须与讲书稿对应标题逐字一致；不得少一章、多一章或把两章合并成一个映射。
+- 每个章节的 unit_ids、claim_ids 必须来自该章节实际覆盖的 content_map；宁可补齐映射，也不要交付数量不一致的 summary_map。
+- 完成前重新读取这三个输出并修复上述机械不一致；不要把检查说明写入公开稿。
+
+## 终审数字与证据修复要求
+如果目录中存在 ai_review.json 且 passed=false，必须逐条处理其中的 numbers、factuality、attribution 和 tts issues：
+- 公开来源无法支持的精确金额、百分比、倍数、概率、季度数和市场份额，不得只补一句“节目称”后继续保留；应改为趋势性或范围性表述，并保留“节目称/嘉宾估计”归因。
+- 有官方或一手来源支持的数字才保留精确值，并保持日期、财季、统计口径和来源限定。
+- 第三方指控、动机判断和法律推测只能写成“节目转述/嘉宾推测/节目观点”，不得写成旁白事实。
+- 公开稿中的每个英文专名、缩写和混合短语都必须能由 tts_lexicon.json 安全朗读；不得把后台审查说明写进公开稿。
+- 严禁在公开稿出现“独立核验”“不能写成”“这里只保留”“不把……当作事实”“以下是节目口径”“审查”“证据链”“fact check”“发布标准”等编辑流程语言。改写成面向听众的自然表达，例如“节目当时的说法是……”“嘉宾据此推测……”“公开资料尚不足以确认……”。
 """
+
+
+def _repair_summary_map_contract(
+        folder, briefing_path, summary_path, content_map_path, notes_path,
+        error):
+    """Repair only summary bindings after deterministic chapter validation."""
+    canonical_titles = re.findall(
+        r"(?m)^##\s+(.+?)\s*$",
+        briefing_path.read_text(encoding="utf-8"),
+    )
+    repair_prompt = f"""只修复 summary_map.json 的结构绑定，不改写讲书稿、笔记、content_map 或任何事实。
+
+确定性最终化报错：{error}
+
+读取讲书稿.md，逐行统计所有以“## ”开头的章节；再读取当前 summary_map.json、content_map.json 和中文完整笔记.md。
+确定性章节标题顺序为：{json.dumps(canonical_titles, ensure_ascii=False)}。
+必须让 summary_map.json 的 chapters 与讲书稿章节一一对应、数量完全相同、title 逐字一致。
+如果讲书稿存在 summary_map 缺失的章节，为该章节补入基于实际正文和 content_map 的 unit_ids、claim_ids；不得捏造事实、不得删除讲书稿章节、不得把两章合并成一章。
+保留所有已有正确映射，只做完成机械绑定所必需的最小修改。
+完成后重新读取并核对章节数量和标题。只修改 summary_map.json。"""
+    original_summary = summary_path.read_text(encoding="utf-8")
+    repair_attempts = [
+        ("summary_map_contract_repair", repair_prompt),
+        ("summary_map_contract_repair_retry_1", repair_prompt +
+         "\n这是结构修复重试。重新读取三个输入文件，逐项核对章节数量；"
+         "如果上一轮已经修复，保持正确结果，不要新增或删除正文。"),
+        ("summary_map_contract_repair_retry_2", repair_prompt +
+         "\n这是最后一次结构修复重试。必须只写入一个完整、可解析的 JSON 对象；"
+         "如果上一轮已经修复，保持正确结果，不要新增或删除正文。"),
+    ]
+    for task_name, prompt in repair_attempts:
+        run_edit_task(
+            folder,
+            prompt,
+            task_name=task_name,
+            allowed_files=[summary_path],
+            input_files=[briefing_path, content_map_path, notes_path],
+            required_files=[summary_path],
+        )
+        try:
+            load_json(summary_path)
+            return
+        except (OSError, ValueError, TypeError):
+            # Never pass a malformed repair artifact to the finalizer; give
+            # the next attempt the last known valid document instead.
+            summary_path.write_text(original_summary, encoding="utf-8")
+    summary_path.write_text(original_summary, encoding="utf-8")
 
 
 def _correction_prompt(source_kind):
@@ -449,6 +531,12 @@ def _run_structured_correction(folder, raw):
 corrected_text 只包含该 segment 的英文正文，不要写 speaker 标签。
 广告、寒暄、口头语和真实重复也是原音频内容，不得因编辑价值低而删除。
 你没有直接听音频，verification 不得填写 human_audio。普通低风险文字修正可使用 context_only；数字、金额、年份或专名变更必须由已有 refinement 支持并使用 alternate_decode，或经网页核对使用 external_entity_source；否则保留原文并标为 unresolved。
+
+严格合同提醒：
+- status=corrected 时 corrected_text 必须确实不同，unresolved 必须是空数组；如果无法提出不同且有依据的文本，就使用 status=unresolved 并逐字复制输入；不要把“已修正但仍不确定”混用为 corrected+unresolved。
+- status=unresolved 时 corrected_text 必须逐字保留输入原文，verification 必须为 unresolved，unresolved 只能填写简短的复核原因（例如“专名无法从上下文确认”），不得把人名、数字、公司名或整段待确认文本本身放入 unresolved 数组。
+- 能从节目上下文或公开实体来源确认的专名（例如人物、公司、产品）应直接使用 corrected+external_entity_source；不要因为它是专名就标 unresolved。
+- 机械硬门：只要原文或 corrected_text 含人名、公司名、产品名、数字、金额、年份、百分号或大写专名，status=corrected 的 verification 只能是 alternate_decode 或 external_entity_source；绝对不能使用 context_only。
 """
         fingerprint = hashlib.sha256(json.dumps({
             "cache_version": 1,
@@ -482,6 +570,125 @@ corrected_text 只包含该 segment 的英文正文，不要写 speaker 标签�
             raise RuntimeError(
                 f"纠错批次 {batch_index} 输出必须是对象")
         items = payload.get("segments", [])
+        # Models occasionally mark an unchanged segment as corrected.  Normalize
+        # that bookkeeping error without changing any transcript text; flagged
+        # segments remain explicitly unresolved so the correction contract does
+        # not silently bless an unverified rewrite.
+        source_by_id = {
+            str(segment.get("id")): segment for segment in batch
+        }
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            source = source_by_id.get(str(item.get("segment_id")))
+            if source is None or item.get("status") != "corrected":
+                continue
+            if str(item.get("corrected_text", "")).strip() != str(
+                    source.get("text", "")).strip():
+                continue
+            flagged = bool(
+                source.get("needs_redecode")
+                or source.get("needs_review")
+                or source.get("speaker_alignment") == "unresolved"
+            )
+            if flagged:
+                item.update({
+                    "status": "unresolved",
+                    "corrected_text": str(source.get("text", "")).strip(),
+                    "change_types": [],
+                    "verification": "unresolved",
+                    "unresolved": ["未发现可验证的文本改动"],
+                })
+            else:
+                item.update({
+                    "status": "unchanged",
+                    "corrected_text": str(source.get("text", "")).strip(),
+                    "change_types": [],
+                    "verification": "not_required",
+                    "unresolved": [],
+                })
+            if item.get("status") == "corrected":
+                source_text = str(source.get("text", "")).strip()
+                corrected_text = str(item.get("corrected_text", "")).strip()
+                source_words = max(1, len(source_text.split()))
+                corrected_words = max(1, len(corrected_text.split()))
+                similarity = SequenceMatcher(
+                    None, source_text.lower(), corrected_text.lower(),
+                    autojunk=False).ratio()
+                if (
+                        corrected_text
+                        and (corrected_words / source_words < 0.6
+                             or corrected_words / source_words > 1.6
+                             or similarity < 0.55)
+                        and item.get("verification") != "human_audio"):
+                    # Never accept a model rewrite that dropped or merged
+                    # source material.  Preserve the evidence verbatim and
+                    # make the uncertainty explicit instead.
+                    item.update({
+                        "status": "unresolved",
+                        "corrected_text": source_text,
+                        "change_types": [],
+                        "verification": "unresolved",
+                        "unresolved": ["模型改写幅度超过可验证范围"],
+                    })
+        for item in items:
+            if not isinstance(item, dict) or item.get("status") != "corrected":
+                continue
+            source = source_by_id.get(str(item.get("segment_id")))
+            if source is None:
+                continue
+            source_text = str(source.get("text", "")).strip()
+            corrected_text = str(item.get("corrected_text", "")).strip()
+            source_words = max(1, len(source_text.split()))
+            corrected_words = max(1, len(corrected_text.split()))
+            similarity = SequenceMatcher(
+                None, source_text.lower(), corrected_text.lower(),
+                autojunk=False).ratio()
+            invalid_magnitude = (
+                corrected_text
+                and (corrected_words / source_words < 0.6
+                     or corrected_words / source_words > 1.6
+                     or similarity < 0.55)
+                and item.get("verification") != "human_audio"
+            )
+            high_risk = bool(re.search(
+                r"(?:[$€£¥]|\b\d+(?:[,.]\d+)*(?:%|x|k|m|b)?\b|"
+                r"\b[A-Z][A-Za-z0-9&.'-]*(?:\s+[A-Z][A-Za-z0-9&.'-]*)+\b)",
+                source_text + " " + corrected_text,
+            ))
+            invalid_verification = (
+                high_risk
+                and item.get("verification") not in {
+                    "alternate_decode", "external_entity_source", "human_audio"
+                }
+            )
+            if invalid_magnitude or invalid_verification:
+                item.update({
+                    "status": "unresolved",
+                    "corrected_text": source_text,
+                    "change_types": [],
+                    "verification": "unresolved",
+                    "unresolved": [
+                        "模型改写幅度超过可验证范围"
+                        if invalid_magnitude else "高风险纠错缺少独立验证"
+                    ],
+                })
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            source = source_by_id.get(str(item.get("segment_id")))
+            if source is None:
+                continue
+            source_text = str(source.get("text", "")).strip()
+            if item.get("status") in {"unchanged", "unresolved"} and str(
+                    item.get("corrected_text", "")).strip() != source_text:
+                item.update({
+                    "status": "unresolved",
+                    "corrected_text": source_text,
+                    "change_types": [],
+                    "verification": "unresolved",
+                    "unresolved": ["模型未提供可验证的文本修正"],
+                })
         actual_ids = [
             str(item.get("segment_id"))
             for item in items if isinstance(item, dict)
@@ -677,9 +884,7 @@ def _ensure_tts_lexicon_ready(folder, briefing_path):
         return {"repaired": False, "entries": len(load_tts_lexicon(folder))}
     lexicon_path = folder / "tts_lexicon.json"
     existing = load_tts_lexicon(folder)
-    run_edit_task(
-        folder,
-        f"""只修复讲书稿的 TTS 读音词典。当前确定性检查问题：
+    repair_prompt = f"""只修复讲书稿的 TTS 读音词典。当前确定性检查问题：
 {json.dumps(issues, ensure_ascii=False)}
 
 读取讲书稿.md，在 tts_lexicon.json 中为确实出现的完整词或完整短语增加精确映射。
@@ -690,17 +895,33 @@ key 最多 48 个字符、最多 6 个空格分词、最多 6 个汉字，并且
 加号、斜杠、& 或括号之一。优先映射完整表达，例如 A/B，而不是单独映射 /；
 不得使用空 key、不得级联替换，不得修改讲书稿或任何内容事实。
 混合大小写品牌、技术符号应按上下文给出自然读音；拿不准时不要猜。
-只修改 tts_lexicon.json。""",
-        task_name="tts_lexicon_pre_review",
-        allowed_files=[lexicon_path],
-        input_files=[briefing_path],
-        required_files=[lexicon_path],
-    )
-    try:
-        lexicon = load_tts_lexicon(folder)
-    except Exception:
+只修改 tts_lexicon.json。"""
+    lexicon = None
+    parse_error = None
+    for attempt in range(2):
+        if attempt:
+            atomic_write_json(lexicon_path, existing)
+        run_edit_task(
+            folder,
+            repair_prompt + (
+                "\n上一次输出不是合法 JSON。重新读取并只写入一个完整、可解析的 JSON 对象，"
+                "不要写 Markdown 代码围栏。"
+                if attempt else ""
+            ),
+            task_name=("tts_lexicon_pre_review"
+                       if not attempt else "tts_lexicon_pre_review_retry"),
+            allowed_files=[lexicon_path],
+            input_files=[briefing_path],
+            required_files=[lexicon_path],
+        )
+        try:
+            lexicon = load_tts_lexicon(folder)
+            break
+        except Exception as exc:
+            parse_error = exc
+    if lexicon is None:
         atomic_write_json(lexicon_path, existing)
-        raise
+        raise parse_error
     change_errors = _tts_lexicon_change_errors(
         briefing, existing, lexicon)
     if change_errors:
@@ -724,6 +945,16 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
     raw = load_json(raw_path)
     source_kind = effective_source_kind(folder, raw)
     correction_path = folder / "转录_纠错.txt"
+    if (
+            source_kind not in ASR_SOURCE_KINDS
+            and correction_path.exists()
+            and not _third_party_correction_is_complete(folder)):
+        # This file is optional for web/official transcripts.  Keep the raw
+        # evidence authoritative rather than allowing a truncated runner
+        # response to become the transcript basis.
+        correction_path.unlink()
+        update_transcript_status(
+            folder, "可接受（纠错稿不完整，回退原始网页转录）", "sample_checked")
     source_path = folder / "来源.md"
     correction_inputs = [
         path for path in (raw_path, transcript_path, source_path)
@@ -733,6 +964,11 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
     contract_required = (
         source_kind == "local_asr" and correction_contract_required(raw)
     )
+    force_structured_correction = (
+        os.environ.get("FORCE_STRUCTURED_CORRECTION", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    structured_correction = contract_required or force_structured_correction
     if _completeness_blocks_content(source_kind, raw):
         print(
             "[内容][阻断] 新 ASR revision 的语音完整性检查未通过",
@@ -740,17 +976,19 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
         )
         return False
 
+    correction_ready = (
+        _structured_correction_ready(folder, raw)
+        if structured_correction
+        else (
+            source_kind not in ASR_SOURCE_KINDS
+            or correction_path.exists()
+        )
+    )
     transcript_ready = (
         not force
         and _accepted_transcript_status(
             quality_metadata(folder).get("transcript_status"))
-        and (
-            source_kind not in ASR_SOURCE_KINDS
-            or (
-                _structured_correction_ready(folder, raw)
-                if contract_required else correction_path.exists()
-            )
-        )
+        and correction_ready
     )
     with _stage(run_report, "subagent_transcript_correction") as stage:
         if transcript_ready:
@@ -759,9 +997,9 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                     "skipped": True,
                     "reason": "accepted transcript status",
                     "corrected": correction_path.exists(),
-                    "structured": contract_required,
+                    "structured": structured_correction,
                 })
-        elif contract_required:
+        elif structured_correction:
             result = _run_structured_correction(folder, raw)
             update_transcript_status(
                 folder, "已纠错（结构化）", "corrected_structured")
@@ -846,6 +1084,7 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                 required_files=[content_map_path],
             )
             payload = load_json(content_map_path)
+            _normalized_map, ids_changed = normalize_generated_unit_ids(payload)
             normalize_detail_items(payload)
             payload["prewrite_fact_checks_version"] = (
                 PREWRITE_FACT_CHECKS_VERSION)
@@ -973,6 +1212,12 @@ JSON，不修改文件。""",
                 model=os.environ.get("SUBAGENT_FACT_CHECK_MODEL", ""),
                 effort=os.environ.get(
                     "SUBAGENT_FACT_CHECK_EFFORT", "high"),
+                max_batch_claims=_env_positive_int(
+                    "FACT_CHECK_BATCH_CLAIMS", 12),
+                max_batch_chars=_env_positive_int(
+                    "FACT_CHECK_BATCH_CHARS", 8000),
+                concurrency=_env_positive_int(
+                    "SUBAGENT_FACT_CHECK_CONCURRENCY", 2),
             )
             if stage is not None:
                 stage.metrics.update(metrics)
@@ -992,29 +1237,34 @@ JSON，不修改文件。""",
         ) if entities_path.exists() else ["canonical_entities.json 缺失"]
         review_path = folder / "ai_review.json"
         review_content_changed = False
+        review_rejected = False
         if review_path.exists():
             try:
                 previous_review = load_json(review_path)
             except (OSError, ValueError, TypeError):
                 previous_review = {}
             expected_files = previous_review.get("reviewed_files", {})
-            if previous_review.get("passed") is False and isinstance(
-                    expected_files, dict):
-                for path in (notes_path, briefing_path, summary_path):
-                    if path.exists():
-                        actual = hashlib.sha256(path.read_bytes()).hexdigest()
-                        if expected_files.get(path.name) != actual:
-                            review_content_changed = True
-                            break
+            if previous_review.get("passed") is False:
+                review_rejected = True
+                if isinstance(expected_files, dict):
+                    for path in (notes_path, briefing_path, summary_path):
+                        if path.exists():
+                            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                            if expected_files.get(path.name) != actual:
+                                review_content_changed = True
+                                break
         writing_ready = (
             not force
             and not alias_errors
             and (
                 review_content_changed
-                or _writing_artifacts_are_current(
-                    folder,
-                    require_bound_inputs=not (
-                        content_map_ready and entities_ready and ledger_ready),
+                or (
+                    not review_rejected
+                    and _writing_artifacts_are_current(
+                        folder,
+                        require_bound_inputs=not (
+                            content_map_ready and entities_ready and ledger_ready),
+                    )
                 )
             )
         )
@@ -1042,20 +1292,39 @@ JSON，不修改文件。""",
                         + json.dumps(review_issues, ensure_ascii=False)
                         + "\n"
                     )
-            run_edit_task(
-                folder,
-                writing_prompt,
-                task_name="content_writing",
-                allowed_files=[notes_path, briefing_path, summary_path],
-                input_files=[
-                    path for path in (
-                        raw_path, transcript_path, correction_path,
-                        content_map_path, entities_path, source_path, ledger_path,
-                        review_path if review_path.exists() else None)
-                    if path is not None and path.exists()
-                ],
-                required_files=[notes_path, briefing_path, summary_path],
-            )
+            writing_inputs = [
+                path for path in (
+                    raw_path, transcript_path, correction_path,
+                    content_map_path, entities_path, source_path, ledger_path,
+                    review_path if review_path.exists() else None)
+                if path is not None and path.exists()
+            ]
+            try:
+                run_edit_task(
+                    folder,
+                    writing_prompt,
+                    task_name="content_writing",
+                    allowed_files=[notes_path, briefing_path, summary_path],
+                    input_files=writing_inputs,
+                    required_files=[notes_path, briefing_path, summary_path],
+                )
+            except SubagentError:
+                retry_prompt = (
+                    "只完成内容写作，不要解释过程。读取所有输入，直接创建三个文件："
+                    "中文完整笔记.md、讲书稿.md、summary_map.json。"
+                    "讲书稿按内容地图写成可播中文稿，笔记保留逐项事实归因；"
+                    "summary_map 必须是合法 JSON 且覆盖讲书稿全部 ## 章节。"
+                    "不要写 Markdown 代码围栏，不要省略任何必需文件。\n\n"
+                    + writing_prompt[-12000:]
+                )
+                run_edit_task(
+                    folder,
+                    retry_prompt,
+                    task_name="content_writing_retry",
+                    allowed_files=[notes_path, briefing_path, summary_path],
+                    input_files=writing_inputs,
+                    required_files=[notes_path, briefing_path, summary_path],
+                )
         missing = [
             path.name for path in (notes_path, briefing_path, summary_path)
             if not path.exists()
@@ -1073,12 +1342,25 @@ JSON，不修改文件。""",
         content_map = load_json(content_map_path)
         summary_path = folder / "summary_map.json"
         notes_text = (folder / "中文完整笔记.md").read_text(encoding="utf-8")
-        finalized = finalize_content_package(folder)
+        try:
+            finalized = finalize_content_package(folder)
+        except ContentFinalizationError as exc:
+            if "章节数量不一致" not in str(exc):
+                raise
+            _repair_summary_map_contract(
+                folder,
+                folder / "讲书稿.md",
+                summary_path,
+                content_map_path,
+                folder / "中文完整笔记.md",
+                str(exc),
+            )
+            finalized = finalize_content_package(folder)
         briefing_text = finalized["briefing"]
         summary_map = finalized["summary_map"]
         normalization_changes = finalized["normalization_changes"]
-        tts_readiness = _ensure_tts_lexicon_ready(
-            folder, folder / "讲书稿.md")
+        notes_text = (folder / "中文完整笔记.md").read_text(encoding="utf-8")
+        briefing_text = (folder / "讲书稿.md").read_text(encoding="utf-8")
         if (not writing_ready) or review_content_changed:
             content_map, transcript = enrich_content_map_evidence(
                 content_map, transcript)
@@ -1102,11 +1384,38 @@ JSON，不修改文件。""",
         )
         entity_alias_errors = public_entity_alias_errors(
             load_json(entities_path), notes_text, briefing_text)
+        # Entity mismatches block the package; related missions, vehicles and
+        # people must never be substituted by a hard-coded prose rewrite.
+        if summary_errors and not errors and not entity_alias_errors:
+            # A writer can produce valid prose but omit bindings for some
+            # claims/details. Give the dedicated structural repair pass the
+            # complete deterministic error list before failing the package.
+            _repair_summary_map_contract(
+                folder,
+                folder / "讲书稿.md",
+                summary_path,
+                content_map_path,
+                folder / "中文完整笔记.md",
+                "; ".join(summary_errors[:20]),
+            )
+            summary_map = load_json(summary_path)
+            summary_map = enrich_summary_map_evidence(
+                summary_map, notes_text, content_map, briefing_text)
+            summary_map["transcript_basis"] = _transcript_basis(folder)
+            summary_map["writing_inputs_version"] = WRITING_INPUTS_VERSION
+            summary_map["writing_inputs"] = _writing_input_hashes(folder)
+            save_json(summary_path, summary_map)
+            summary_errors = validate_summary_map(
+                summary_map, briefing_text, content_map, notes_text)
         if errors or summary_errors or entity_alias_errors:
             all_errors = errors + summary_errors + entity_alias_errors
             if stage is not None:
                 stage.fail("; ".join(all_errors[:10]))
             return False
+        # Do not spend a TTS lexicon repair call on already-invalid evidence,
+        # mapping or entities. Final AI review still validates the full package.
+        tts_readiness = _ensure_tts_lexicon_ready(
+            folder, folder / "讲书稿.md")
         if stage is not None:
             stage.metrics.update({
                 "unit_count": len(content_map.get("units", [])),

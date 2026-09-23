@@ -53,7 +53,8 @@ def review_payload():
         "factuality": {"passed": True, "score": 95},
         "numbers": {"passed": True},
         "attribution": {"passed": True},
-        "entity_accuracy": {"passed": True, "checked_entities": [], "issues": []},
+        "entity_accuracy": {"passed": True, "checked_entities": [
+            {"entity": "嘉宾", "verdict": "correct"}], "issues": []},
         "tts": {"passed": True},
         "publish": {"passed": True},
         "issues": [],

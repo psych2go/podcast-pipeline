@@ -233,6 +233,8 @@ evidence v2，所有待重新发布单集必须先迁移到 evidence v3。
 
 ### 4. AI 审查和确定性质量门
 
+AI 审查入口会先执行只读 `review_preflight`：复用结构、证据、实体、summary map 和 TTS 校验，但延后 AI 审查状态、来源/内容 review 状态等只能由终审产生的字段。预检失败会写入 `review_preflight.json`，并在来源刷新和模型调用前阻断；它不授予发布资格。完整 `quality_report.json` 仍必须在终审后通过。
+
 ```bash
 .venv/bin/python scripts/ai_review.py "content/播客名" --effort max
 .venv/bin/python scripts/quality_report.py "content/播客名"

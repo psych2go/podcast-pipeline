@@ -11,6 +11,27 @@ from scripts.quality_errors import (
 )
 
 
+class ReviewPreflightError(RuntimeError):
+    """Deterministic input blockers detected before any review model call."""
+
+    def __init__(self, report):
+        self.report = report
+        super().__init__("AI 审查前预检未通过: " + "; ".join(
+            f"[{item['code']}] {item['message']}"
+            for item in report["error_details"][:10]))
+
+
+def ensure_review_ready(folder, *, persist=True):
+    """Share strict validators without treating pending review as an error."""
+    from scripts.quality_report import build_review_preflight_report
+    report = build_review_preflight_report(folder)
+    if persist:
+        atomic_write_json(Path(folder) / "review_preflight.json", report)
+    if not report["ready_for_review"]:
+        raise ReviewPreflightError(report)
+    return report
+
+
 def _review_recovery_decision(report):
     details = report.get("error_details")
     if not quality_error_alignment(report):

@@ -14,7 +14,7 @@ from scripts.run_report import RunReport
 
 
 def review():
-    return {"passed": True, "fact_checks": [{
+    payload = {"passed": True, "summary": "综合审查通过", "fact_checks": [{
         "claim": "嘉宾解释一种机制", "parent_claim_id": "U0001-C01",
         "subclaim_id": "U0001-C01-F01", "claim_type": "not_applicable",
         "claim_origin": "speaker_reported", "speaker_role": "guest",
@@ -25,6 +25,23 @@ def review():
         "source_urls": ["https://example.com/research"],
         "checked_at": "2026-01-01", "notes": "限定表述",
     }]}
+    payload.update({
+        "transcript_quality": {"passed": True, "score": 95},
+        "coverage": {"passed": True, "score": 95},
+        "factuality": {"passed": True, "score": 95},
+        "numbers": {"passed": True, "score": 95},
+        "attribution": {"passed": True, "score": 95},
+        "entity_accuracy": {"passed": True, "checked_entities": [
+            {"entity": "嘉宾", "verdict": "correct"}]},
+        "tts": {"passed": True},
+        "publish": {"passed": True},
+        "audit_completion": {
+            "transcript": True, "entities": True,
+            "factuality_numbers": True, "attribution_evidence": True,
+            "coverage": True, "tts": True,
+            "exhaustive_inventory_completed": True},
+    })
+    return payload
 
 
 class ReviewFailureSafetyTests(unittest.TestCase):
@@ -38,7 +55,7 @@ class ReviewFailureSafetyTests(unittest.TestCase):
                     normalize_review_fact_checks(payload)
                     self.assertEqual(item["verdict"], verdict)
 
-    def test_mechanical_retry_cannot_change_semantic_fields(self):
+    def test_mechanical_retry_freezes_semantic_fields(self):
         changes = {"verdict": "supported", "publication_status": "excluded",
                    "source_urls": [], "notes": "替换结论", "checked_at": "2027-01-01"}
         with tempfile.TemporaryDirectory() as td:
@@ -50,14 +67,24 @@ class ReviewFailureSafetyTests(unittest.TestCase):
                         verification_mode="web_spot_check", **{field: value})
                     with mock.patch.object(ai_review, "run_json_task", return_value={
                             "payload": corrected}) as runner:
-                        with self.assertRaisesRegex(ai_review.ReviewContractError, "语义结论"):
-                            ai_review._validate_or_retry_review(Path(td), original,
-                                                               model="test", effort="max")
+                        merged, _audit, _retry = ai_review._validate_or_retry_review(
+                            Path(td), original, model="test", effort="max")
+                    self.assertEqual(
+                        merged["fact_checks"][0][field],
+                        original["fact_checks"][0][field],
+                    )
+                    self.assertEqual(
+                        merged["fact_checks"][0]["verification_mode"],
+                        "web_spot_check",
+                    )
                     self.assertFalse(runner.call_args.kwargs["enable_search"])
 
-    def _run_contract_failure(self, folder, corrected, *, write_error=False):
+    def _run_contract_failure(self, folder, corrected, *, write_error=False,
+                              initial=None):
         stack = ExitStack()
         self.addCleanup(stack.close)
+        # This fixture starts after deterministic readiness, at model output.
+        stack.enter_context(mock.patch.object(ai_review, "ensure_review_ready"))
         stack.enter_context(mock.patch.object(ai_review, "REVIEW_FILES", ()))
         stack.enter_context(mock.patch.object(ai_review, "_prompt", return_value="test review"))
         for name, value in (("reviewed_hashes", {"content_map.json": "abc"}),
@@ -67,7 +94,7 @@ class ReviewFailureSafetyTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(ai_review, name))
         stack.enter_context(mock.patch.object(ai_review, "isolated_review_workspace",
                                               return_value=nullcontext(folder)))
-        result = {"payload": review(), "model": "test", "task_name": "ai_review",
+        result = {"payload": initial or review(), "model": "test", "task_name": "ai_review",
                   "duration_ms": 10, "retry_count": 0}
         retry = corrected if isinstance(corrected, Exception) else {"payload": corrected}
         stack.enter_context(mock.patch.object(ai_review, "run_json_task",
@@ -80,8 +107,10 @@ class ReviewFailureSafetyTests(unittest.TestCase):
     def test_contract_failure_snapshot_links_stage_without_publishing_review(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
+            initial = review()
+            initial["fact_checks"][0]["evidence_segment_ids"] = []
             with self.assertRaises(ai_review.ReviewContractError):
-                self._run_contract_failure(folder, review())
+                self._run_contract_failure(folder, review(), initial=initial)
             report = json.loads((folder / "run_report.json").read_text())
             stage = report["runs"][-1]["stages"][-1]
             self.assertEqual(stage["status"], "failed")
@@ -89,7 +118,7 @@ class ReviewFailureSafetyTests(unittest.TestCase):
             self.assertEqual(path.stem, stage["id"])
             data = json.loads(path.read_text())
             self.assertFalse(data["authoritative"])
-            self.assertEqual(data["original_output"], review())
+            self.assertEqual(data["original_output"], initial)
             self.assertEqual(data["corrected_output"], review())
             self.assertTrue(data["audit"]["initial_errors"])
             self.assertTrue(data["audit"]["final_errors"])

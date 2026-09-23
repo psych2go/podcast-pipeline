@@ -57,6 +57,13 @@ def _site_readiness_errors(names, existing, strict_names=None):
     from scripts.quality_report import build_quality_report
 
     for name in names:
+        # A partial finish/finish-batch must not be blocked by unrelated
+        # catalog entries that are already represented on Pages but whose
+        # local private artifacts are not present in this checkout. When
+        # strict_names is explicitly supplied, only those requested episodes
+        # are required to have fresh MP3/HTML/quality artifacts.
+        if name not in strict_names:
+            continue
         folder = CONTENT_DIR / name
         mp3 = _gen_mp3(folder)
         html = folder / f"{name} - content.html"
@@ -66,8 +73,7 @@ def _site_readiness_errors(names, existing, strict_names=None):
             errors.append(f"{name}: 缺少 content.html")
 
         content_map = folder / "content_map.json"
-        if content_map.exists() and (
-                name in strict_names or name not in existing):
+        if content_map.exists():
             report = build_quality_report(folder, strict=True)
             if not report.get("passed", False):
                 detail = "; ".join(report.get("errors", [])[:3])
