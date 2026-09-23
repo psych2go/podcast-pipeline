@@ -161,6 +161,8 @@ diarization 默认模型为
 
 新本地 ASR revision 使用 `correction_contract_version=1`：纠错按连续 segment 分批返回结构化结果，主流程验证 evidence revision、完整 ID 顺序、源哈希、未解决高风险项和异常删除后，写入 `correction_manifest.json` 并确定性渲染 `转录_纠错.txt`。没有直接听音频的 subagent 不能声称 `human_audio` 验证。历史 revision 继续兼容旧纠错稿，但不会伪造 manifest。
 
+结构化纠错将通过校验的批次保存在本地 `correction_batches/`。后续批次失败后，仍使用同一个 `process.py` 命令重试即可复用已完成批次。缓存绑定完整原始 evidence、纠错提示词、批次输入、schema 和模型环境设置；复用前重新校验 ID 顺序、证据和纠错合同。损坏或过期缓存重新执行，未通过批次不缓存，所有批次完成前不写最终纠错稿或 manifest。
+
 新一期必须建立 evidence v3 台账：
 
 ```bash
@@ -181,6 +183,8 @@ SHA-256。新 evidence revision 同时声明 `source_accountability_contract_ver
 ### 3. 写中文内容
 
 claim evidence 完成后，主脚本先生成 `editorial_fact_checks.json`。该台账逐条覆盖所有非排除 source claim，绑定 `content_map.json` 和实际使用的转录哈希，并把公开实体、医学/法律/金融/政治事实、金额、比例和年份拆成原子核查项。`content_map.json` 始终只表示节目实际说法；外部纠正只能写入该台账，不能混入由 Sxxxx 转录片段锚定的 source claim。台账缺 claim、顺序变化、哈希过期或编辑纠正没有来源 URL 都会阻断质量门。
+
+事实核查批次返回缺项、乱序、改写 source claim 或未声明完成时，重试会带上预期/实际 claim ID 顺序与缺失项，而不是原样重复提示。重试仍有上限，必须完成真实核查，不自动补造结论。
 
 主脚本随后直接加载 `scripts/讲稿提示词.md` 作为唯一写作编辑规则，追加本次输入输出边界后调用 subagent，并要求一次性处理台账中的全部 critical/high/medium 问题。完整性依据源 claim、数字、例子和限定条件覆盖；笔记与讲稿的字数比例仅供观察，不要求为达到比例补写：
 

@@ -469,20 +469,44 @@ def _run_fact_check_batch(
         f"\n本次核查 effort={effort}。"
     )
     last_error = None
-    for attempt in range(1, 3):
+    feedback = ""
+    for attempt in range(1, 5):
         result = run_json_task(
             folder,
-            task,
+            task + feedback,
             LEDGER_SCHEMA,
             task_name=f"prewrite_fact_checks_{batch_index:03d}_{attempt}",
             enable_search=True,
             model=model or None,
             timeout=1800,
         )
-        if _batch_pairs(result["payload"]) == expected_pairs:
+        payload = result.get("payload")
+        actual_pairs = _batch_pairs(payload) if isinstance(payload, dict) else []
+        summary = payload.get("summary") if isinstance(payload, dict) else None
+        exhaustive = (
+            isinstance(summary, dict)
+            and summary.get("exhaustive_inventory_completed") is True
+        )
+        if actual_pairs == expected_pairs and exhaustive:
             return result
+        expected_ids = [parent for parent, _ in expected_pairs]
+        actual_ids = [parent for parent, _ in actual_pairs]
+        mismatches = [
+            parent for parent, text in expected_pairs
+            if (parent, text) not in actual_pairs
+        ]
+        feedback = (
+            "\n\n## 上次输出的确定性合同错误（本次必须修复）\n"
+            + "预期 claim ID 顺序：" + json.dumps(expected_ids) + "\n"
+            + "上次实际 ID 顺序：" + json.dumps(actual_ids) + "\n"
+            + "缺失或 source_claim 不匹配的 ID：" + json.dumps(mismatches) + "\n"
+            + f"完整核查声明有效：{exhaustive}。\n"
+            + "请返回完整本批结果，不要只返回修复项；source_claim 必须逐字对应输入，"
+            "不能合并、遗漏或新增 claim。只有实际完成本批全部核查后，才可设置"
+            " summary.exhaustive_inventory_completed=true；不得为了过合同虚报完成。"
+        )
         last_error = RuntimeError(
-            f"预写作事实台账第 {batch_index} 批未完整覆盖输入 claim")
+            f"预写作事实台账第 {batch_index} 批未完整覆盖输入 claim 或未完成核查")
     raise last_error
 
 

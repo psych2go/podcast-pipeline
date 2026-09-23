@@ -386,8 +386,36 @@ def _structured_correction_ready(folder, raw):
         return False
 
 
+def _load_correction_batch_cache(path, fingerprint, raw, expected_ids):
+    """Reuse only fully validated results for the exact correction inputs."""
+    try:
+        cached = load_json(path)
+        if not isinstance(cached, dict) or cached.get("fingerprint") != fingerprint:
+            return None
+        items = cached.get("segments")
+        if not isinstance(items, list) or not all(isinstance(x, dict) for x in items):
+            return None
+        if [str(x.get("segment_id")) for x in items] != expected_ids:
+            return None
+        if any(x.get("verification") == "human_audio" for x in items):
+            return None
+        if validate_correction_batch(raw, items, expected_ids):
+            return None
+        return items
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
 def _run_structured_correction(folder, raw):
-    """Correct consecutive batches and let deterministic code render text."""
+    """Correct consecutive batches, resuming validated batches after failure."""
+    folder = Path(folder)
+    # Bind the entire evidence revision, not just segment text: timestamps,
+    # speaker assignments and refinement provenance can affect validation.
+    raw_hash = hashlib.sha256(json.dumps(
+        raw, ensure_ascii=False, sort_keys=True,
+    ).encode("utf-8")).hexdigest()
+    schema = batch_output_schema()
+    model = os.environ.get("SUBAGENT_CORRECTION_MODEL", "") or None
     source_segments = [
         segment for segment in raw.get("segments", [])
         if (segment.get("text") or "").strip()
@@ -422,13 +450,32 @@ corrected_text 只包含该 segment 的英文正文，不要写 speaker 标签�
 广告、寒暄、口头语和真实重复也是原音频内容，不得因编辑价值低而删除。
 你没有直接听音频，verification 不得填写 human_audio。普通低风险文字修正可使用 context_only；数字、金额、年份或专名变更必须由已有 refinement 支持并使用 alternate_decode，或经网页核对使用 external_entity_source；否则保留原文并标为 unresolved。
 """
+        fingerprint = hashlib.sha256(json.dumps({
+            "cache_version": 1,
+            "raw_sha256": raw_hash,
+            "runner_settings": {
+                key: os.environ.get(key, "") for key in (
+                    "SUBAGENT_MODEL", "SUBAGENT_PI_PROVIDER", "SUBAGENT_PI_MODEL",
+                    "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL",
+                )
+            },
+            "task": task,
+            "schema": schema,
+            "model": model,
+        }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        cache_path = folder / "correction_batches" / f"{batch_index:03d}.json"
+        cached_items = _load_correction_batch_cache(
+            cache_path, fingerprint, raw, expected_ids)
+        if cached_items is not None:
+            corrected_items.extend(cached_items)
+            continue
         result = run_json_task(
             folder,
             task,
-            batch_output_schema(),
+            schema,
             task_name=f"transcript_correction_{batch_index}",
             enable_search=True,
-            model=os.environ.get("SUBAGENT_CORRECTION_MODEL", "") or None,
+            model=model,
         )
         payload = result.get("payload")
         if not isinstance(payload, dict):
@@ -454,6 +501,12 @@ corrected_text 只包含该 segment 的英文正文，不要写 speaker 标签�
             raise RuntimeError(
                 f"纠错批次 {batch_index} segment 覆盖或顺序不匹配: "
                 f"expected={expected_ids}, actual={actual_ids}")
+        # A later batch may fail. Persist this batch only after all existing
+        # evidence/coverage checks; never publish a partial corrected transcript.
+        atomic_write_json(cache_path, {
+            "fingerprint": fingerprint,
+            "segments": items,
+        })
         corrected_items.extend(items)
     manifest = build_manifest(raw, corrected_items)
     return write_correction_artifacts(folder, raw, manifest)

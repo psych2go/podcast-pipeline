@@ -593,6 +593,73 @@ class CorrectionManifestTests(unittest.TestCase):
             self.assertFalse((Path(td) / "correction_manifest.json").exists())
             self.assertFalse((Path(td) / "转录_纠错.txt").exists())
 
+    @staticmethod
+    def _unchanged_batch(segment):
+        return {"payload": {"segments": [{
+            "segment_id": segment["id"],
+            "corrected_text": segment["text"],
+            "status": "unchanged", "change_types": [],
+            "verification": "not_required", "unresolved": [],
+        }]}}
+
+    def test_correction_resumes_validated_batches_after_failure(self):
+        raw = _raw(2)
+        batches = [[segment] for segment in raw["segments"]]
+        with tempfile.TemporaryDirectory() as td, patch.object(
+                agent_pipeline, "correction_batches", return_value=batches):
+            folder = Path(td)
+            with patch.object(agent_pipeline, "run_json_task", side_effect=[
+                    self._unchanged_batch(raw["segments"][0]),
+                    RuntimeError("provider unavailable"),
+            ]):
+                with self.assertRaisesRegex(RuntimeError, "provider unavailable"):
+                    agent_pipeline._run_structured_correction(folder, raw)
+            self.assertTrue((folder / "correction_batches/001.json").exists())
+            self.assertFalse((folder / "correction_batches/002.json").exists())
+            self.assertFalse((folder / "转录_纠错.txt").exists())
+            with patch.object(agent_pipeline, "run_json_task", return_value=
+                    self._unchanged_batch(raw["segments"][1])) as runner:
+                agent_pipeline._run_structured_correction(folder, raw)
+            self.assertEqual(runner.call_count, 1)
+            self.assertEqual(runner.call_args.kwargs["task_name"], "transcript_correction_2")
+            with patch.object(agent_pipeline, "run_json_task") as runner:
+                agent_pipeline._run_structured_correction(folder, raw)
+            runner.assert_not_called()
+            manifest = json.loads((folder / "correction_manifest.json").read_text())
+            self.assertEqual(validate_correction_manifest(raw, manifest), [])
+
+    def test_correction_cache_invalidates_or_rejects_unsafe_results(self):
+        for change in ("raw", "model", "schema", "corrupt", "human_audio", "missing"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as td:
+                raw = _raw(1)
+                folder = Path(td)
+                with patch.object(agent_pipeline, "run_json_task", return_value=
+                        self._unchanged_batch(raw["segments"][0])):
+                    agent_pipeline._run_structured_correction(folder, raw)
+                cache_path = folder / "correction_batches/001.json"
+                cached = json.loads(cache_path.read_text())
+                if change == "raw":
+                    raw["meta"]["revision_note"] = "new evidence"
+                elif change == "corrupt":
+                    cache_path.write_text("{")
+                elif change in {"human_audio", "missing"}:
+                    if change == "human_audio":
+                        cached["segments"][0]["verification"] = "human_audio"
+                    else:
+                        del cached["segments"][0]["corrected_text"]
+                    cache_path.write_text(json.dumps(cached))
+                schema = agent_pipeline.batch_output_schema()
+                if change == "schema":
+                    schema = dict(schema, description="Updated contract")
+                with patch.dict("os.environ", {
+                        "SUBAGENT_CORRECTION_MODEL": "different-model"
+                    } if change == "model" else {}), patch.object(
+                        agent_pipeline, "batch_output_schema", return_value=schema), patch.object(
+                        agent_pipeline, "run_json_task", return_value=
+                        self._unchanged_batch(raw["segments"][0])) as runner:
+                    agent_pipeline._run_structured_correction(folder, raw)
+                self.assertEqual(runner.call_count, 1)
+
     def test_long_input_batches_preserve_consecutive_order(self):
         segments = [
             {"id": f"S{index:04d}", "text": "x" * 20}

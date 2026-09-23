@@ -14,6 +14,41 @@ from scripts.quality_report import build_quality_report
 
 
 class PrewriteFactCheckTests(unittest.TestCase):
+    def test_batch_retry_explains_missing_claims_and_requires_completion(self):
+        inventory = [{"parent_claim_id": "U0001-C01", "source_claim": "original"}]
+        complete = {"payload": {
+            "claims": inventory,
+            "summary": {"exhaustive_inventory_completed": True},
+        }}
+        incomplete = {"payload": {
+            "claims": inventory,
+            "summary": {"exhaustive_inventory_completed": False},
+        }}
+        with patch.object(prewrite_fact_checks, "_prompt", return_value="research"), patch.object(
+                prewrite_fact_checks, "run_json_task", side_effect=[
+                    {"payload": {"claims": []}}, incomplete, complete,
+                ]) as runner:
+            result = prewrite_fact_checks._run_fact_check_batch(
+                Path("unused"), inventory, "hash", {}, None, "high", 1)
+        self.assertIs(result, complete)
+        self.assertEqual(runner.call_count, 3)
+        feedback = runner.call_args_list[1].args[1]
+        self.assertIn("上次输出的确定性合同错误", feedback)
+        self.assertIn("U0001-C01", feedback)
+        self.assertIn("完整核查声明有效：False", runner.call_args_list[2].args[1])
+        self.assertTrue(all(call.kwargs["enable_search"] for call in runner.call_args_list))
+
+    def test_batch_retry_remains_bounded_and_does_not_bless_incomplete_output(self):
+        inventory = [{"parent_claim_id": "U0001-C01", "source_claim": "original"}]
+        with patch.object(prewrite_fact_checks, "_prompt", return_value="research"), patch.object(
+                prewrite_fact_checks, "run_json_task", return_value={
+                    "payload": {"claims": inventory, "summary": {}},
+                }) as runner:
+            with self.assertRaisesRegex(RuntimeError, "未完成核查"):
+                prewrite_fact_checks._run_fact_check_batch(
+                    Path("unused"), inventory, "hash", {}, None, "high", 1)
+        self.assertEqual(runner.call_count, 4)
+
     def _folder(self, root):
         folder = Path(root)
         (folder / "原始转录.txt").write_text("source transcript", encoding="utf-8")

@@ -72,7 +72,7 @@ episode.json
   └─ 单集 ID、slug、来源、质量和发布状态
 
 transcript.raw.json + 原始转录.txt
-  ├─ correction_manifest.json → 转录_纠错.txt
+  ├─ correction_batches/（校验后断点缓存）→ correction_manifest.json → 转录_纠错.txt
   └─ content_map.json
        └─ claim evidence
             └─ canonical_entities.json
