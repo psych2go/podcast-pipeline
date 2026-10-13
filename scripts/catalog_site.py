@@ -57,6 +57,9 @@ def _site_readiness_errors(names, existing, strict_names=None):
     from scripts.quality_report import build_quality_report
 
     for name in names:
+        # Skip WIP not on the live site and outside this finish/sync scope.
+        if name not in existing and name not in strict_names:
+            continue
         folder = CONTENT_DIR / name
         mp3 = _gen_mp3(folder)
         html = folder / f"{name} - content.html"
@@ -78,11 +81,13 @@ def _site_readiness_errors(names, existing, strict_names=None):
     return errors
 
 def sync_site(only=None, *, strict_names=None):
-    """重建 site.json（全部期），并按需拷贝 content.html 到 site/{name}/。
+    """重建 site.json（已上线期 + 本次纳入期），并按需拷贝 content.html。
 
     保留已有 site.json 里手工精修的 title / source 字段与出现顺序，
     只更新字数/时长，新期追加在末尾。
-    --only 只限制 content.html 的拷贝范围，site.json 始终重建全部期。
+    --only / strict_names 决定哪些尚未上线的 content/ 目录可进入本次候选；
+    未纳入的 WIP 兄弟期不参与就绪检查，也不会写入 site.json。
+    已在 site.json 中的期始终保留并检查产物，避免坏掉的已发布期被静默丢掉。
     """
     existing = {}
     site_json_path = SITE_DIR / "site.json"
@@ -93,11 +98,19 @@ def sync_site(only=None, *, strict_names=None):
         except Exception:
             existing = {}
 
-    names = _ordered_episode_names()
+    if strict_names is None:
+        include = {only} if only else set()
+        strict_names = {only} if only else None
+    else:
+        include = set(strict_names)
+        if only:
+            include.add(only)
+    names = _ordered_episode_names(include=include)
     if only and only not in names:
         sys.exit(f"[错误] 找不到播客目录（或没有讲稿）: {only}")
     if strict_names is None:
-        strict_names = {only} if only else set(names)
+        # Full refresh of the live catalog: every listed episode is strict.
+        strict_names = set(names)
     readiness_errors = _site_readiness_errors(
         names, existing, strict_names=strict_names)
     if readiness_errors:
@@ -122,7 +135,7 @@ def sync_site(only=None, *, strict_names=None):
                 atomic_write_bytes(
                     destination / "content.html", html.read_bytes())
 
-    # 重建 site.json（始终覆盖全部期）
+    # 重建 site.json（已上线期 + 本次 include 的新期）
     eps = [_build_entry(name, existing.get(name, {})) for name in names]
 
     SITE_DIR.mkdir(parents=True, exist_ok=True)

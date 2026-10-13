@@ -74,7 +74,14 @@ def _live_tts_manifest_validator():
     return module.validate_tts_manifest
 
 
+def _wrangler_bin():
+    """Prefer PATH wrangler (avoids npx hitting unwritable /node_modules cache)."""
+    import shutil
+    found = shutil.which("wrangler")
+    return [found] if found else ["npx", "wrangler"]
+
 def _is_wrangler_command(cmd):
+
     return any(Path(str(part)).name == "wrangler" for part in cmd)
 
 def _dotenv_assignments(path):
@@ -239,7 +246,8 @@ def _candidate_catalog_errors(name):
         for entry in entries
         if entry.get("folder")
     }
-    names = _ordered_episode_names()
+    # Only the live site set plus this finish target — ignore WIP siblings.
+    names = _ordered_episode_names(include={name})
     errors = []
     if name not in names:
         errors.append(f"{name}: 候选目录中找不到目标单集")
@@ -381,7 +389,7 @@ def _finish_impl(name, dry_run, run_report):
             candidate_errors = _candidate_catalog_errors(name)
             stage.metrics["error_count"] = len(candidate_errors)
             stage.metrics["candidate_episode_count"] = len(
-                _ordered_episode_names())
+                _ordered_episode_names(include={name}))
             if candidate_errors:
                 for error in candidate_errors:
                     print(f"[dry-run][阻断] {error}")
@@ -399,7 +407,7 @@ def _finish_impl(name, dry_run, run_report):
                 "project": PAGES_PROJECT,
         }):
             _run_with_output(
-                ["npx", "wrangler", "pages", "deploy", ".",
+                [*_wrangler_bin(), "pages", "deploy", ".",
                  "--project-name", PAGES_PROJECT, "--branch", "main"],
                 cwd=SITE_DIR, dry_run=True,
             )
@@ -456,7 +464,7 @@ def _finish_impl(name, dry_run, run_report):
     }) as stage:
         print("[部署] Pages 部署 ...")
         deployed, deploy_output = _run_with_output(
-            ["npx", "wrangler", "pages", "deploy", ".",
+            [*_wrangler_bin(), "pages", "deploy", ".",
              "--project-name", PAGES_PROJECT, "--branch", "main"],
             cwd=SITE_DIR, dry_run=False,
         )
@@ -536,7 +544,7 @@ def _upload_r2_item(item, dry_run=False):
     print(f"[R2] 上传 {item['mp3'].name} 到 R2 ...")
     return _run(
         [
-            "npx", "wrangler", "r2", "object", "put",
+            *_wrangler_bin(), "r2", "object", "put",
             f"{R2_BUCKET}/{item['key']}",
             "--file", str(item["mp3"]),
             "--content-type", "audio/mpeg", "--remote",
@@ -604,7 +612,7 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
             _upload_r2_item(item, dry_run=True)
         _run_with_output(
             [
-                "npx", "wrangler", "pages", "deploy", ".",
+                *_wrangler_bin(), "pages", "deploy", ".",
                 "--project-name", PAGES_PROJECT, "--branch", "main",
             ],
             cwd=SITE_DIR,
@@ -688,7 +696,7 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
     print(f"[部署] Pages 批量部署 {len(items)} 期 ...")
     deployed, deploy_output = _run_with_output(
         [
-            "npx", "wrangler", "pages", "deploy", ".",
+            *_wrangler_bin(), "pages", "deploy", ".",
             "--project-name", PAGES_PROJECT, "--branch", "main",
         ],
         cwd=SITE_DIR,

@@ -97,10 +97,15 @@ def validate_and_fix(text, return_details=False):
 # ── 结构体检（只报告，不自动修改）────────────────────────────────
 
 # 章节粒度阈值（与 讲稿提示词.md 的"章节粒度"一节保持一致）
-MIN_CHAPTER_CHARS = 400      # 碎片章阈值（中文字数，不含标题）
+MIN_CHAPTER_CHARS = 400      # 碎片章阈值（中文字数，不含标题）；merge/split 仍用此值
 MAX_CHAPTER_CHARS = 1000     # 超长章阈值（中文字数，不含标题）
 MAX_CHAPTERS = 25            # 章节数上限（防过度碎片化）
 MIN_INTRODUCTION_CHARS = 40  # 引言段最少中文字数
+# 深度 / 反贴地板门禁（与碎片阈值分离）：
+# 健康加厚期章均约 550–670 字；520 略低于健康下沿，挡住系统性灌水贴 400。
+# FLOOR_BAND_MAX=480 为「合法但过薄」上沿；多数章节落在 [400, 480] 即贴地板。
+TARGET_MIN_CHAPTER_CHARS = 520
+FLOOR_BAND_MAX = 480
 
 
 def _zh_chars(s):
@@ -231,10 +236,17 @@ def _summary_chapter(summary_map, title):
     return None
 
 
-def _merge_summary_chapters(summary_map, left_title, right_title):
+def _merge_summary_chapters(summary_map, left_title, right_title, left_index=None):
     left = _summary_chapter(summary_map, left_title)
     right = _summary_chapter(summary_map, right_title)
-    if not left or not right:
+    chapters = summary_map.get("chapters", []) or []
+    if (not left or not right) and left_index is not None:
+        # Title-keyed lookup can miss when summary map is already desynced;
+        # fall back to contiguous indices matching the briefing merge.
+        if 0 <= left_index < len(chapters) - 1:
+            left = chapters[left_index]
+            right = chapters[left_index + 1]
+    if not left or not right or left is right:
         return
     for key in ("unit_ids", "claim_ids"):
         left[key] = list(dict.fromkeys(
@@ -288,7 +300,7 @@ def normalize_briefing_artifacts(text, summary_map):
         right = chapters[right_index]
         left["body"] = (left["body"] + "\n\n" + right["body"]).strip()
         _merge_summary_chapters(
-            summary_map, left["title"], right["title"])
+            summary_map, left["title"], right["title"], left_index=left_index)
         chapters.pop(right_index)
         merged = True
     if merged:
@@ -357,10 +369,11 @@ def structure_report(text):
     检查项：
       1. 引言段缺失或过短
       2. 章节粒度（碎片章 <400 / 超长章 >1000）
-      3. 章节数过多（>25）
-      4. 正文残留 SPEAKER_XX 标签
-      5. 中文间夹英文空格（如 "是 一家"）
-      6. 章节标题带括号/编号
+      3. 深度/反贴地板（章均 <520，或多数章落在 400–480）
+      4. 章节数过多（>25）
+      5. 正文残留 SPEAKER_XX 标签
+      6. 中文间夹英文空格（如 "是 一家"）
+      7. 章节标题带括号/编号
     """
     warns = []
     preamble, chapters = _split_chapters(text)
@@ -372,10 +385,11 @@ def structure_report(text):
         warns.append(
             f"引言段过短（{_zh_chars(preamble)}字，建议 50–100 字）")
 
-    # 2-3. 章节粒度 + 章节数
+    # 2-3. 章节粒度 + 章节数 + 深度/反贴地板
     if not chapters:
         warns.append("未检测到任何 ## 章节")
     else:
+        sizes = [n for _title, n in chapters]
         for title, n in chapters:
             if n < MIN_CHAPTER_CHARS:
                 warns.append(f"碎片章（{n}字 < {MIN_CHAPTER_CHARS}）：{title}")
@@ -384,6 +398,23 @@ def structure_report(text):
         if len(chapters) > MAX_CHAPTERS:
             warns.append(
                 f"章节数偏多（{len(chapters)} 章 > {MAX_CHAPTERS}），注意粒度")
+        mean_chars = sum(sizes) / len(sizes)
+        if mean_chars < TARGET_MIN_CHAPTER_CHARS:
+            warns.append(
+                f"章均过浅（{mean_chars:.0f}字 < {TARGET_MIN_CHAPTER_CHARS}，"
+                f"反贴地板；请补实质论证，禁止套话凑字）"
+            )
+        floor_hugging = sum(
+            1 for n in sizes
+            if MIN_CHAPTER_CHARS <= n <= FLOOR_BAND_MAX
+        )
+        if floor_hugging * 2 > len(sizes):
+            warns.append(
+                f"章节贴地板（{floor_hugging}/{len(sizes)} 章落在 "
+                f"{MIN_CHAPTER_CHARS}–{FLOOR_BAND_MAX} 字；"
+                f"多数章过薄，请按完整话题加厚到约 "
+                f"{TARGET_MIN_CHAPTER_CHARS}+ 字）"
+            )
 
     # 4. SPEAKER 残留
     if re.search(r"SPEAKER_\d+", text):

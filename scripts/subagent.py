@@ -4,6 +4,11 @@ The pipeline owns orchestration and validation.  Subagents may either return a
 structured JSON result or edit a narrowly scoped set of files.  The default
 runner is ``codex exec``; callers can replace it with a compatible command via
 ``SUBAGENT_COMMAND`` without changing pipeline code.
+
+Failover env (no secrets here): ``SUBAGENT_COMMAND``, ``SUBAGENT_FALLBACK_COMMAND``,
+``SUBAGENT_MODEL`` / provider model chain, and the chat shim's provider base URL /
+``MODEL_FALLBACK``. Billing/quota/429/1113-style failures should trigger the next
+configured model or command when fallback is set.
 """
 import hashlib
 import copy
@@ -51,6 +56,17 @@ def _runner_failure(stderr, stdout):
             continue
         if not line.startswith("ERROR:"):
             continue
+        # Billing / quota exhaustion should fail over to the next model/command
+        # when SUBAGENT_FALLBACK_COMMAND or model chain is configured.
+        if (
+            '"code":"1113"' in line
+            or "Insufficient balance" in line
+            or "余额不足" in line
+            or "quota" in line.lower()
+        ):
+            status_match = re.search(r"HTTP(?: status)?[: ]+\s*(429|\d{3})\b", line)
+            status = int(status_match[1]) if status_match else 429
+            return "billing", status
         match = re.search(r"(?:last status:|HTTP(?: status)?[: ]+)\s*(401|403|429|5\d\d)\b", line)
         if match:
             status = int(match[1])
@@ -58,6 +74,17 @@ def _runner_failure(stderr, stdout):
                 "authentication" if status in {401, 403} else "server_error")
             return kind, status
     return "unknown", None
+
+
+def _model_fallback_allowed(exc):
+    """Return True when the failure kind should try the next model/command."""
+    failure_kind = (getattr(exc, "failure_metrics", None) or {}).get(
+        "failure_kind")
+    return failure_kind in {
+        "model_not_found", "authentication", "timeout", "schema",
+        "empty_output", "overloaded", "rate_limit", "billing",
+        "network", "server_error",
+    }
 
 
 _SAFE_CODEX_CONFIG_KEYS = frozenset({

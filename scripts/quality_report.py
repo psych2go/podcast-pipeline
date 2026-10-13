@@ -905,8 +905,8 @@ def build_quality_report(folder, strict=True, *, today=None):
                 report["warnings"].extend(notes_audit_issues)
             if briefing and ratio < MIN_NOTES_TO_BRIEFING_RATIO:
                 report["warnings"].append(
-                    "完整笔记与精编讲稿字数接近；"
-                    "发布依据改为 notes_claim_coverage，字数比例仅供观察："
+                    "完整笔记与精编讲稿字数接近（仅警告，不阻断）；"
+                    "请靠主张覆盖与章节深度补实质，禁止套话灌水："
                     f"{ratio:.2f} < {MIN_NOTES_TO_BRIEFING_RATIO:.2f}"
                 )
 

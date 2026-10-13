@@ -148,7 +148,7 @@ def add_to_catalog(name):
         raise SystemExit(f"[错误] 找不到播客目录: {folder}")
     if not _find_briefing(folder):
         raise SystemExit(f"[错误] 找不到讲稿: {folder}")
-    return rebuild_catalog()
+    return rebuild_catalog(include={name})
 
 def _load_site_entries():
     path = SITE_DIR / "site.json"
@@ -172,7 +172,17 @@ def _episode_dirs():
     return names
 
 
-def _ordered_episode_names():
+def _ordered_episode_names(include=None):
+    """Return site/catalog episode order.
+
+    Episodes already listed in site.json stay in order (if their content
+    folder still has a briefing). New WIP folders under content/ are omitted
+    unless named in ``include`` (finish / sync --only / strict_names), so
+    finishing one ready episode is not blocked by unfinished siblings.
+    Already-published siblings remain visible so broken live artifacts still
+    fail readiness instead of silently disappearing.
+    """
+    include = {name for name in (include or ()) if name}
     available = _episode_dirs()
     available_set = set(available)
     ordered = []
@@ -180,7 +190,11 @@ def _ordered_episode_names():
         name = entry.get("folder")
         if name in available_set and name not in ordered:
             ordered.append(name)
-    ordered.extend(name for name in available if name not in ordered)
+    for name in available:
+        if name in ordered:
+            continue
+        if name in include:
+            ordered.append(name)
     return ordered
 
 def _catalog_text(names):
@@ -194,9 +208,9 @@ def _catalog_text(names):
         )
     return CATALOG_HEADER + "\n".join(rows) + ("\n" if rows else "")
 
-def rebuild_catalog():
+def rebuild_catalog(include=None):
     """从 episode/content/site 顺序全量重建播客台账。"""
-    names = _ordered_episode_names()
+    names = _ordered_episode_names(include=include)
     CATALOG.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(CATALOG, _catalog_text(names))
     print(f"[台账] 已全量重建 {len(names)} 期 → {CATALOG.name}")
