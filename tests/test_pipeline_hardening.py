@@ -30,7 +30,18 @@ from scripts.content_map import (
     validate_content_map,
     validate_summary_map,
 )
-from scripts.validator import integer_to_chinese, normalize_briefing_artifacts
+from scripts.validator import (
+    FLOOR_BAND_MAX,
+    MIN_CHAPTER_CHARS,
+    MAX_CHAPTER_CHARS,
+    TARGET_MIN_CHAPTER_CHARS,
+    integer_to_chinese,
+    normalize_briefing_artifacts,
+    structure_report,
+)
+from scripts import catalog_core, catalog_site
+from scripts.quality_report import build_quality_report
+from scripts.subagent import SubagentError, _model_fallback_allowed, _runner_failure
 
 
 class DeterministicPreReviewTests(unittest.TestCase):
@@ -879,6 +890,218 @@ class ArtifactNormalizationTests(unittest.TestCase):
             fixed_summary["chapters"][0]["body_sha256"],
             body_sha256(body),
         )
+
+
+
+class ChapterDepthGateTests(unittest.TestCase):
+    def _briefing(self, sizes, preamble=None):
+        preamble = preamble or (
+            "这是一个足够长的全局导览，用来说明本期主线、争议焦点和收听价值。"
+        )
+        parts = [preamble]
+        for index, size in enumerate(sizes, start=1):
+            parts.append(f"## 章节{index}\n\n" + ("论" * size))
+        return "\n\n".join(parts)
+
+    def test_floor_hugging_chapters_fail_structure_and_strict_quality(self):
+        # Majority in [400, 480], mean also below 520.
+        briefing = self._briefing([420, 430, 410, 440])
+        warnings = structure_report(briefing)
+        self.assertTrue(any("贴地板" in w for w in warnings))
+        self.assertTrue(any("章均过浅" in w for w in warnings))
+
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "讲书稿.md").write_text(briefing, encoding="utf-8")
+            report = build_quality_report(folder, strict=True)
+            joined = "\n".join(report.get("errors", []))
+            self.assertIn("贴地板", joined)
+            self.assertFalse(report.get("passed", True))
+
+    def test_healthy_mean_chapters_pass_depth_gate(self):
+        briefing = self._briefing([560, 600, 620, 580])
+        warnings = structure_report(briefing)
+        self.assertFalse(any("贴地板" in w for w in warnings))
+        self.assertFalse(any("章均过浅" in w for w in warnings))
+        self.assertGreaterEqual(
+            sum([560, 600, 620, 580]) / 4, TARGET_MIN_CHAPTER_CHARS)
+
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "讲书稿.md").write_text(briefing, encoding="utf-8")
+            report = build_quality_report(folder, strict=True)
+            depth_errors = [
+                error for error in report.get("errors", [])
+                if "贴地板" in error or "章均过浅" in error
+            ]
+            self.assertEqual(depth_errors, [])
+
+    def test_fragment_below_min_still_warned(self):
+        briefing = self._briefing([200, 600, 600])
+        warnings = structure_report(briefing)
+        self.assertTrue(any("碎片章" in w for w in warnings))
+        self.assertTrue(any(f"< {MIN_CHAPTER_CHARS}" in w for w in warnings))
+
+    def test_fragment_merge_threshold_unchanged(self):
+        # normalize_briefing_artifacts only merges while chapter count > 3.
+        briefing = (
+            "这是一个足够长的全局导览，用来说明整集内容和核心问题。"
+            "\n\n## 短章\n\n" + ("短" * 120)
+            + "\n\n## 邻章\n\n" + ("长" * 500)
+            + "\n\n## 中章\n\n" + ("中" * 500)
+            + "\n\n## 尾章\n\n" + ("尾" * 500)
+        )
+        summary = {
+            "chapters": [
+                {"title": "短章", "unit_ids": ["U0001"], "claim_ids": ["U0001-C01"]},
+                {"title": "邻章", "unit_ids": ["U0002"], "claim_ids": ["U0002-C01"]},
+                {"title": "中章", "unit_ids": ["U0003"], "claim_ids": ["U0003-C01"]},
+                {"title": "尾章", "unit_ids": ["U0004"], "claim_ids": ["U0004-C01"]},
+            ],
+        }
+        fixed, _summary, changes = normalize_briefing_artifacts(briefing, summary)
+        self.assertIn("merged_fragment_chapters", changes)
+        # Fragment merges into the left neighbor title; the short body is gone
+        # as a standalone chapter heading pair with only 120 chars.
+        self.assertNotIn("## 邻章", fixed)
+        self.assertEqual(fixed.count("\n## "), 3)
+
+    def test_finalizer_split_still_respects_min_max(self):
+        self.assertEqual(MIN_CHAPTER_CHARS, 400)
+        self.assertEqual(MAX_CHAPTER_CHARS, 1000)
+        self.assertEqual(TARGET_MIN_CHAPTER_CHARS, 520)
+        self.assertEqual(FLOOR_BAND_MAX, 480)
+        briefing = (
+            "这是一个足够长的全局导览，用来说明全篇结构和核心问题。\n\n"
+            "## 长转折\n\n"
+            + ("甲" * 520)
+            + "\n\n"
+            + ("乙" * 520)
+        )
+        summary = {
+            "schema_version": 2,
+            "chapters": [{
+                "title": "长转折",
+                "unit_ids": ["U0001", "U0002"],
+                "claim_ids": ["U0001-C01", "U0002-C01"],
+            }],
+        }
+        finalized, aligned, changes = finalize_content_artifacts(
+            briefing, summary)
+        self.assertIn("split_long_chapters", changes)
+        bodies = [
+            chapter.split("\n\n", 1)[1]
+            for chapter in finalized.split("\n\n## ")[1:]
+        ]
+        # After split each side should stay within the merge/split band.
+        from scripts.validator import _zh_chars
+        for body in bodies:
+            n = _zh_chars(body)
+            self.assertGreaterEqual(n, MIN_CHAPTER_CHARS)
+            self.assertLessEqual(n, MAX_CHAPTER_CHARS)
+
+
+class FinishIsolationTests(unittest.TestCase):
+    def _episode(self, content, name, *, briefing=True, mp3=False, html=False):
+        folder = content / name
+        folder.mkdir(parents=True, exist_ok=True)
+        if briefing:
+            (folder / "讲书稿.md").write_text("正文内容", encoding="utf-8")
+        if mp3:
+            (folder / f"{name}.mp3").write_bytes(b"x" * 2048)
+        if html:
+            (folder / f"{name} - content.html").write_text(
+                "<html></html>", encoding="utf-8")
+        return folder
+
+    def test_sync_only_ignores_wip_sibling_without_mp3(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            content = root / "content"
+            site = root / "site"
+            site.mkdir(parents=True)
+            self._episode(content, "Ready", mp3=True, html=True)
+            self._episode(content, "WIP", mp3=False, html=False)
+            (site / "site.json").write_text("[]", encoding="utf-8")
+            (content / "Ready" / "content_map.json").write_text(
+                "{}", encoding="utf-8")
+
+            with patch.object(catalog_core, "CONTENT_DIR", content), \
+                    patch.object(catalog_core, "SITE_DIR", site), \
+                    patch.object(catalog_site, "CONTENT_DIR", content), \
+                    patch.object(catalog_site, "SITE_DIR", site), \
+                    patch(
+                        "scripts.quality_report.build_quality_report",
+                        return_value={"passed": True, "errors": []},
+                    ), \
+                    patch.object(
+                        catalog_site, "episode_stats",
+                        return_value={"chars": 1000, "duration": 10},
+                    ), \
+                    patch.object(
+                        catalog_core, "episode_stats",
+                        return_value={"chars": 1000, "duration": 10},
+                    ):
+                names = catalog_core._ordered_episode_names(include={"Ready"})
+                self.assertEqual(names, ["Ready"])
+                self.assertNotIn(
+                    "WIP", catalog_core._ordered_episode_names())
+                errors = catalog_site._site_readiness_errors(
+                    ["Ready", "WIP"], existing={}, strict_names={"Ready"})
+                self.assertFalse(any("WIP" in error for error in errors))
+                catalog_site.sync_site(only="Ready")
+                entries = catalog_core._load_site_entries()
+                self.assertEqual(
+                    [entry["folder"] for entry in entries], ["Ready"])
+
+    def test_sync_still_fails_when_published_sibling_broken(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            content = root / "content"
+            site = root / "site"
+            site.mkdir(parents=True)
+            self._episode(content, "LiveBroken", mp3=False, html=False)
+            self._episode(content, "Ready", mp3=True, html=True)
+            (content / "Ready" / "content_map.json").write_text(
+                "{}", encoding="utf-8")
+            (site / "site.json").write_text(
+                json.dumps([{"folder": "LiveBroken", "duration": 1, "words": 1}]),
+                encoding="utf-8",
+            )
+            with patch.object(catalog_core, "CONTENT_DIR", content), \
+                    patch.object(catalog_core, "SITE_DIR", site), \
+                    patch.object(catalog_site, "CONTENT_DIR", content), \
+                    patch.object(catalog_site, "SITE_DIR", site), \
+                    patch(
+                        "scripts.quality_report.build_quality_report",
+                        return_value={"passed": True, "errors": []},
+                    ):
+                with self.assertRaises(SystemExit) as ctx:
+                    catalog_site.sync_site(only="Ready")
+                self.assertIn("未就绪", str(ctx.exception))
+                errors = catalog_site._site_readiness_errors(
+                    catalog_core._ordered_episode_names(include={"Ready"}),
+                    existing={"LiveBroken": {}},
+                    strict_names={"Ready"},
+                )
+                self.assertTrue(any("LiveBroken" in error for error in errors))
+                # site.json must remain unchanged (sync aborted)
+                entries = json.loads(
+                    (site / "site.json").read_text(encoding="utf-8"))
+                self.assertEqual(entries[0]["folder"], "LiveBroken")
+
+
+class BackendFailoverTests(unittest.TestCase):
+    def test_billing_quota_errors_allow_model_fallback(self):
+        kind, status = _runner_failure(
+            'ERROR: HTTP 429: {"code":"1113"} 余额不足', "")
+        self.assertEqual(kind, "billing")
+        self.assertEqual(status, 429)
+        self.assertTrue(_model_fallback_allowed(
+            SubagentError("x", metrics={"failure_kind": "billing"})))
+        self.assertTrue(_model_fallback_allowed(
+            SubagentError("x", metrics={"failure_kind": "rate_limit"})))
+
 
 
 class WranglerIsolationTests(unittest.TestCase):
