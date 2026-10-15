@@ -1059,7 +1059,8 @@ def _run(
                                     if s.startswith("ERROR:") or s.startswith("codex_chat_shim:"):
                                         diag.append(s[:240])
                             if not diag:
-                                tail = ((result.stderr or "") + (result.stdout or ""))[-400:].strip()
+                                combined = (result.stderr or "") + (result.stdout or "")
+                                tail = combined[-400:].strip()
                                 if tail:
                                     diag.append("tail:" + tail.replace("\n", " ")[:240])
                             if diag:

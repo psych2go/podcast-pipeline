@@ -26,7 +26,8 @@ class PiContractTests(unittest.TestCase):
     def test_extract_final_text_and_unicode_separators(self):
         text = 'hello\u2028world\u2029!'
         self.assertEqual(subagent._extract_pi_response(event(text)), text)
-        self.assertEqual(subagent._extract_pi_response(event('first') + '\n' + event('last')), 'last')
+        extracted = subagent._extract_pi_response(event('first') + '\n' + event('last'))
+        self.assertEqual(extracted, 'last')
 
     def test_extract_empty_event_stream_is_not_output(self):
         for output in ('{"type":"session"}', event(),
@@ -123,8 +124,12 @@ class PiContractTests(unittest.TestCase):
                 patch.object(subagent, '_run_process', return_value=SimpleNamespace(
                     returncode=0, stdout=event('{"ok":"wrong"}'), stderr='')):
             with self.assertRaises(subagent.SubagentError) as raised:
-                subagent.run_json_task(tmp, 'task', {'type': 'object',
-                    'properties': {'ok': {'type': 'boolean'}}, 'required': ['ok']}, task_name='test')
+                schema = {
+                    'type': 'object',
+                    'properties': {'ok': {'type': 'boolean'}},
+                    'required': ['ok'],
+                }
+                subagent.run_json_task(tmp, 'task', schema, task_name='test')
             self.assertEqual(raised.exception.failure_metrics['failure_kind'], 'schema')
 
     def test_authentication_failure_keeps_codex_fallback(self):
@@ -191,8 +196,8 @@ class FinalizerReliabilityTests(unittest.TestCase):
                 _realign_summary_to_titles(self.chapters(), titles)
 
     def test_finalize_depth_and_audit_fail_before_writing(self):
-        for body, error in [('甲' * 430, '章节深度'),
-                            ('本稿核查通过，按审查意见删除精确金额。' + '甲' * 550, '审查过程语言')]:
+        audit_leak = '本稿核查通过，按审查意见删除精确金额。' + '甲' * 550
+        for body, error in [('甲' * 430, '章节深度'), (audit_leak, '审查过程语言')]:
             with self.subTest(error=error), tempfile.TemporaryDirectory() as tmp:
                 folder = Path(tmp)
                 text = '导览' * 30 + '\n\n## A\n\n' + body
@@ -228,11 +233,24 @@ class BatchReliabilityTests(unittest.TestCase):
                                 '_run_with_output': (True, '')}.items():
                 stack.enter_context(patch.object(catalog_publish, name, return_value=value))
             stack.enter_context(patch.object(catalog_publish, 'R2_PUBLIC_URL', 'https://audio.example'))
-            stack.enter_context(patch.object(catalog_publish, '_batch_publish_item', side_effect=items))
-            verify = stack.enter_context(patch.object(catalog_publish, '_verify_publish_with_retry',
-                side_effect=[{'passed': True}, RuntimeError('endpoint unavailable'), {'passed': True}]))
-            stack.enter_context(patch.object(catalog_publish, 'write_publish_report',
-                side_effect=lambda path, report: saved.update({path.parent.name: copy.deepcopy(report)})))
+            stack.enter_context(patch.object(
+                catalog_publish, '_batch_publish_item', side_effect=items))
+            verify_effects = [
+                {'passed': True},
+                RuntimeError('endpoint unavailable'),
+                {'passed': True},
+            ]
+            verify = stack.enter_context(patch.object(
+                catalog_publish,
+                '_verify_publish_with_retry',
+                side_effect=verify_effects,
+            ))
+
+            def _save_report(path, report):
+                saved[path.parent.name] = copy.deepcopy(report)
+
+            stack.enter_context(patch.object(
+                catalog_publish, 'write_publish_report', side_effect=_save_report))
             self.assertFalse(catalog_publish._finish_batch_impl(['one', 'two', 'three']))
             self.assertEqual(verify.call_count, 3)
             self.assertEqual(saved['two']['failed_stage'], 'verify_publish')
