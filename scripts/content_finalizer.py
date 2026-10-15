@@ -11,6 +11,7 @@ from scripts.validator import (
     MIN_CHAPTER_CHARS,
     audit_narration_issues,
     normalize_briefing_artifacts,
+    structure_report,
 )
 
 
@@ -189,6 +190,8 @@ def rebalance_long_chapters(briefing_text, summary_map):
 def _merge_trailing_conclusion(chapters):
     if len(chapters) < 2:
         return False
+    if not all(isinstance(chapter, dict) for chapter in chapters):
+        raise ContentFinalizationError("summary_map 章节必须是对象")
     trailing = str(chapters[-1].get("title", ""))
     if not re.search(r"结语|结论|总结|回到主线|谨慎乐观", trailing):
         return False
@@ -202,6 +205,32 @@ def _merge_trailing_conclusion(chapters):
     return True
 
 
+def _realign_summary_to_titles(chapters, titles):
+    """Recover contiguous chapter merges only; never guess evidence allocation."""
+    if not all(isinstance(chapter, dict) for chapter in chapters):
+        raise ContentFinalizationError("summary_map 章节必须是对象")
+    old_titles = [chapter.get("title") for chapter in chapters]
+    if (not titles or len(set(old_titles)) != len(old_titles)
+            or len(set(titles)) != len(titles)
+            or any(title not in old_titles for title in titles)):
+        raise ContentFinalizationError("无法安全重排 summary_map：需要唯一且匹配的章节标题")
+    anchors = [old_titles.index(title) for title in titles]
+    if anchors[0] != 0 or anchors != sorted(anchors):
+        raise ContentFinalizationError("无法安全重排 summary_map：章节顺序不一致")
+    rebuilt = []
+    for index, start in enumerate(anchors):
+        end = anchors[index + 1] if index + 1 < len(anchors) else len(chapters)
+        chapter = copy.deepcopy(chapters[start])
+        for key in ("unit_ids", "claim_ids"):
+            chapter[key] = list(dict.fromkeys(
+                item for source in chapters[start:end]
+                for item in (source.get(key) or [])
+            ))
+        chapter.pop("body_sha256", None)
+        rebuilt.append(chapter)
+    return rebuilt
+
+
 def synchronize_summary_chapters(briefing_text, summary_map):
     """Align summary chapter titles to the canonical briefing order."""
     result = normalize_summary_claim_ids(copy.deepcopy(summary_map))
@@ -212,10 +241,10 @@ def synchronize_summary_chapters(briefing_text, summary_map):
     while len(chapters) > len(titles) and _merge_trailing_conclusion(chapters):
         pass
     if len(chapters) != len(titles):
-        raise ContentFinalizationError(
-            "讲稿与 summary_map 章节数量不一致: "
-            f"briefing={len(titles)}, summary={len(chapters)}"
-        )
+        # Recovery path: fragment merges can desync title-keyed summary maps.
+        # Rebuild to match the briefing titles while preserving evidence IDs.
+        chapters = _realign_summary_to_titles(chapters, titles)
+        result["chapters"] = chapters
     for title, chapter in zip(titles, chapters, strict=True):
         if not isinstance(chapter, dict):
             raise ContentFinalizationError("summary_map 章节必须是对象")
@@ -373,6 +402,13 @@ def finalize_content_package(folder):
             raise ContentFinalizationError(
                 "完整笔记包含面向内部的审查过程语言: "
                 + "; ".join(notes_audit_issues[:5]))
+    depth_issues = [warning for warning in structure_report(briefing)
+                    if warning.startswith(("碎片章", "超长章", "章均过浅", "章节贴地板",
+                                           "未检测到任何"))]
+    if depth_issues:
+        raise ContentFinalizationError(
+            "讲稿章节深度未通过（需按证据补实质论证，不自动凑字）: "
+            + "; ".join(depth_issues))
     atomic_write_text(briefing_path, briefing)
     atomic_write_json(summary_path, summary)
 

@@ -153,6 +153,11 @@ class SubagentIsolationRegressionTests(unittest.TestCase):
                 "FISH_KEY": "tts-secret",
                 "HF_TOKEN": "hf-secret",
                 "CLOUDFLARE_API_TOKEN": "cf-secret",
+                # Local .env may list pipeline secrets in the allowlist; the
+                # runner must still refuse them. Keep ZAI_API_KEY allowed.
+                "SUBAGENT_ENV_ALLOWLIST": (
+                    "HF_TOKEN,FISH_KEY,CLOUDFLARE_API_TOKEN,ZAI_API_KEY"
+                ),
             }, clear=False):
                 env = subagent._runner_environment(
                     root / "tmp", ["/usr/bin/codex", "exec"])

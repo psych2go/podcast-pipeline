@@ -118,16 +118,18 @@ class SubagentIsolationTests(unittest.TestCase):
                 "CODEX_HOME": str(source_home),
                 "SUBAGENT_COMMAND": "codex",
                 "SUBAGENT_MAX_RETRIES": "0",
+                "SUBAGENT_MODEL_CHAIN": "",
+                "SUBAGENT_MODEL": "",
             }
             with patch.dict(os.environ, {
-                    **base_env, "SUBAGENT_MODEL": "glm-5.3-flash"}, clear=False), \
+                    **base_env, "SUBAGENT_MODEL": "gpt-test"}, clear=False), \
                     patch("scripts.subagent.shutil.which", return_value="/bin/codex"), \
                     patch("scripts.subagent._run_process", side_effect=fake_process):
                 subagent._run(episode, "task", task_name="env_model")
                 self.assertIn("--model", observed["cmd"])
                 self.assertEqual(
                     observed["cmd"][observed["cmd"].index("--model") + 1],
-                    "glm-5.3-flash")
+                    "gpt-test")
                 # An explicit per-task model wins over the global fallback.
                 subagent._run(
                     episode, "task", task_name="explicit_model",

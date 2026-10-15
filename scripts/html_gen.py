@@ -736,6 +736,18 @@ body:not(.toc-hidden) main { width: min(calc(100% - 3rem), 70rem); margin-inline
     font-size: 0.75rem;
 }
 
+.page-footer .footer-icp {
+    margin: 0.75rem 0 0;
+}
+.page-footer .footer-icp a {
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-weight: 400;
+}
+.page-footer .footer-icp a:hover {
+    text-decoration: underline;
+}
+
 @media (min-width: 1101px) {
     .toc-hidden .toc { transform: translateX(calc(100% + 2rem)); }
     .toc-overlay { display: none !important; }
@@ -921,6 +933,7 @@ body:not(.toc-hidden) main { width: min(calc(100% - 3rem), 70rem); margin-inline
     <footer class="page-footer">
         <a href="../"><span aria-hidden="true">←</span> 返回全部节目</a>
         <p>播客中的观点不代表本站立场。中文内容用于学习与信息整理，事实与动态数据以原始来源为准。</p>
+        <p class="footer-icp"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">陕ICP备2026009527号-1</a></p>
     </footer>
 </main>
 </div>
