@@ -340,6 +340,12 @@ _AUDIT_NARRATION_PATTERNS = (
                r"(?:未独立核实|不采用|不保留|删除|省略|核查发现|审查发现)"),
     re.compile(r"这里(?:不采用|不保留|只按|仅按|材料说的是)"),
     re.compile(r"纠错稿(?:已|将|把)"),
+    # Explicit pipeline artifacts/actions, not domain-level policy review.
+    re.compile(r"(?:本稿|本文|本次核查|本次审查)[^。；\n]{0,40}"
+               r"(?:核查通过|审查通过|通过审查|通过核查|证据不足|待核实|待核查)"),
+    re.compile(r"(?:根据|按照|依据)(?:本次)?(?:审查|核查|终审)(?:结果|意见|要求)"
+               r"[^。；\n]{0,30}(?:改为|删除|删去|保留|降级|不写入)"),
+    re.compile(r"(?:summary_map|content_map|ai_review)\.(?:json)"),
     # Narrow editorial subjects, not general 不应/不能 or scientific uncertainty.
     re.compile(r"这里(?:应|需|要)保留[“\"]"),
     re.compile(r"(?:公开稿|讲书稿|完整笔记)(?:中)?(?:应|需|必须|不得|不应)"),

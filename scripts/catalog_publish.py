@@ -733,19 +733,31 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
         deploy_output,
     )
     all_passed = True
+    verification_reports = {}
     for item in items:
         display_title = _display_title(item["name"])
         public_path = quote(
             episode_page_path(item["folder"]), safe="")
         episode_url = f"{PAGES_BASE_URL}/{public_path}/content.html"
         audio_url = public_audio_url(item["folder"], R2_PUBLIC_URL)
-        report = _verify_publish_with_retry(
-            PAGES_BASE_URL + "/",
-            episode_url,
-            audio_url,
-            display_title,
-            item["mp3"],
-        )
+        try:
+            report = dict(_verify_publish_with_retry(
+                PAGES_BASE_URL + "/",
+                episode_url,
+                audio_url,
+                display_title,
+                item["mp3"],
+            ))
+        except Exception as exc:
+            # One unavailable endpoint must not strand later episodes in
+            # deployed state without a per-episode verification report.
+            report = {
+                "schema_version": PUBLISH_REPORT_SCHEMA_VERSION,
+                "passed": False,
+                "errors": [f"remote verification raised {type(exc).__name__}: {exc}"],
+                "checks": {},
+            }
+        verification_reports[item["name"]] = report
         report["stable_url"] = PAGES_BASE_URL
         report["batch_size"] = len(items)
         if deployment_match:
@@ -778,9 +790,21 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
         write_publish_report(
             item["folder"] / "publish_report.json", report)
 
+    outcomes = {
+        name: "published" if report.get("passed", False) else "failed"
+        for name, report in verification_reports.items()
+    }
+    for item in items:
+        report = verification_reports[item["name"]]
+        report["batch"] = {"passed": all_passed, "episodes": outcomes}
+        write_publish_report(item["folder"] / "publish_report.json", report)
     if all_passed:
         print(
             f"[完成] {len(items)} 期音频上传、一次 Pages 部署和逐期验收已完成")
+    else:
+        failed = [name for name, outcome in outcomes.items() if outcome == "failed"]
+        print(f"[finish-batch][部分失败] 远端验收失败: {', '.join(failed)}；"
+              "Pages 已部署，未回滚；请修复后重新验收，批次未完成")
     return all_passed
 
 def finish(name, dry_run=False):

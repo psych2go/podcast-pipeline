@@ -715,6 +715,18 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
             if stage is not None:
                 stage.metrics.update(result["summary"])
                 stage.metrics["structured"] = True
+        elif source_kind not in ASR_SOURCE_KINDS:
+            # Third-party/web transcripts: treat as sample-checked without a
+            # full LLM pass. The correction prompt is huge and routinely
+            # exhausts the chat-shim tool budget / rate limits on long shows.
+            update_transcript_status(
+                folder, "可接受（第三方转录抽查）", "sample_checked")
+            if stage is not None:
+                stage.metrics.update({
+                    "corrected": False,
+                    "skipped_llm": True,
+                    "reason": "web_transcript_sample_checked",
+                })
         else:
             run_edit_task(
                 folder,
@@ -722,14 +734,10 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                 task_name="transcript_correction",
                 allowed_files=[correction_path],
                 input_files=correction_inputs,
-                required_files=(
-                    [correction_path]
-                    if source_kind in ASR_SOURCE_KINDS else []),
+                required_files=[correction_path],
                 remove_missing_outputs=force,
             )
-            if (
-                    source_kind in ASR_SOURCE_KINDS
-                    and not correction_path.exists()):
+            if not correction_path.exists():
                 if stage is not None:
                     stage.fail("ASR subagent 未生成 转录_纠错.txt")
                 return False
