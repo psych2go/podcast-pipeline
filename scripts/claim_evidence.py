@@ -22,7 +22,7 @@ from scripts.content_map import (
     validate_content_map,
 )
 from scripts.run_report import RunReport
-from scripts.subagent import run_json_task
+from scripts.subagent import run_json_task, resolve_stage_strategy
 from scripts.transcript_correction import (
     MANIFEST_NAME as CORRECTION_MANIFEST_NAME,
     validate_correction_manifest,
@@ -374,6 +374,7 @@ def _run_batch(folder, batch, model, effort, batch_index):
         ),
         CLAIM_EVIDENCE_SCHEMA,
         task_name=f"claim_evidence_{_batch_label(batch_index)}",
+        effort=effort,
         model=model or None,
         timeout=600,
     )
@@ -730,6 +731,10 @@ def refine_claim_evidence(
         ),
         "model": model or "default",
         "effort": effort,
+        "strategy": resolve_stage_strategy("claim_evidence", model=model, effort=effort),
+        "retry_events": [event for wrapper in wrappers
+                         for event in wrapper.get("retry_events", [])],
+        "budget_remaining": [wrapper.get("budget_remaining") for wrapper in wrappers],
         "batch_count": len(batches),
         "max_batch_chars": max_batch_chars,
         "concurrency": concurrency,

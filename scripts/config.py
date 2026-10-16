@@ -108,6 +108,11 @@ ASR_COMPUTE_TYPE = os.environ.get("ASR_COMPUTE_TYPE", "auto")
 ASR_REFINE_MAX_RANGES = _env_int("ASR_REFINE_MAX_RANGES", 8)
 ASR_COMPLETENESS_MODE = _env_choice(
     "ASR_COMPLETENESS_MODE", "report_only", {"report_only", "enforce"})
+# Disabled sampling fails closed into the existing full correction path.
+WEB_TRANSCRIPT_SPOT_CHECK = _env_choice(
+    "WEB_TRANSCRIPT_SPOT_CHECK", "1", {"0", "1"}) == "1"
+WEB_TRANSCRIPT_REQUIRE_FULL_CORRECTION = _env_choice(
+    "WEB_TRANSCRIPT_REQUIRE_FULL_CORRECTION", "0", {"0", "1"}) == "1"
 ALIGNMENT_MODE = os.environ.get("ALIGNMENT_MODE", "auto")
 ALIGNMENT_DEVICE = os.environ.get("ALIGNMENT_DEVICE", "cpu")
 ALIGNMENT_MODEL = os.environ.get("ALIGNMENT_MODEL", "")

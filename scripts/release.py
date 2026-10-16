@@ -41,6 +41,22 @@ def load_release(folder):
         return {}
 
 
+def release_fingerprint(folder_or_release):
+    """Stable release identity, excluding mutable publication state/timestamps.
+
+    Empty/untracked releases have no reusable identity.
+    """
+    import json
+    release = (folder_or_release if isinstance(folder_or_release, dict)
+               else load_release(folder_or_release))
+    if not release or not release.get("audio_sha256") or not release.get("briefing_sha256"):
+        return ""
+    identity = {key: release.get(key) for key in (
+        "schema_version", "release_id", "audio_sha256", "briefing_sha256",
+        "audio_key", "pipeline_version", "git_commit", "git_diff_sha256")}
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
 def _git_output(folder, *args):
     result = subprocess.run(
         ["git", "-C", str(folder), *args],

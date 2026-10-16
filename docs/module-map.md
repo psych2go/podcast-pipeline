@@ -5,6 +5,18 @@
 > [`pipeline.md`](pipeline.md)，日常命令见 [`../README.md`](../README.md)，
 > 测试入口见 [`../tests/README.md`](../tests/README.md)。
 
+## 转录验证范围
+
+`scripts/transcript_spot_check.py` 对第三方转录开头、中部和末尾执行确定性风险抽样，
+原子写入单集私有产物 `transcript_spot_check.json`。`sample_checked` 仅表示
+`sample_only`，不代表全文纠错、语义准确性验证或 `human_audio`。空文本、占位符、
+时间戳分段稀疏等风险会升级至既有全文纠错任务；关闭抽样也必须全文纠错。
+已接受的旧单集仍可复用，`force=True` 会重新抽样。
+
+ASR completeness 默认保持 `report_only`（警告，不阻断），`enforce` 才阻断；
+质量报告显式记录模式、blocking 和 warned，警告不等于检查通过。
+切换默认值必须先执行 ASR benchmark check → run/rescore → verify。
+
 ## 1. 稳定入口
 
 只有以下命令属于普通用户入口：

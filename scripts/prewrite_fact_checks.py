@@ -8,7 +8,7 @@ from pathlib import Path
 from scripts.atomic_io import atomic_write_json
 from scripts.content_map import body_sha256
 from scripts.hashing import sha256_file
-from scripts.subagent import run_json_task
+from scripts.subagent import run_json_task, resolve_stage_strategy
 
 
 FILENAME = "editorial_fact_checks.json"
@@ -475,6 +475,7 @@ def _run_fact_check_batch(
             task,
             LEDGER_SCHEMA,
             task_name=f"prewrite_fact_checks_{batch_index:03d}_{attempt}",
+            effort=effort,
             enable_search=True,
             model=model or None,
             timeout=1800,
@@ -643,6 +644,12 @@ def run_prewrite_fact_checks(
             "checked_subclaim_count", 0),
         "issue_count": len(payload.get("issue_inventory", [])),
         "batch_count": len(batches),
+        "strategy": resolve_stage_strategy("prewrite_fact_checks", model=model, effort=effort, enable_search=True),
+        "retry_events": [event for index, *_ in pending
+                         for event in results[index - 1].get("retry_events", [])],
+        "budget_remaining": [results[index - 1].get("budget_remaining")
+                             for index, *_ in pending],
+        "reuse_hits": cached_batch_count,
         "cached_batch_count": cached_batch_count,
         "executed_batch_count": len(batches) - cached_batch_count,
         "max_batch_claims": max_batch_claims,

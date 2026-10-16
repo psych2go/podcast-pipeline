@@ -97,6 +97,20 @@ class ReviewFailureSafetyTests(unittest.TestCase):
             for name in ("ai_review.json", "fact_check_cache.json", "来源.md", "episode.json"):
                 self.assertFalse((folder / name).exists())
 
+    def test_old_passed_review_survives_but_cannot_mask_repair_bound_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            old = folder / "ai_review.json"
+            passed = review()
+            passed["fact_checks"][0]["verification_mode"] = "web_spot_check"
+            original = json.dumps(passed)
+            old.write_text(original)
+            with self.assertRaises(ai_review.ReviewContractError):
+                self._run_contract_failure(folder, review())
+            self.assertEqual(old.read_text(), original)
+            report = json.loads((folder / "run_report.json").read_text())
+            self.assertEqual(report["runs"][-1]["status"], "failed")
+
     def test_contract_diagnostics_are_not_review_inputs(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
