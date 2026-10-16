@@ -377,6 +377,26 @@ def build_quality_report(folder, strict=True, *, today=None):
         "error_details": [],
         "warnings": [],
     }
+    report.update({
+        "correction_status": episode_quality["correction_status"],
+        "verification_scope": episode_quality["verification_scope"],
+        "completeness_mode": "report_only",
+        "completeness_enforcement": "report_only",
+        "completeness_blocking": False,
+        "completeness_warned": False,
+    })
+    if report["correction_status"] == "sample_checked":
+        report["warnings"].append(
+            "transcript verification_scope=sample_only; not full correction / not human_audio")
+    spot_path = folder / "transcript_spot_check.json"
+    if spot_path.exists():
+        try:
+            spot = load_json(spot_path)
+            report["spot_check"] = {key: spot.get(key) for key in (
+                "verification_scope", "passed", "escalate_to_full_correction",
+                "escalation_reasons", "metrics", "transcript_sha256")}
+        except (ValueError, OSError, AttributeError):
+            report["warnings"].append("transcript spot-check artifact unreadable")
     coded_errors(report)
     raw_path = folder / "transcript.raw.json"
     raw = None
@@ -423,12 +443,17 @@ def build_quality_report(folder, strict=True, *, today=None):
             completeness_required = True
             completeness_mode = "enforce"
             add_error(report, ASR_COMPLETENESS_MISSING, str(exc))
+            report["completeness_blocking"] = True
+        report["completeness_mode"] = completeness_mode
+        report["completeness_enforcement"] = completeness_mode
         completeness = report["transcript"].get("completeness")
 
         def completeness_problem(code, message):
             if completeness_mode == "enforce":
+                report["completeness_blocking"] = True
                 add_error(report, code, message)
             else:
+                report["completeness_warned"] = True
                 report["warnings"].append(
                     "ASR 语音完整性处于 report_only，未阻断: " + message)
 

@@ -39,6 +39,7 @@ from scripts.episode import (
 )
 from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
 from scripts.subagent import run_edit_task, run_json_task
+from scripts.transcript_spot_check import spot_check_transcript
 from scripts.prewrite_fact_checks import (
     FILENAME as PREWRITE_FACT_CHECKS_FILENAME,
     SCHEMA_VERSION as PREWRITE_FACT_CHECKS_VERSION,
@@ -700,6 +701,19 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
         )
     )
     with _stage(run_report, "subagent_transcript_correction") as stage:
+        spot_check = None
+        if not transcript_ready and source_kind not in ASR_SOURCE_KINDS:
+            spot_check = spot_check_transcript(folder, raw, source_kind)
+            if stage is not None:
+                stage.metrics.update({
+                    "verification_scope": "sample_only",
+                    "full_correction": False,
+                    "human_audio": False,
+                    "spot_check_passed": spot_check["passed"],
+                    "escalate_to_full_correction": spot_check["escalate_to_full_correction"],
+                    "finding_counts": spot_check["metrics"]["finding_counts"],
+                    "reason": "deterministic sample only; not accuracy/audio verification",
+                })
         if transcript_ready:
             if stage is not None:
                 stage.metrics.update({
@@ -715,22 +729,25 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
             if stage is not None:
                 stage.metrics.update(result["summary"])
                 stage.metrics["structured"] = True
-        elif source_kind not in ASR_SOURCE_KINDS:
-            # Third-party/web transcripts: treat as sample-checked without a
-            # full LLM pass. The correction prompt is huge and routinely
-            # exhausts the chat-shim tool budget / rate limits on long shows.
+        elif spot_check is not None and spot_check["passed"]:
             update_transcript_status(
-                folder, "可接受（第三方转录抽查）", "sample_checked")
+                folder, "可接受（第三方转录抽查·仅抽样）", "sample_checked")
             if stage is not None:
                 stage.metrics.update({
                     "corrected": False,
                     "skipped_llm": True,
-                    "reason": "web_transcript_sample_checked",
+                    "reason": "web_transcript_sample_checked_sample_only",
+                    "verification_scope": "sample_only",
+                    "full_correction": False,
+                    "human_audio": False,
                 })
         else:
             run_edit_task(
                 folder,
-                _correction_prompt(source_kind),
+                _correction_prompt(source_kind) + (
+                    "\n本次确定性抽查要求升级全文纠错：必须逐段检查并生成"
+                    "转录_纠错.txt，不得以抽查免纠错结束；不得编造缺失内容。"
+                    if spot_check is not None else ""),
                 task_name="transcript_correction",
                 allowed_files=[correction_path],
                 input_files=correction_inputs,
@@ -739,7 +756,7 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
             )
             if not correction_path.exists():
                 if stage is not None:
-                    stage.fail("ASR subagent 未生成 转录_纠错.txt")
+                    stage.fail("纠错 subagent 未生成 转录_纠错.txt")
                 return False
             corrected = correction_path.exists()
             update_transcript_status(
@@ -749,7 +766,12 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                 "corrected" if corrected else "sample_checked",
             )
             if stage is not None:
-                stage.metrics["corrected"] = corrected
+                stage.metrics.update({
+                    "corrected": corrected,
+                    "verification_scope": "full_correction",
+                    "full_correction": True,
+                    "human_audio": False,
+                })
 
     content_map_path = folder / "content_map.json"
     content_map_ready = not force and _content_map_is_valid(folder)

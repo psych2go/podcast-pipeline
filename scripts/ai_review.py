@@ -25,7 +25,7 @@ from scripts.atomic_io import atomic_write_json
 from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
 from scripts.run_report import RunReport
 from scripts.source_relevance import refresh_source_relevance_cache
-from scripts.subagent import run_json_task
+from scripts.subagent import run_json_task, resolve_stage_strategy
 from scripts.fact_check_cache import (
     CACHE_FILENAME, build_cache_context, update_cache_from_review)
 from scripts.claim_taxonomy import (
@@ -702,7 +702,8 @@ class ReviewContractError(RuntimeError):
 
 def _call_metrics(result):
     return {key: result.get(key) for key in (
-        "task_name", "model", "duration_ms", "retry_count", "runner_index")}
+        "task_name", "model", "duration_ms", "retry_count", "runner_index",
+        "prompt_effort", "thinking_source", "retry_events", "budget_remaining")}
 
 
 def _validate_or_retry_review(workspace, review, *, model, effort):
@@ -723,7 +724,7 @@ def _validate_or_retry_review(workspace, review, *, model, effort):
             _mechanical_retry_prompt(review, errors) + (
                 f"\n本次机械纠错 effort 要求：{effort}。只返回 JSON。"),
             REVIEW_SCHEMA, task_name="ai_review_mechanical_retry",
-            enable_search=False, model=model or None, timeout=900,
+            enable_search=False, model=model or None, timeout=900, effort=effort,
         )
         corrected = retry_result.get("payload")
         diagnostic["corrected_output"] = copy.deepcopy(corrected)
@@ -775,7 +776,7 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
                     f"\n本次审查 effort 要求：{effort}。"
                     "只返回符合 schema 的 JSON，不修改任何文件。"),
                 schema_path, task_name="ai_review", enable_search=True,
-                model=model or None, timeout=1800)
+                model=model or None, timeout=1800, effort=effort)
             review = result["payload"]
             try:
                 review, mechanical_audit, retry_result = _validate_or_retry_review(
@@ -818,6 +819,8 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
     review["audit_contract_version"] = 1
     review["reviewed_at"] = datetime.now(UTC).isoformat()
     review["reviewer"] = {
+        "strategy": resolve_stage_strategy("ai_review", model=model, effort=effort, enable_search=True),
+        **_call_metrics(result),
         "command": result.get("command", "codex exec"),
         "effort": effort,
         "model": model or "codex-default",
@@ -934,6 +937,9 @@ def review_episode(
                 "duration_api_ms": reviewer.get("duration_api_ms"),
                 "retry_count": reviewer.get("retry_count", 0),
                 "usage": reviewer.get("usage"),
+                "strategy": reviewer.get("strategy"),
+                "retry_events": reviewer.get("retry_events", []),
+                "budget_remaining": reviewer.get("budget_remaining"),
             })
             if not review.get("passed"):
                 stage.fail("AI review did not pass")

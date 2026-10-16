@@ -176,6 +176,7 @@ def main():
     p.add_argument("names", nargs="+")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--upload-concurrency", type=int, default=3)
+    p.add_argument("--resume-batch-id", default=None)
     args = parser.parse_args()
     if args.cmd == "stats":
         stats = episode_stats(args.name)
@@ -226,7 +227,8 @@ def main():
     elif args.cmd == "finish-batch":
         return 0 if finish_batch(
             args.names, args.dry_run,
-            upload_concurrency=args.upload_concurrency) else 1
+            upload_concurrency=args.upload_concurrency,
+            resume_batch_id=args.resume_batch_id) else 1
     return 0
 
 

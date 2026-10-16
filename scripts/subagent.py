@@ -5,6 +5,20 @@ structured JSON result or edit a narrowly scoped set of files.  The default
 runner is Pi in headless JSON mode; Codex remains available as a compatible
 fallback via ``SUBAGENT_COMMAND`` without changing pipeline code.
 
+Dual runners (``SUBAGENT_RUNNER=auto|pi|grokbot``):
+- ``pi`` — classic ``pi`` + GPT Plus (``openai-codex``).
+- ``grokbot`` — Grok Bot / Cursor-agent box path: PTY-wrapped ``pi`` by default
+  (headless non-TTY otherwise hangs), or ``SUBAGENT_GROKBOT_BACKEND=host`` file
+  bridge for a parent host agent to fill responses.
+- ``auto`` — ``grokbot`` when the Grok Bot / box markers are present, else ``pi``.
+
+Model defaults on the pi path:
+- Non-transcription tasks default to ``openai-codex/gpt-6-astra`` with
+  ``--thinking low`` (override via ``SUBAGENT_PI_MODEL`` / ``SUBAGENT_PI_THINKING``).
+- Transcription / correction tasks (``transcript_correction*``) do **not** force
+  astra; use ``SUBAGENT_CORRECTION_MODEL`` / ``SUBAGENT_TRANSCRIPTION_MODEL`` /
+  ``SUBAGENT_MODEL`` / pi's own default.
+
 Failover env (no secrets here): ``SUBAGENT_COMMAND``, ``SUBAGENT_FALLBACK_COMMAND``,
 ``SUBAGENT_MODEL`` / provider model chain, and the chat shim's provider base URL /
 ``MODEL_FALLBACK``. Billing/quota/429/1113-style failures should trigger the next
@@ -19,14 +33,16 @@ import re
 import signal
 import shlex
 import shutil
+import sys
 import subprocess
 import tempfile
 import time
+import uuid
 import tomllib
 from pathlib import Path
 
 from scripts.atomic_io import atomic_write_bytes
-from scripts.retry import exponential_delay
+from scripts.retry import RetryBudget, exponential_delay, retry_reason
 
 
 class SubagentError(RuntimeError):
@@ -50,6 +66,8 @@ def _runner_failure(stderr, stdout):
                 code = error.get("code")
                 if not isinstance(code, str):
                     continue
+                if code == "semantic_reject":
+                    return "semantic_reject", None
                 if code == "model_not_found":
                     return "model_not_found", None
                 if code in {"invalid_api_key", "authentication_error"}:
@@ -206,7 +224,59 @@ def _model_fallback_allowed(exc):
     }
 
 
-def _pi_default_model():
+def _truthy_env(name):
+    return os.environ.get(name, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _in_grokbot_environment():
+    """Detect Grok Bot / Cursor-agent box environments."""
+    if _truthy_env("SUBAGENT_GROKBOT") or _truthy_env("GROK_BOT"):
+        return True
+    if _truthy_env("CURSOR_AGENT"):
+        return True
+    if os.environ.get("SAND_BOX_BOOT_ID", "").strip() and Path("/home/box").is_dir():
+        return True
+    return False
+
+
+def _runner_kind():
+    """Return ``pi`` or ``grokbot`` from SUBAGENT_RUNNER / environment."""
+    raw = os.environ.get("SUBAGENT_RUNNER", "auto").strip().lower() or "auto"
+    if raw == "auto":
+        return "grokbot" if _in_grokbot_environment() else "pi"
+    if raw in {"pi", "grokbot"}:
+        return raw
+    raise SubagentError(
+        f"SUBAGENT_RUNNER 必须是 auto|pi|grokbot 之一，当前值: {raw!r}"
+    )
+
+
+def _grokbot_backend():
+    raw = os.environ.get("SUBAGENT_GROKBOT_BACKEND", "pi").strip().lower() or "pi"
+    if raw in {"pi", "host"}:
+        return raw
+    raise SubagentError(
+        f"SUBAGENT_GROKBOT_BACKEND 必须是 pi|host 之一，当前值: {raw!r}"
+    )
+
+
+def _is_transcription_task(task_name):
+    """Transcription/correction stages must not force gpt-6-astra."""
+    name = str(task_name or "").strip().lower()
+    if name == "transcript_correction" or name.startswith("transcript_correction_"):
+        return True
+    extras = os.environ.get("SUBAGENT_TRANSCRIPTION_TASKS", "")
+    for item in extras.split(","):
+        token = item.strip().lower()
+        if token and (name == token or name.startswith(token + "_")):
+            return True
+    return False
+
+
+def _pi_default_model(task_name=None):
+    """Resolve pi provider/model; transcription never forces astra."""
     provider = (
         os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
         or os.environ.get("PI_PROVIDER", "").strip()
@@ -215,9 +285,298 @@ def _pi_default_model():
         os.environ.get("SUBAGENT_PI_MODEL", "").strip()
         or os.environ.get("PI_MODEL", "").strip()
     )
+    if _is_transcription_task(task_name):
+        # Prefer dedicated transcription/correction knobs when present.
+        transcription = (
+            os.environ.get("SUBAGENT_TRANSCRIPTION_MODEL", "").strip()
+            or os.environ.get("SUBAGENT_CORRECTION_MODEL", "").strip()
+        )
+        if transcription:
+            if "/" in transcription:
+                return transcription
+            provider = provider or "openai-codex"
+            return f"{provider}/{transcription}"
+        if provider and model and "/" not in model:
+            return f"{provider}/{model}"
+        return model or None
+    # Non-transcription pi path: default to gpt-6-astra unless explicitly set.
+    if not model:
+        model = "gpt-6-astra"
+    if not provider:
+        provider = "openai-codex"
     if provider and model and "/" not in model:
         return f"{provider}/{model}"
     return model or None
+
+
+def _stage_category(task_name):
+    name = str(task_name or "").lower()
+    if _is_transcription_task(task_name):
+        return "transcription"
+    if "review" in name:
+        return "review"
+    if "fact_check" in name:
+        return "fact_check"
+    if "claim" in name:
+        return "claim"
+    return "other"
+
+
+def _thinking_strategy(task_name):
+    category = _stage_category(task_name)
+    scoped = f"SUBAGENT_{category.upper()}_THINKING"
+    keys = [scoped] if category in {"review", "claim", "fact_check"} else []
+    for key in [*keys, "SUBAGENT_PI_THINKING", "SUBAGENT_THINKING"]:
+        value = os.environ.get(key, "").strip().lower()
+        if value:
+            if value not in {"off", "none", "minimal", "low", "medium", "high", "xhigh"}:
+                raise SubagentError(f"Invalid thinking level in {key}")
+            return value, f"env:{key}"
+    return (None, "transcription:none") if category == "transcription" else ("low", "default:low")
+
+
+def resolve_stage_strategy(task_name, *, model=None, effort=None, enable_search=None):
+    """Requested configuration only; prompt effort is not Pi thinking."""
+    transcription = _is_transcription_task(task_name)
+    candidates = _model_candidates(task_name, None)
+    inherited = os.environ.get("SUBAGENT_MODEL", "").strip() or None
+    chained = candidates[0] if len(candidates) > 1 else None
+    knob = transcription and (
+        os.environ.get("SUBAGENT_TRANSCRIPTION_MODEL", "").strip()
+        or os.environ.get("SUBAGENT_CORRECTION_MODEL", "").strip())
+    resolved = model or chained or knob or inherited or _pi_default_model(task_name)
+    source = ("explicit" if model else "inherit" if chained else
+              "transcription_knob" if knob else "inherit" if inherited else
+              "pi_default" if resolved else "none")
+    thinking, thinking_source = _thinking_strategy(task_name)
+    return {
+        "task_name": task_name, "stage_category": _stage_category(task_name),
+        "requested_model": model, "resolved_model": resolved,
+        "model_source": source, "prompt_effort": effort,
+        "thinking": thinking, "thinking_source": thinking_source,
+        "transcription_exempt": transcription, "enable_search": enable_search,
+        "note": "prompt_effort != thinking (Pi --thinking)",
+    }
+
+
+def print_stage_strategy(strategy):
+    # Print only enumerated policy fields, never arbitrary model/task/env text.
+    summary = {key: strategy.get(key) for key in (
+        "stage_category", "model_source", "thinking", "thinking_source",
+        "transcription_exempt", "note")}
+    effort = strategy.get("prompt_effort")
+    summary["prompt_effort"] = effort if effort in {
+        None, "low", "medium", "high", "max"} else "custom"
+    print("[strategy] " + json.dumps(summary), flush=True)
+
+
+def _pi_thinking_level(task_name=None):
+    return _thinking_strategy(task_name)[0]
+
+
+def _pty_mode():
+    return (os.environ.get("SUBAGENT_PI_PTY", "auto").strip().lower() or "auto")
+
+
+def _needs_pi_pty():
+    mode = _pty_mode()
+    if mode in {"never", "0", "false", "no", "off"}:
+        return False
+    if mode in {"always", "1", "true", "yes", "on"}:
+        return True
+    if mode != "auto":
+        raise SubagentError(
+            f"SUBAGENT_PI_PTY 必须是 auto|always|never 之一，当前值: {mode!r}"
+        )
+    if _runner_kind() == "grokbot":
+        return True
+    try:
+        return not sys.stdout.isatty()
+    except Exception:
+        return True
+
+
+def _pty_wrapper_argv():
+    local = Path(__file__).resolve().parent / "run_with_pty.py"
+    if local.is_file():
+        return [sys.executable, str(local)]
+    workspace = Path("/workspace/run-pi-pty.py")
+    if workspace.is_file():
+        return [sys.executable, str(workspace)]
+    raise SubagentError(
+        "需要 PTY wrapper 但找不到 scripts/run_with_pty.py"
+    )
+
+
+def _wrap_with_pty(cmd):
+    return [*_pty_wrapper_argv(), "--", *cmd]
+
+
+def _execution_record(*, task_name, model, timeout, enable_search,
+                      backend, command_kind, content_ok=False, attempts=1,
+                      retries=0, runner_index=0, fallback_reason=None,
+                      effort=None):
+    """Requested configuration is not evidence of the model actually used.
+
+    Prompt effort prose is independent of Pi's explicit --thinking setting.
+    """
+    thinking = _pi_thinking_level(task_name) if backend == "pi" else None
+    return {
+        "requested_runner": os.environ.get("SUBAGENT_RUNNER", "auto"),
+        "actual_runner": _runner_kind(), "actual_backend": backend,
+        "command_kind": command_kind, "requested_model": model or None,
+        "actual_model": "unknown", "thinking": thinking,
+        "thinking_requested": thinking, "enable_search": bool(enable_search),
+        "prompt_effort": effort,
+        "thinking_source": (
+            _thinking_strategy(task_name)[1] if backend == "pi" else "backend:not_pi"),
+        "timeout_s": timeout, "attempt": attempts, "attempt_count": attempts,
+        "retry_count": retries, "runner_index": runner_index,
+        "fallback_reason": fallback_reason, "content_ok": content_ok,
+    }
+
+
+def _host_bridge_dir(folder):
+    configured = os.environ.get("SUBAGENT_HOST_BRIDGE_DIR", "").strip()
+    root = Path(folder).resolve()
+    path = Path(configured).expanduser() if configured else root / ".runlogs" / "host-bridge"
+    if path.is_symlink() or not path.resolve().is_relative_to(root):
+        raise SubagentError(
+            "host-bridge root must be inside allowed_folder, without symlink escape")
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    stat = path.stat()
+    if stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+        raise SubagentError("host-bridge root must be owned and not group/world writable")
+    return path.resolve()
+
+
+def _run_host_bridge(
+        folder,
+        task,
+        *,
+        task_name,
+        schema_path=None,
+        write_files=False,
+        enable_search=False,
+        model=None,
+        timeout=None,
+):
+    """File-bridge runner for parent Grok Bot / host-agent fill-in.
+
+    Writes request.json and waits for response.json (or error.json). Never
+    invents answers; times out fail-closed. Hosts MUST write responses using
+    temp + rename, echoing id and input_fingerprint. latest is a hint only.
+    Directory checks are defense in depth, not a sandbox against same-UID peers.
+    """
+    timeout = timeout or int(os.environ.get("SUBAGENT_TIMEOUT", "1800"))
+    poll = float(os.environ.get("SUBAGENT_HOST_BRIDGE_POLL", "0.5"))
+    record = _execution_record(
+        task_name=task_name, model=model, timeout=timeout,
+        enable_search=enable_search, backend="host", command_kind="host-bridge")
+
+    def fail(kind):
+        # Never echo host error bodies: they may contain tasks or credentials.
+        return SubagentError(
+            f"{task_name} host-bridge: {kind}",
+            metrics={**record, "task_name": task_name, "failure_kind": kind})
+
+    try:
+        bridge = _host_bridge_dir(folder)
+    except (OSError, SubagentError) as exc:
+        raise fail("host_bridge_invalid") from exc
+    started = time.monotonic()
+    created_at = time.time()
+    request_id = uuid.uuid4().hex
+    request_path = bridge / f"{request_id}.request.json"
+    response_path = bridge / f"{request_id}.response.json"
+    error_path = bridge / f"{request_id}.error.json"
+    schema_payload = None
+    if schema_path:
+        schema_payload = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    canonical = json.dumps(
+        {"task": task, "schema": schema_payload}, ensure_ascii=False,
+        sort_keys=True, separators=(",", ":"))
+    fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    request = {
+        "protocol_version": 1,
+        "input_fingerprint": fingerprint,
+        "stage": task_name,
+        "deadline": created_at + timeout,
+        "allowed_folder": str(Path(folder).resolve()),
+        "required_capabilities": ["search"] if enable_search else [],
+        "id": request_id,
+        "task_name": task_name,
+        "task": task,
+        "folder": str(Path(folder).resolve()),
+        "schema": schema_payload,
+        "write_files": bool(write_files),
+        "enable_search": bool(enable_search),
+        "model": model,
+        "created_at": created_at,
+    }
+    atomic_write_bytes(
+        request_path,
+        json.dumps(request, ensure_ascii=False, indent=2).encode("utf-8"),
+    )
+    # Also publish a stable "latest" pointer for human/host agents.
+    latest = bridge / "latest.request.json"
+    atomic_write_bytes(
+        latest,
+        json.dumps(
+            {"id": request_id, "request_path": str(request_path)},
+            ensure_ascii=False,
+        ).encode("utf-8"),
+    )
+    def expired():
+        return time.time() >= request["deadline"] or time.monotonic() - started >= timeout
+
+    while True:
+        if expired():
+            raise fail("host_bridge_stale" if response_path.exists() else "timeout")
+        if error_path.is_file():
+            raise fail("host_bridge_error")
+        if response_path.is_file():
+            try:
+                payload = json.loads(response_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise fail("host_bridge_invalid") from exc
+            if expired():
+                raise fail("host_bridge_stale")
+            if (not isinstance(payload, dict)
+                    or payload.get("id") != request_id
+                    or payload.get("input_fingerprint") != fingerprint
+                    or payload.get("protocol_version", 1) != 1):
+                raise fail("host_bridge_mismatch")
+            if "response" in payload:
+                response_text = payload.get("response")
+            elif isinstance(payload, dict) and "payload" in payload:
+                response_text = json.dumps(
+                    payload["payload"], ensure_ascii=False)
+            else:
+                response_text = ""
+            if not isinstance(response_text, str) or not response_text.strip():
+                raise fail("empty_output")
+            if schema_payload is not None:
+                try:
+                    schema_failure = _schema_error(_json_from_text(response_text), schema_payload)
+                except SubagentError:
+                    schema_failure = "invalid_json"
+                if schema_failure:
+                    raise fail("schema")
+            if expired():
+                raise fail("host_bridge_stale")
+            duration_ms = round((time.monotonic() - started) * 1000)
+            return {
+                **record, "content_ok": True,
+                "response": response_text,
+                "duration_ms": duration_ms,
+                "retry_count": 0,
+                "runner_index": 0,
+                "command": "host-bridge",
+                "model": model or "",
+                "task_name": task_name,
+            }
+        time.sleep(max(0.05, poll))
 
 
 def _pi_web_extension():
@@ -238,7 +597,7 @@ def _has_option(command, *options):
 
 
 def _pi_command(command, *, task, schema_path, write_files,
-                enable_search, model, schema_feedback=None):
+                enable_search, model, schema_feedback=None, thinking=None):
     """Translate the pipeline runner contract to Pi's headless JSON mode."""
     cmd = list(command)
     required = [
@@ -271,6 +630,8 @@ def _pi_command(command, *, task, schema_path, write_files,
 
     if model and not _has_option(cmd, "--model"):
         cmd.extend(["--model", model])
+    if thinking and not _has_option(cmd, "--thinking"):
+        cmd.extend(["--thinking", thinking])
 
     prompt = _base_prompt(task)
     if schema_path:
@@ -851,6 +1212,9 @@ def _run(
         model=None,
         timeout=None,
         _model_candidates_override=None,
+        effort=None,
+        _budget=None,
+        _prior_failure=None,
 ):
     folder = Path(folder).resolve()
     candidates = (
@@ -858,19 +1222,43 @@ def _run(
         if _model_candidates_override is not None
         else _model_candidates(task_name, model)
     )
+    if _budget is None:
+        print_stage_strategy(resolve_stage_strategy(
+            task_name, model=model, effort=effort, enable_search=enable_search))
+        retries = max(0, int(os.environ.get("SUBAGENT_MAX_RETRIES", "2")))
+        _budget = RetryBudget(int(os.environ.get(
+            "SUBAGENT_STAGE_CALL_BUDGET", str((retries + 1) * max(1, len(candidates)) * 2))),
+            scope=task_name)
     if len(candidates) > 1:
         last_error = None
         attempted = []
+        prior_attempts = 0
+        fallback_reason = None
         for candidate in candidates:
             attempted.append(candidate or "runner-default")
             try:
-                return _run(
+                result = _run(
                     folder, task, task_name=task_name,
                     schema_path=schema_path, write_files=write_files,
                     enable_search=enable_search, model=candidate,
                     timeout=timeout, _model_candidates_override=[candidate],
+                    effort=effort, _budget=_budget, _prior_failure=fallback_reason,
                 )
+                result["attempt_count"] += prior_attempts
+                result["attempt"] = result["attempt_count"]
+                result["retry_count"] = result["attempt_count"] - 1
+                result["fallback_reason"] = fallback_reason or result.get("fallback_reason")
+                result["attempted_models"] = attempted
+                return result
             except SubagentError as exc:
+                metrics = exc.failure_metrics
+                count = metrics.get("attempt_count", 1)
+                metrics["attempt_count"] = prior_attempts + count
+                metrics["attempt"] = metrics["attempt_count"]
+                metrics["retry_count"] = max(0, metrics["attempt_count"] - 1)
+                metrics["fallback_reason"] = fallback_reason or metrics.get("fallback_reason")
+                prior_attempts += count
+                fallback_reason = metrics.get("failure_kind")
                 last_error = exc
                 if not _model_fallback_allowed(exc):
                     raise
@@ -888,10 +1276,78 @@ def _run(
             ) from last_error
     # Per-task model arguments (e.g. SUBAGENT_REVIEW_MODEL) take precedence;
     # SUBAGENT_MODEL fills the stages that do not select a model themselves.
+    # Transcription may also use SUBAGENT_TRANSCRIPTION_MODEL without forcing
+    # the non-transcription gpt-6-astra default.
+    if not model and _is_transcription_task(task_name):
+        model = (
+            os.environ.get("SUBAGENT_TRANSCRIPTION_MODEL", "").strip()
+            or os.environ.get("SUBAGENT_CORRECTION_MODEL", "").strip()
+            or None
+        )
     model = model or os.environ.get("SUBAGENT_MODEL", "").strip() or None
-    commands = _runner_commands()
+    runner_kind = _runner_kind()
     timeout = timeout or int(os.environ.get("SUBAGENT_TIMEOUT", "1800"))
     max_retries = int(os.environ.get("SUBAGENT_MAX_RETRIES", "2"))
+
+    # Grok Bot host-bridge backend: parent agent fills response files.
+    if runner_kind == "grokbot" and _grokbot_backend() == "host":
+        host_model = model or _pi_default_model(task_name) or ""
+        if not _budget.consume(
+                "initial_call" if not _budget.events else retry_reason(_prior_failure)):
+            raise SubagentError("stage call budget exhausted", metrics={
+                **_budget.metrics(), "failure_kind": "budget_exhausted", "content_ok": False})
+        try:
+            result = _run_host_bridge(
+                folder,
+                task,
+                task_name=task_name,
+                schema_path=schema_path,
+                write_files=write_files,
+                enable_search=enable_search,
+                model=host_model or None,
+                timeout=timeout,
+            )
+        except SubagentError as exc:
+            exc.failure_metrics.update(_budget.metrics())
+            exc.failure_metrics["prompt_effort"] = effort
+            raise
+        if schema_path:
+            try:
+                payload = _json_from_text(result["response"])
+                schema = json.loads(
+                    Path(schema_path).read_text(encoding="utf-8"))
+                schema_failure = _schema_error(payload, schema)
+            except (OSError, json.JSONDecodeError, SubagentError):
+                schema_failure = "invalid_json"
+            if schema_failure:
+                raise SubagentError(
+                    f"{task_name} host-bridge schema 校验失败: {schema_failure}",
+                    metrics={
+                        **_execution_record(
+                            task_name=task_name, model=host_model, timeout=timeout,
+                            enable_search=enable_search, backend="host",
+                            command_kind="host-bridge", effort=effort),
+                        **_budget.metrics(),
+                        "task_name": task_name,
+                        "model": host_model,
+                        "failure_kind": "schema",
+                        "runner_index": 0,
+                        "attempt_count": 1,
+                        "retry_count": 0,
+                        "duration_ms": result.get("duration_ms", 0),
+                    },
+                )
+        return {
+            **_execution_record(
+                task_name=task_name, model=host_model, timeout=timeout,
+                enable_search=enable_search, backend="host", command_kind="host-bridge",
+                content_ok=True, effort=effort),
+            **result,
+            **_budget.metrics(),
+            "prompt_effort": effort,
+        }
+
+    commands = _runner_commands()
     output_path = None
     workspace_snapshot = _workspace_snapshot(folder) if write_files else None
     attempts = 0
@@ -899,13 +1355,25 @@ def _run(
     total_retries = 0
     runner_index = 0
     runner_model = model or ""
-    failure_kind, http_status = "unknown", None
+    failure_kind, http_status = _prior_failure or "unknown", None
+    thinking_level = _pi_thinking_level(task_name)
+    backend, command_kind = "unknown", "unknown"
+    fallback_reason = None
+
+    def execution(content_ok=False):
+        return {**_execution_record(
+            task_name=task_name, model=runner_model, timeout=timeout,
+            enable_search=enable_search, backend=backend, command_kind=command_kind,
+            content_ok=content_ok, attempts=attempts, retries=total_retries,
+            runner_index=runner_index, fallback_reason=fallback_reason, effort=effort),
+            **_budget.metrics()}
 
     def failure_metrics():
-        return {"task_name": task_name, "model": runner_model,
+        return {**execution(), "task_name": task_name, "model": runner_model,
                 "attempt_count": attempts, "retry_count": total_retries,
                 "duration_ms": total_duration_ms, "runner_index": runner_index,
-                "failure_kind": failure_kind, "http_status": http_status}
+                "failure_kind": failure_kind, "http_status": http_status,
+                "runner_kind": runner_kind}
 
     try:
         with tempfile.TemporaryDirectory(
@@ -917,10 +1385,14 @@ def _run(
             output_path = Path(tmp) / "last_message.txt"
             last_detail = ""
             for runner_index, command in enumerate(commands):
+                if runner_index:
+                    fallback_reason = failure_kind
+                backend = "pi" if _is_runner(command, "pi") else "codex"
+                command_kind = backend
                 runner_env = _runner_environment(tmp, command)
                 is_pi = _is_runner(command, "pi")
                 runner_model = (
-                    _pi_default_model() if is_pi and not model else model
+                    _pi_default_model(task_name) if is_pi and not model else model
                 ) or ""
                 if is_pi:
                     cmd = _pi_command(
@@ -930,7 +1402,11 @@ def _run(
                         write_files=write_files,
                         enable_search=enable_search,
                         model=runner_model or None,
+                        thinking=thinking_level,
                     )
+                    if _needs_pi_pty():
+                        cmd = _wrap_with_pty(cmd)
+                        command_kind = "pi+pty"
                 else:
                     cmd = [
                         *command,
@@ -972,10 +1448,19 @@ def _run(
                             enable_search=enable_search,
                             model=runner_model or None,
                             schema_feedback=schema_feedback,
+                            thinking=thinking_level,
                         )
+                        if _needs_pi_pty():
+                            cmd = _wrap_with_pty(cmd)
                     if workspace_snapshot is not None:
                         _restore_workspace(folder, workspace_snapshot)
                     output_path.unlink(missing_ok=True)
+                    reason = ("initial_call" if not _budget.events else
+                              retry_reason(failure_kind))
+                    if not _budget.consume(reason):
+                        failure_kind = "budget_exhausted"
+                        raise SubagentError(
+                            f"{task_name} stage call budget exhausted", metrics=failure_metrics())
                     started = time.monotonic()
                     attempts += 1
                     try:
@@ -1011,7 +1496,7 @@ def _run(
                             if not response.strip():
                                 failure_kind, http_status = "empty_output", None
                                 last_detail = "empty_output; exit=0"
-                            elif is_pi and schema_path:
+                            elif schema_path:
                                 try:
                                     payload = _json_from_text(response)
                                     schema = json.loads(
@@ -1026,6 +1511,7 @@ def _run(
                                         f"schema; exit=0; {schema_failure[:160]}")
                                 else:
                                     return {
+                                        **execution(content_ok=True),
                                         "response": response,
                                         "duration_ms": total_duration_ms,
                                         "retry_count": total_retries,
@@ -1036,6 +1522,7 @@ def _run(
                                     }
                             else:
                                 return {
+                                    **execution(content_ok=True),
                                     "response": response,
                                     "duration_ms": total_duration_ms,
                                     "retry_count": total_retries,
@@ -1047,6 +1534,11 @@ def _run(
                         else:
                             failure_kind, http_status = _runner_failure(
                                 result.stderr, result.stdout)
+                            if failure_kind == "semantic_reject":
+                                _budget.consume("semantic_reject")
+                                raise SubagentError(
+                                    f"{task_name} semantic rejection (no transport fallback)",
+                                    metrics=failure_metrics())
                             last_detail = f"{failure_kind}; exit={result.returncode}"
                             if http_status:
                                 last_detail += f"; HTTP {http_status}"
@@ -1113,6 +1605,7 @@ def run_json_task(
         enable_search=False,
         model=None,
         timeout=None,
+        effort=None,
 ):
     """Run a read-only subagent and parse its structured JSON response."""
     temporary_schema = None
@@ -1152,6 +1645,7 @@ def run_json_task(
             task,
             task_name=task_name,
             schema_path=runner_schema,
+            effort=effort,
             write_files=False,
             enable_search=enable_search,
             model=model,

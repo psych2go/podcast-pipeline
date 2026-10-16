@@ -8,6 +8,7 @@ import time
 from datetime import datetime, UTC
 from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
 
 from scripts.atomic_io import atomic_write_json
 from scripts import catalog_core as _core_module
@@ -36,7 +37,9 @@ from scripts.publish_errors import (
     RETRYABLE_PAGE_CODES, publish_error_codes,
 )
 from scripts.quality_report import build_quality_report
-from scripts.release import active_audio_key, load_release, update_release_state
+from scripts.release import (
+    active_audio_key, load_release, update_release_state, release_fingerprint,
+)
 from scripts.run_report import RunReport
 from scripts.tts import validate_tts_manifest
 
@@ -553,7 +556,83 @@ def _upload_r2_item(item, dry_run=False):
         dry_run=dry_run,
     )
 
-def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
+def _read_publish_report(folder):
+    try:
+        payload = json.loads((Path(folder) / "publish_report.json").read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _persist_batch(batch):
+    for name in batch["episodes"]:
+        folder = CONTENT_DIR / name
+        payload = _read_publish_report(folder)
+        payload["batch"] = batch
+        payload["batch_id"] = batch["batch_id"]
+        payload["release_fingerprint"] = batch["candidate_release_fingerprints"][name]
+        payload["pages_deploy_id"] = batch["pages_deploy_id"]
+        write_publish_report(folder / "publish_report.json", payload)
+
+
+def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3,
+                       resume_batch_id=None, _run_reports=None):
+    names = list(dict.fromkeys(str(name) for name in names if str(name)))
+    if not names:
+        raise ValueError("finish-batch 至少需要一个单集名称")
+    if int(upload_concurrency) < 1:
+        raise ValueError("upload_concurrency 必须大于等于 1")
+    if dry_run:
+        return _finish_batch_transaction(names, True, upload_concurrency=upload_concurrency)
+    if resume_batch_id:
+        for name in names:
+            previous = _read_publish_report(CONTENT_DIR / name).get("batch", {})
+            if (previous.get("batch_id") != resume_batch_id
+                    or set(previous.get("episodes", {})) != set(names)):
+                raise ValueError("resume batch identity/episode set mismatch")
+        print(f"[finish-batch] 恢复 {resume_batch_id}："
+              "重新预检、上传、部署及逐期验收；不复用旧通过状态")
+    fingerprints = {name: release_fingerprint(CONTENT_DIR / name) for name in names}
+    batch = {
+        "batch_id": resume_batch_id or uuid4().hex, "batch_status": "running",
+        "episodes": {name: {"upload": "pending", "verify": "pending",
+                            "release_fingerprint": fingerprints[name], "state": "pending"}
+                     for name in names},
+        "pages_deploy_id": "", "pages_deployed": False,
+        "candidate_release_fingerprints": fingerprints,
+        "partial": False, "full_success": False, "passed": False,
+    }
+    for report in (_run_reports or {}).values():
+        report.run["metadata"]["batch"] = batch
+        report._persist()
+    # Invalidate old passed reports before doing any work, including preflight.
+    for name in names:
+        write_publish_report(CONTENT_DIR / name / "publish_report.json", {
+            "schema_version": PUBLISH_REPORT_SCHEMA_VERSION, "passed": False,
+            "batch": batch, "batch_id": batch["batch_id"],
+        })
+    ok = False
+    try:
+        ok = _finish_batch_transaction(names, False, upload_concurrency=upload_concurrency,
+                                       batch=batch)
+        return ok
+    finally:
+        passed = sum(item["verify"] == "ok" for item in batch["episodes"].values())
+        batch.update(full_success=bool(ok and passed == len(names)), passed=bool(ok),
+                     partial=not ok,
+                     batch_status="passed" if ok else "partial_failed" if passed else "failed")
+        for item in batch["episodes"].values():
+            if item["state"] != "published":
+                item["state"] = "failed"
+        _persist_batch(batch)
+        print(f"[finish-batch] {batch['batch_status']}; Pages deployed={batch['pages_deployed']}; "
+              f"batch_id={batch['batch_id']}")
+        if not ok:
+            print(f"[恢复] finish-batch 同一单集列表 --resume-batch-id {batch['batch_id']}; "
+                  "Pages 副作用未回滚，必须重新验收全部单集")
+
+
+def _finish_batch_transaction(names, dry_run=False, *, upload_concurrency=3, batch=None):
     """Fully publish multiple episodes with parallel R2 upload and one Pages deploy."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -565,8 +644,10 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
         raise ValueError("upload_concurrency 必须大于等于 1")
 
     validate_for_stage("publish", dry_run=dry_run)
+    preflight_failed = False
     for name in names:
         if not _publish_preflight(name):
+            preflight_failed = True
             if not dry_run:
                 folder = CONTENT_DIR / name
                 if load_release(folder):
@@ -574,7 +655,8 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
                         folder, "failed", error="publish preflight failed")
                 _write_publish_failure(
                     name, "publish_preflight", "publish preflight failed")
-            return False
+    if preflight_failed:
+        return False
 
     candidate_errors_by_name = {
         name: _candidate_catalog_errors(name)
@@ -642,6 +724,11 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
             except Exception as exc:
                 print(f"[R2][错误] {item['name']}: {exc}")
                 upload_results[item["name"]] = False
+
+    if batch is not None:
+        for name, uploaded in upload_results.items():
+            batch["episodes"][name]["upload"] = "ok" if uploaded else "failed"
+        _persist_batch(batch)
 
     failed_uploads = [
         item for item in items
@@ -712,6 +799,14 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
                 audio_key=item["key"])
         return False
 
+    if batch is not None:
+        deployment_match = re.search(
+            r"https://[A-Za-z0-9-]+\." + re.escape(PAGES_PROJECT) + r"\.pages\.dev",
+            deploy_output)
+        batch["pages_deployed"] = True
+        batch["pages_deploy_id"] = deployment_match.group(0) if deployment_match else ""
+        _persist_batch(batch)
+
     for item in items:
         if item["release"]:
             item["release"] = update_release_state(
@@ -757,6 +852,14 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
                 "errors": [f"remote verification raised {type(exc).__name__}: {exc}"],
                 "checks": {},
             }
+        if batch is not None:
+            outcome = batch["episodes"][item["name"]]
+            outcome["verify"] = "ok" if report.get("passed") else "failed"
+            outcome["state"] = "published" if report.get("passed") else "failed"
+            report["batch"] = batch
+            report["batch_id"] = batch["batch_id"]
+            report["release_fingerprint"] = outcome["release_fingerprint"]
+            report["pages_deploy_id"] = batch["pages_deploy_id"]
         verification_reports[item["name"]] = report
         report["stable_url"] = PAGES_BASE_URL
         report["batch_size"] = len(items)
@@ -796,7 +899,7 @@ def _finish_batch_impl(names, dry_run=False, *, upload_concurrency=3):
     }
     for item in items:
         report = verification_reports[item["name"]]
-        report["batch"] = {"passed": all_passed, "episodes": outcomes}
+        report["batch"] = batch or {"passed": all_passed, "episodes": outcomes}
         write_publish_report(item["folder"] / "publish_report.json", report)
     if all_passed:
         print(
@@ -844,7 +947,7 @@ def finish(name, dry_run=False):
     return ok
 
 
-def finish_batch(names, dry_run=False, *, upload_concurrency=3):
+def finish_batch(names, dry_run=False, *, upload_concurrency=3, resume_batch_id=None):
     """Fully publish a batch and append a run record for every episode."""
     normalized = list(dict.fromkeys(str(name) for name in names if str(name)))
     reports = {}
@@ -861,12 +964,16 @@ def finish_batch(names, dry_run=False, *, upload_concurrency=3):
     try:
         ok = _finish_batch_impl(
             normalized, dry_run=dry_run,
-            upload_concurrency=upload_concurrency)
+            upload_concurrency=upload_concurrency, _run_reports=reports,
+            **({"resume_batch_id": resume_batch_id} if resume_batch_id else {}))
     except BaseException as exc:
-        for report in reports.values():
+        for name, report in reports.items():
+            report.run["metadata"]["batch"] = _read_publish_report(
+                CONTENT_DIR / name).get("batch", {})
             report.finish(False, exc)
         raise
     error = None if ok else "batch publish transaction failed"
-    for report in reports.values():
+    for name, report in reports.items():
+        report.run["metadata"]["batch"] = _read_publish_report(CONTENT_DIR / name).get("batch", {})
         report.finish(ok, error)
     return ok

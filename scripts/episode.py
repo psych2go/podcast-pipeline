@@ -282,6 +282,14 @@ def _review_status(folder):
     return "passed"
 
 
+def transcript_verification_scope(correction_status):
+    return {
+        "sample_checked": "sample_only",
+        "corrected": "full_correction",
+        "corrected_structured": "structured_correction",
+    }.get(correction_status, "unknown")
+
+
 def inspect_episode_state(folder, payload=None):
     """Derive mutable quality state from evidence and current artifacts."""
     folder = Path(folder)
@@ -348,6 +356,7 @@ def inspect_episode_state(folder, payload=None):
         ),
         "transcript_status": transcript_status,
         "correction_status": correction_status,
+        "verification_scope": transcript_verification_scope(correction_status),
         "content_review_status": _review_status(folder),
     }
 
@@ -570,6 +579,7 @@ def update_transcript_status(folder, transcript_status, correction_status):
     quality = payload.setdefault("quality", {})
     quality["transcript_status"] = transcript_status
     quality["correction_status"] = correction_status
+    quality["verification_scope"] = transcript_verification_scope(correction_status)
     save_episode(folder, payload)
     state = inspect_episode_state(folder, payload)
     state["transcript_status"] = transcript_status

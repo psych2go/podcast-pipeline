@@ -628,6 +628,9 @@ class CorrectionManifestTests(unittest.TestCase):
         codes = {item["code"] for item in report["error_details"]}
         self.assertIn("asr_completeness_missing", codes)
         self.assertIn("correction_manifest_missing", codes)
+        self.assertEqual(report["completeness_enforcement"], "enforce")
+        self.assertTrue(report["completeness_blocking"])
+        self.assertFalse(report["completeness_warned"])
 
     def test_report_only_contract_warns_but_does_not_add_completeness_error(self):
         raw = _raw(contract=False, completeness_mode="report_only")
@@ -652,6 +655,9 @@ class CorrectionManifestTests(unittest.TestCase):
             report = build_quality_report(folder)
         codes = {item["code"] for item in report["error_details"]}
         self.assertNotIn("asr_speech_coverage_failed", codes)
+        self.assertEqual(report["completeness_enforcement"], "report_only")
+        self.assertFalse(report["completeness_blocking"])
+        self.assertTrue(report["completeness_warned"])
         self.assertTrue(any("report_only" in warning for warning in report["warnings"]))
 
 

@@ -223,6 +223,8 @@ class BatchReliabilityTests(unittest.TestCase):
                       "key": name + '.mp3', "release": {"state": "prepared"}}
                      for name in ('one', 'two', 'three')]
             saved = {}
+            stack.enter_context(patch.object(catalog_publish, 'CONTENT_DIR', root))
+            real_write = catalog_publish.write_publish_report
             for name in ('validate_for_stage', 'sync_site', 'rebuild_catalog', 'gen_index'):
                 stack.enter_context(patch.object(catalog_publish, name))
             for name, value in {'_publish_preflight': True, '_candidate_catalog_errors': [],
@@ -248,6 +250,7 @@ class BatchReliabilityTests(unittest.TestCase):
 
             def _save_report(path, report):
                 saved[path.parent.name] = copy.deepcopy(report)
+                real_write(path, report)
 
             stack.enter_context(patch.object(
                 catalog_publish, 'write_publish_report', side_effect=_save_report))
@@ -258,8 +261,12 @@ class BatchReliabilityTests(unittest.TestCase):
             self.assertTrue(saved['three']['passed'])
             for report in saved.values():
                 self.assertFalse(report['batch']['passed'])
-                self.assertEqual(report['batch']['episodes'], {
+                self.assertEqual({name: outcome['state'] for name, outcome in
+                                  report['batch']['episodes'].items()}, {
                     'one': 'published', 'two': 'failed', 'three': 'published'})
+                self.assertTrue(report['batch']['batch_id'])
+                self.assertTrue(report['batch']['pages_deployed'])
+                self.assertFalse(report['batch']['full_success'])
 
 
 if __name__ == '__main__':
