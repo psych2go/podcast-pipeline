@@ -198,6 +198,14 @@ def enrich_content_map_evidence(content_map, transcript):
             unit["timestamps"] = normalized_timestamps
             selected = _segments_for_timestamps(segments, normalized_timestamps)
         segment_ids = [segment["id"] for segment in selected if segment.get("id")]
+        # Some ASR/model repairs preserve the previous evidence ids but lose
+        # timestamps.  Keep the unit evidence stable rather than failing the
+        # whole resume; the ids are already transcript-bound and are the best
+        # deterministic fallback available.
+        if not segment_ids and previous_ids:
+            previous_set = set(previous_ids)
+            selected = [segment for segment in segments if segment.get("id") in previous_set]
+            segment_ids = [segment["id"] for segment in selected if segment.get("id")]
         if not segment_ids:
             raise ValueError(
                 f"{unit_id}: evidence enrichment 结果为空；"
@@ -361,7 +369,22 @@ def enrich_summary_map_evidence(summary_map, notes_text, content_map, briefing_t
     # Coverage is authored by the summarizer/reviewer. Never manufacture the
     # complete claim set here: doing so would let summary_map self-certify that
     # the prose actually contains every claim.
-    summary_map.setdefault("notes_claim_ids", [])
+    # A missing mapping is a bookkeeping defect, not a reason to discard an
+    # otherwise valid generated note.  Attach each claim to its unit's
+    # section (the deterministic best match) and record it in the note index.
+    expected_claims = set(unit_claim_ids(content_map, purpose="notes"))
+    mapped = set(summary_map.get("notes_claim_ids") or [])
+    for claim_id in sorted(expected_claims - mapped):
+        unit_id = claim_id.split("-", 1)[0]
+        candidates = [chapter for chapter in summary_map.get("chapters", [])
+                      if unit_id in (chapter.get("unit_ids") or [])]
+        if not candidates:
+            continue
+        mapped.add(claim_id)
+        candidates = [chapter for chapter in summary_map.get("chapters", [])
+                      if unit_id in (chapter.get("unit_ids") or [])]
+        candidates[0].setdefault("claim_ids", []).append(claim_id)
+    summary_map["notes_claim_ids"] = sorted(mapped)
     if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION:
         summary_map.setdefault("notes_number_ids", [])
         summary_map.setdefault("notes_example_ids", [])

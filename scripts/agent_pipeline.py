@@ -1093,6 +1093,10 @@ JSON，不修改文件。""",
         normalization_changes = finalized["normalization_changes"]
         alias_repairs = repair_public_entity_aliases(
             load_json(entities_path), notes_path, folder / "讲书稿.md")
+        # Alias repair is an input mutation; never hash the pre-repair notes
+        # into the review-bound summary map (notably on resume).
+        if alias_repairs:
+            notes_text = notes_path.read_text(encoding="utf-8")
         if alias_repairs:
             finalized = finalize_content_package(folder)
             briefing_text = finalized["briefing"]

@@ -254,9 +254,19 @@ def public_entity_alias_errors(payload, *texts):
                     and observed
                     and re.fullmatch(r"[\u3400-\u9fff·、（）()\s]+", observed)):
                 continue
+            person_parts = canonical.split()
+            short_person_form = (
+                item.get("entity_type") == "person"
+                and len(person_parts) >= 2
+                and observed.casefold() in {
+                    person_parts[0].casefold(), person_parts[-1].casefold()}
+                and re.search(
+                    rf"(?<![A-Za-z0-9]){re.escape(canonical)}(?![A-Za-z0-9])",
+                    joined, re.IGNORECASE))
             if (
                     not observed
                     or observed == canonical
+                    or short_person_form
                     or observed.casefold() in allowed
                     or observed_counts.get(observed.casefold(), 0) > 1):
                 continue
