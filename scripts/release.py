@@ -2,6 +2,7 @@
 
 import sys as _sys
 from pathlib import Path as _Path
+
 _ROOT = str(_Path(__file__).resolve().parents[1])
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
@@ -36,6 +37,7 @@ def load_release(folder):
         return {}
     try:
         import json
+
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
@@ -47,15 +49,32 @@ def release_fingerprint(folder_or_release):
     Empty/untracked releases have no reusable identity.
     """
     import json
-    release = (folder_or_release if isinstance(folder_or_release, dict)
-               else load_release(folder_or_release))
+
+    release = (
+        folder_or_release
+        if isinstance(folder_or_release, dict)
+        else load_release(folder_or_release)
+    )
     if not release or not release.get("audio_sha256") or not release.get("briefing_sha256"):
         return ""
-    identity = {key: release.get(key) for key in (
-        "schema_version", "release_id", "audio_sha256", "briefing_sha256",
-        "audio_key", "pipeline_version", "git_commit", "git_diff_sha256",
-        "ai_review_sha256", "quality_report_sha256", "artifact_manifest_sha256",
-        "source_cache_revision", "snapshot_sha256")}
+    identity = {
+        key: release.get(key)
+        for key in (
+            "schema_version",
+            "release_id",
+            "audio_sha256",
+            "briefing_sha256",
+            "audio_key",
+            "pipeline_version",
+            "git_commit",
+            "git_diff_sha256",
+            "ai_review_sha256",
+            "quality_report_sha256",
+            "artifact_manifest_sha256",
+            "source_cache_revision",
+            "snapshot_sha256",
+        )
+    }
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
@@ -94,9 +113,13 @@ def _git_provenance(folder):
             name = name.strip(b'"')
         text = name.decode("utf-8", errors="surrogateescape")
         lower = text.lower()
-        if (lower.endswith(".tgz") or lower.startswith(("content/", "output/", "reports/", ".runlogs/", ".wrangler/"))):
+        if lower.endswith(".tgz") or lower.startswith(
+            ("content/", "output/", "reports/", ".runlogs/", ".wrangler/")
+        ):
             continue
-        ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--", text], check=False)
+        ignored = subprocess.run(
+            ["git", "-C", str(root), "check-ignore", "-q", "--", text], check=False
+        )
         if ignored.returncode == 0:
             continue
         entries.append(raw)
@@ -104,59 +127,65 @@ def _git_provenance(folder):
     # Content/site media may be very large and are already hash-bound by the
     # release manifest. This fingerprint is intentionally scoped to pipeline
     # code/config/docs so provenance remains cheap and repeatable.
-    diff_raw = _git_output(
-        root,
-        "diff",
-        "--binary",
-        "HEAD",
-        "--",
-        "scripts",
-        "tests",
-        ".github",
-        "docs",
-        "benchmarks",
-        "CLAUDE.md",
-        "AGENTS.md",
-        "README.md",
-        "README.en.md",
-        ".env.example",
-        ".gitignore",
-        "requirements.txt",
-        "requirements-alignment.txt",
-        "requirements-asr.txt",
-        "requirements-asr-gpu.txt",
-        "requirements-benchmark.txt",
-        "requirements-browser.txt",
-        "requirements-diarization.txt",
-        "requirements-tts.txt",
-    ) or b""
-    untracked_raw = _git_output(
-        root,
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-        "-z",
-        "--",
-        "scripts",
-        "tests",
-        ".github",
-        "docs",
-        "benchmarks",
-        "CLAUDE.md",
-        "AGENTS.md",
-        "README.md",
-        "README.en.md",
-        ".env.example",
-        ".gitignore",
-        "requirements.txt",
-        "requirements-alignment.txt",
-        "requirements-asr.txt",
-        "requirements-asr-gpu.txt",
-        "requirements-benchmark.txt",
-        "requirements-browser.txt",
-        "requirements-diarization.txt",
-        "requirements-tts.txt",
-    ) or b""
+    diff_raw = (
+        _git_output(
+            root,
+            "diff",
+            "--binary",
+            "HEAD",
+            "--",
+            "scripts",
+            "tests",
+            ".github",
+            "docs",
+            "benchmarks",
+            "CLAUDE.md",
+            "AGENTS.md",
+            "README.md",
+            "README.en.md",
+            ".env.example",
+            ".gitignore",
+            "requirements.txt",
+            "requirements-alignment.txt",
+            "requirements-asr.txt",
+            "requirements-asr-gpu.txt",
+            "requirements-benchmark.txt",
+            "requirements-browser.txt",
+            "requirements-diarization.txt",
+            "requirements-tts.txt",
+        )
+        or b""
+    )
+    untracked_raw = (
+        _git_output(
+            root,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "scripts",
+            "tests",
+            ".github",
+            "docs",
+            "benchmarks",
+            "CLAUDE.md",
+            "AGENTS.md",
+            "README.md",
+            "README.en.md",
+            ".env.example",
+            ".gitignore",
+            "requirements.txt",
+            "requirements-alignment.txt",
+            "requirements-asr.txt",
+            "requirements-asr-gpu.txt",
+            "requirements-benchmark.txt",
+            "requirements-browser.txt",
+            "requirements-diarization.txt",
+            "requirements-tts.txt",
+        )
+        or b""
+    )
     digest = hashlib.sha256()
     digest.update(diff_raw)
     for raw_name in sorted(filter(None, untracked_raw.split(b"\0"))):
@@ -169,6 +198,8 @@ def _git_provenance(folder):
         "git_dirty": bool(status_raw),
         "git_diff_sha256": digest.hexdigest(),
     }
+
+
 def prepare_release(folder, mp3_path, briefing_path, *, require_clean=True):
     folder = Path(folder)
     mp3_path = Path(mp3_path)
@@ -176,9 +207,9 @@ def prepare_release(folder, mp3_path, briefing_path, *, require_clean=True):
     audio_sha256 = sha256_file(mp3_path)
     briefing_sha256 = sha256_file(briefing_path)
     slug = page_path(folder)
-    release_id = hashlib.sha256(
-        f"{slug}\n{audio_sha256}\n{briefing_sha256}".encode()
-    ).hexdigest()[:16]
+    release_id = hashlib.sha256(f"{slug}\n{audio_sha256}\n{briefing_sha256}".encode()).hexdigest()[
+        :16
+    ]
     previous = load_release(folder)
     provenance = _git_provenance(folder)
     if require_clean and provenance["git_dirty"]:
@@ -215,14 +246,10 @@ def update_release_state(folder, state, *, error="", **extra):
     previous_state = payload.get("state", "")
     if state == "failed":
         last_successful = payload.get("last_successful_state", "")
-        if (
-                previous_state in RELEASE_SUCCESS_STATES
-                and previous_state != "failed"):
+        if previous_state in RELEASE_SUCCESS_STATES and previous_state != "failed":
             last_successful = previous_state
         payload["last_successful_state"] = (
-            last_successful
-            if last_successful in RELEASE_SUCCESS_STATES
-            else ""
+            last_successful if last_successful in RELEASE_SUCCESS_STATES else ""
         )
     else:
         payload["last_successful_state"] = state
@@ -259,6 +286,7 @@ def main():
         require_clean=args.require_clean,
     )
     import json
+
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 

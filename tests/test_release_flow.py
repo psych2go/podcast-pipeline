@@ -23,12 +23,17 @@ class ReleaseStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td) / "Episode"
             folder.mkdir()
-            (folder / "episode.json").write_text(json.dumps({
-                "schema_version": 1,
-                "slug": "episode-12345678",
-                "display_title": "Episode",
-                "publish": {"page_path": "episode-12345678"},
-            }), encoding="utf-8")
+            (folder / "episode.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "slug": "episode-12345678",
+                        "display_title": "Episode",
+                        "publish": {"page_path": "episode-12345678"},
+                    }
+                ),
+                encoding="utf-8",
+            )
             mp3 = folder / "Episode.mp3"
             briefing = folder / "讲书稿.md"
             mp3.write_bytes(b"audio")
@@ -36,38 +41,36 @@ class ReleaseStateTests(unittest.TestCase):
 
             prepared = prepare_release(folder, mp3, briefing)
             self.assertEqual(prepared["state"], "prepared")
-            self.assertEqual(
-                prepared["last_successful_state"], "prepared")
+            self.assertEqual(prepared["last_successful_state"], "prepared")
 
             uploaded = update_release_state(folder, "uploaded")
-            self.assertEqual(
-                uploaded["last_successful_state"], "uploaded")
+            self.assertEqual(uploaded["last_successful_state"], "uploaded")
 
-            failed = update_release_state(
-                folder, "failed", error="upload follow-up failed")
+            failed = update_release_state(folder, "failed", error="upload follow-up failed")
             self.assertEqual(failed["state"], "failed")
-            self.assertEqual(
-                failed["last_successful_state"], "uploaded")
+            self.assertEqual(failed["last_successful_state"], "uploaded")
 
-            failed_again = update_release_state(
-                folder, "failed", error="retry failed early")
-            self.assertEqual(
-                failed_again["last_successful_state"], "uploaded")
+            failed_again = update_release_state(folder, "failed", error="retry failed early")
+            self.assertEqual(failed_again["last_successful_state"], "uploaded")
 
             deployed = update_release_state(folder, "deployed")
-            self.assertEqual(
-                deployed["last_successful_state"], "deployed")
+            self.assertEqual(deployed["last_successful_state"], "deployed")
 
     def test_prepare_release_records_git_provenance_without_requiring_clean(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td) / "Episode"
             folder.mkdir()
-            (folder / "episode.json").write_text(json.dumps({
-                "schema_version": 1,
-                "slug": "episode-12345678",
-                "display_title": "Episode",
-                "publish": {"page_path": "episode-12345678"},
-            }), encoding="utf-8")
+            (folder / "episode.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "slug": "episode-12345678",
+                        "display_title": "Episode",
+                        "publish": {"page_path": "episode-12345678"},
+                    }
+                ),
+                encoding="utf-8",
+            )
             mp3 = folder / "Episode.mp3"
             briefing = folder / "讲书稿.md"
             mp3.write_bytes(b"audio")
@@ -77,16 +80,13 @@ class ReleaseStateTests(unittest.TestCase):
                 "git_dirty": True,
                 "git_diff_sha256": "def456",
             }
-            with patch.object(
-                    release_module, "_git_provenance",
-                    return_value=provenance):
+            with patch.object(release_module, "_git_provenance", return_value=provenance):
                 prepared = prepare_release(folder, mp3, briefing, require_clean=False)
                 self.assertEqual(prepared["git_commit"], "abc123")
                 self.assertTrue(prepared["git_dirty"])
                 self.assertEqual(prepared["pipeline_version"], 8)
                 with self.assertRaisesRegex(RuntimeError, "require-clean"):
-                    prepare_release(
-                        folder, mp3, briefing, require_clean=True)
+                    prepare_release(folder, mp3, briefing, require_clean=True)
 
 
 class ProvenanceFilteringTests(unittest.TestCase):
@@ -100,8 +100,10 @@ class ProvenanceFilteringTests(unittest.TestCase):
                 return self.status
             return b""
 
-        with patch.object(release_module, "_git_output", side_effect=fake_output), \
-             patch.object(release_module.subprocess, "run", return_value=Mock(returncode=1)):
+        with (
+            patch.object(release_module, "_git_output", side_effect=fake_output),
+            patch.object(release_module.subprocess, "run", return_value=Mock(returncode=1)),
+        ):
             self.status = b"?? content/Episode\0?? reports/x.json\0"
             self.assertFalse(release_module._git_provenance("/repo")["git_dirty"])
             self.status = b"?? content/Episode\0 M scripts/release.py\0"
@@ -118,33 +120,37 @@ class CatalogReleaseFlowTests(unittest.TestCase):
         self.folder.mkdir(parents=True)
         self.site.mkdir()
         self.catalog_path = self.content / "播客目录.md"
-        (self.folder / "episode.json").write_text(json.dumps({
-            "schema_version": 1,
-            "slug": "episode-12345678",
-            "display_title": "Episode",
-            "publish": {"page_path": "episode-12345678"},
-        }), encoding="utf-8")
+        (self.folder / "episode.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "slug": "episode-12345678",
+                    "display_title": "Episode",
+                    "publish": {"page_path": "episode-12345678"},
+                }
+            ),
+            encoding="utf-8",
+        )
         self.briefing = self.folder / "讲书稿.md"
         self.mp3 = self.folder / "Episode.mp3"
         self.html = self.folder / "Episode - content.html"
         self.briefing.write_text("发布测试讲稿", encoding="utf-8")
         self.mp3.write_bytes(b"x" * 4096)
-        self.release = prepare_release(
-            self.folder, self.mp3, self.briefing)
+        self.release = prepare_release(self.folder, self.mp3, self.briefing)
 
     def tearDown(self):
         self.tempdir.cleanup()
 
     @contextmanager
     def publish_environment(
-            self,
-            *,
-            preflight=True,
-            upload=True,
-            consistency_errors=None,
-            deploy=True,
-            verify_report=None,
-            config_error=None,
+        self,
+        *,
+        preflight=True,
+        upload=True,
+        consistency_errors=None,
+        deploy=True,
+        verify_report=None,
+        config_error=None,
     ):
         verify_report = verify_report or {
             "schema_version": 1,
@@ -153,57 +159,53 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             "checks": {},
         }
         with ExitStack() as stack:
-            stack.enter_context(patch.object(
-                catalog, "CONTENT_DIR", self.content))
-            stack.enter_context(patch.object(
-                catalog, "SITE_DIR", self.site))
-            stack.enter_context(patch.object(
-                catalog, "BASE_DIR", self.root))
-            stack.enter_context(patch.object(
-                catalog, "CATALOG", self.catalog_path))
-            stack.enter_context(patch.object(
-                catalog, "R2_PUBLIC_URL", "https://audio.example"))
-            stack.enter_context(patch.object(
-                catalog, "PAGES_BASE_URL", "https://pages.example"))
-            stack.enter_context(patch.object(
-                catalog,
-                "validate_for_stage",
-                side_effect=config_error,
-            ))
-            stack.enter_context(patch.object(
-                catalog, "_publish_preflight", return_value=preflight))
-            stack.enter_context(patch.object(
-                catalog, "_gen_mp3", return_value=self.mp3))
+            stack.enter_context(patch.object(catalog, "CONTENT_DIR", self.content))
+            stack.enter_context(patch.object(catalog, "SITE_DIR", self.site))
+            stack.enter_context(patch.object(catalog, "BASE_DIR", self.root))
+            stack.enter_context(patch.object(catalog, "CATALOG", self.catalog_path))
+            stack.enter_context(patch.object(catalog, "R2_PUBLIC_URL", "https://audio.example"))
+            stack.enter_context(patch.object(catalog, "PAGES_BASE_URL", "https://pages.example"))
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "validate_for_stage",
+                    side_effect=config_error,
+                )
+            )
+            stack.enter_context(patch.object(catalog, "_publish_preflight", return_value=preflight))
+            stack.enter_context(patch.object(catalog, "_gen_mp3", return_value=self.mp3))
             stack.enter_context(patch.object(catalog, "sync_site"))
-            stack.enter_context(patch.object(
-                catalog, "rebuild_catalog", return_value=["Episode"]))
+            stack.enter_context(patch.object(catalog, "rebuild_catalog", return_value=["Episode"]))
             stack.enter_context(patch.object(catalog, "gen_index"))
-            stack.enter_context(patch.object(
-                catalog,
-                "catalog_consistency_errors",
-                return_value=list(consistency_errors or []),
-            ))
-            stack.enter_context(patch.object(
-                catalog, "_run", return_value=upload))
-            stack.enter_context(patch.object(
-                catalog,
-                "_run_with_output",
-                return_value=(
-                    deploy,
-                    "https://candidate.podcast-scripts.pages.dev",
-                ),
-            ))
-            stack.enter_context(patch.object(
-                catalog,
-                "_verify_publish_with_retry",
-                return_value=verify_report,
-            ))
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "catalog_consistency_errors",
+                    return_value=list(consistency_errors or []),
+                )
+            )
+            stack.enter_context(patch.object(catalog, "_run", return_value=upload))
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_run_with_output",
+                    return_value=(
+                        deploy,
+                        "https://candidate.podcast-scripts.pages.dev",
+                    ),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_verify_publish_with_retry",
+                    return_value=verify_report,
+                )
+            )
             yield
 
     def failure_report(self):
-        return json.loads(
-            (self.folder / "publish_report.json").read_text(
-                encoding="utf-8"))
+        return json.loads((self.folder / "publish_report.json").read_text(encoding="utf-8"))
 
     def assert_failure(self, stage, last_successful_state):
         report = self.failure_report()
@@ -219,13 +221,11 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             last_successful_state,
         )
         self.assertEqual(release["state"], "failed")
-        self.assertEqual(
-            release["last_successful_state"], last_successful_state)
+        self.assertEqual(release["last_successful_state"], last_successful_state)
 
     def test_publish_preflight_does_not_reset_failed_release(self):
         update_release_state(self.folder, "uploaded")
-        update_release_state(
-            self.folder, "failed", error="previous failure")
+        update_release_state(self.folder, "failed", error="previous failure")
         before = load_release(self.folder)
         briefing_hash = sha256(self.briefing.read_bytes()).hexdigest()
         self.html.write_text(
@@ -239,70 +239,71 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             stdout='{"streams":[{"codec_name":"mp3","duration":"1"}]}',
         )
 
-        with patch.object(catalog, "CONTENT_DIR", self.content), \
-                patch("scripts.quality_report.build_quality_report", return_value={
+        with (
+            patch.object(catalog, "CONTENT_DIR", self.content),
+            patch(
+                "scripts.quality_report.build_quality_report",
+                return_value={
                     "passed": True,
                     "errors": [],
-                }), \
-                patch("scripts.tts.validate_tts_manifest", return_value=[]), \
-                patch.object(catalog.subprocess, "run", return_value=ffprobe):
+                },
+            ),
+            patch("scripts.tts.validate_tts_manifest", return_value=[]),
+            patch.object(catalog.subprocess, "run", return_value=ffprobe),
+        ):
             self.assertTrue(catalog._publish_preflight("Episode"))
 
         self.assertEqual(load_release(self.folder), before)
 
     def test_dry_run_accepts_fresh_candidate_without_writing_outputs(self):
         update_release_state(self.folder, "uploaded")
-        update_release_state(
-            self.folder, "failed", error="previous failure")
+        update_release_state(self.folder, "failed", error="previous failure")
         release_before = (self.folder / "release.json").read_bytes()
 
         with ExitStack() as stack:
-            stack.enter_context(patch.object(
-                catalog, "CONTENT_DIR", self.content))
-            stack.enter_context(patch.object(
-                catalog, "SITE_DIR", self.site))
-            stack.enter_context(patch.object(
-                catalog, "BASE_DIR", self.root))
-            stack.enter_context(patch.object(
-                catalog, "CATALOG", self.catalog_path))
-            stack.enter_context(patch.object(
-                catalog, "validate_for_stage"))
-            stack.enter_context(patch.object(
-                catalog, "_publish_preflight", return_value=True))
-            stack.enter_context(patch.object(
-                catalog, "_ordered_episode_names", return_value=["Episode"]))
-            stack.enter_context(patch.object(
-                catalog, "_site_readiness_errors", return_value=[]))
-            stack.enter_context(patch.object(
-                catalog, "_build_entry", return_value={
-                    "folder": "Episode", "path": "episode-12345678",
-                }))
-            stack.enter_context(patch.object(
-                catalog, "_catalog_text", return_value="candidate"))
-            consistency = stack.enter_context(patch.object(
-                catalog,
-                "catalog_consistency_errors",
-                side_effect=AssertionError(
-                    "dry-run must not validate current site.json"),
-            ))
-            sync_site = stack.enter_context(patch.object(
-                catalog, "sync_site"))
-            rebuild = stack.enter_context(patch.object(
-                catalog, "rebuild_catalog"))
-            gen_index = stack.enter_context(patch.object(
-                catalog, "gen_index"))
-            stack.enter_context(patch.object(
-                catalog, "_run", return_value=True))
-            stack.enter_context(patch.object(
-                catalog,
-                "_run_with_output",
-                return_value=(True, "dry-run"),
-            ))
+            stack.enter_context(patch.object(catalog, "CONTENT_DIR", self.content))
+            stack.enter_context(patch.object(catalog, "SITE_DIR", self.site))
+            stack.enter_context(patch.object(catalog, "BASE_DIR", self.root))
+            stack.enter_context(patch.object(catalog, "CATALOG", self.catalog_path))
+            stack.enter_context(patch.object(catalog, "validate_for_stage"))
+            stack.enter_context(patch.object(catalog, "_publish_preflight", return_value=True))
+            stack.enter_context(
+                patch.object(catalog, "_ordered_episode_names", return_value=["Episode"])
+            )
+            stack.enter_context(patch.object(catalog, "_site_readiness_errors", return_value=[]))
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_build_entry",
+                    return_value={
+                        "folder": "Episode",
+                        "path": "episode-12345678",
+                    },
+                )
+            )
+            stack.enter_context(patch.object(catalog, "_catalog_text", return_value="candidate"))
+            consistency = stack.enter_context(
+                patch.object(
+                    catalog,
+                    "catalog_consistency_errors",
+                    side_effect=AssertionError("dry-run must not validate current site.json"),
+                )
+            )
+            sync_site = stack.enter_context(patch.object(catalog, "sync_site"))
+            rebuild = stack.enter_context(patch.object(catalog, "rebuild_catalog"))
+            gen_index = stack.enter_context(patch.object(catalog, "gen_index"))
+            stack.enter_context(patch.object(catalog, "_run", return_value=True))
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_run_with_output",
+                    return_value=(True, "dry-run"),
+                )
+            )
 
             self.assertTrue(catalog.finish("Episode", dry_run=True))
 
-        self.assertEqual(
-            (self.folder / "release.json").read_bytes(), release_before)
+        self.assertEqual((self.folder / "release.json").read_bytes(), release_before)
         self.assertFalse((self.site / "site.json").exists())
         self.assertFalse(self.catalog_path.exists())
         self.assertFalse((self.folder / "publish_report.json").exists())
@@ -313,8 +314,7 @@ class CatalogReleaseFlowTests(unittest.TestCase):
 
     def test_preflight_failure_writes_report_without_advancing_release(self):
         update_release_state(self.folder, "deployed")
-        update_release_state(
-            self.folder, "failed", error="previous verification failure")
+        update_release_state(self.folder, "failed", error="previous verification failure")
         with self.publish_environment(preflight=False):
             self.assertFalse(catalog.finish("Episode"))
         self.assert_failure("publish_preflight", "deployed")
@@ -325,8 +325,7 @@ class CatalogReleaseFlowTests(unittest.TestCase):
         self.assert_failure("upload_r2", "prepared")
 
     def test_catalog_failure_records_uploaded_as_last_successful_state(self):
-        with self.publish_environment(
-                consistency_errors=["catalog mismatch"]):
+        with self.publish_environment(consistency_errors=["catalog mismatch"]):
             self.assertFalse(catalog.finish("Episode"))
         self.assert_failure("catalog_consistency", "uploaded")
 
@@ -346,27 +345,29 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             self.assertFalse(catalog.finish("Episode"))
         self.assert_failure("verify_publish", "deployed")
         report = self.failure_report()
-        self.assertEqual(
-            report["checks"]["episode"]["status"], 503)
+        self.assertEqual(report["checks"]["episode"]["status"], 503)
 
     def test_unexpected_config_failure_still_writes_publish_report(self):
         update_release_state(self.folder, "uploaded")
-        with self.publish_environment(
-                config_error=ValueError("invalid publish config")):
-            with self.assertRaisesRegex(
-                    ValueError, "invalid publish config"):
+        with self.publish_environment(config_error=ValueError("invalid publish config")):
+            with self.assertRaisesRegex(ValueError, "invalid publish config"):
                 catalog.finish("Episode")
         self.assert_failure("config_preflight", "uploaded")
 
     def test_finish_batch_uploads_all_and_deploys_once(self):
         second = self.content / "Episode Two"
         second.mkdir()
-        (second / "episode.json").write_text(json.dumps({
-            "schema_version": 1,
-            "slug": "episode-two-12345678",
-            "display_title": "Episode Two",
-            "publish": {"page_path": "episode-two-12345678"},
-        }), encoding="utf-8")
+        (second / "episode.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "slug": "episode-two-12345678",
+                    "display_title": "Episode Two",
+                    "publish": {"page_path": "episode-two-12345678"},
+                }
+            ),
+            encoding="utf-8",
+        )
         second_briefing = second / "讲书稿.md"
         second_mp3 = second / "Episode Two.mp3"
         second_briefing.write_text("第二期发布测试讲稿", encoding="utf-8")
@@ -380,62 +381,64 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             "checks": {},
         }
         with ExitStack() as stack:
-            stack.enter_context(patch.object(
-                catalog, "CONTENT_DIR", self.content))
-            stack.enter_context(patch.object(
-                catalog, "SITE_DIR", self.site))
-            stack.enter_context(patch.object(
-                catalog, "BASE_DIR", self.root))
-            stack.enter_context(patch.object(
-                catalog, "CATALOG", self.catalog_path))
-            stack.enter_context(patch.object(
-                catalog, "R2_PUBLIC_URL", "https://audio.example"))
-            stack.enter_context(patch.object(
-                catalog, "PAGES_BASE_URL", "https://pages.example"))
-            stack.enter_context(patch.object(
-                catalog, "validate_for_stage"))
-            preflight = stack.enter_context(patch.object(
-                catalog, "_publish_preflight", return_value=True))
-            candidate = stack.enter_context(patch.object(
-                catalog, "_candidate_catalog_errors", return_value=[]))
-            stack.enter_context(patch.object(
-                catalog,
-                "_gen_mp3",
-                side_effect=lambda folder: (
-                    self.mp3 if Path(folder) == self.folder else second_mp3
-                ),
-            ))
-            sync_site = stack.enter_context(patch.object(
-                catalog, "sync_site"))
-            stack.enter_context(patch.object(
-                catalog,
-                "rebuild_catalog",
-                return_value=["Episode", "Episode Two"],
-            ))
+            stack.enter_context(patch.object(catalog, "CONTENT_DIR", self.content))
+            stack.enter_context(patch.object(catalog, "SITE_DIR", self.site))
+            stack.enter_context(patch.object(catalog, "BASE_DIR", self.root))
+            stack.enter_context(patch.object(catalog, "CATALOG", self.catalog_path))
+            stack.enter_context(patch.object(catalog, "R2_PUBLIC_URL", "https://audio.example"))
+            stack.enter_context(patch.object(catalog, "PAGES_BASE_URL", "https://pages.example"))
+            stack.enter_context(patch.object(catalog, "validate_for_stage"))
+            preflight = stack.enter_context(
+                patch.object(catalog, "_publish_preflight", return_value=True)
+            )
+            candidate = stack.enter_context(
+                patch.object(catalog, "_candidate_catalog_errors", return_value=[])
+            )
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_gen_mp3",
+                    side_effect=lambda folder: (
+                        self.mp3 if Path(folder) == self.folder else second_mp3
+                    ),
+                )
+            )
+            sync_site = stack.enter_context(patch.object(catalog, "sync_site"))
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "rebuild_catalog",
+                    return_value=["Episode", "Episode Two"],
+                )
+            )
             stack.enter_context(patch.object(catalog, "gen_index"))
-            stack.enter_context(patch.object(
-                catalog,
-                "catalog_consistency_errors",
-                return_value=[],
-            ))
-            upload = stack.enter_context(patch.object(
-                catalog, "_run", return_value=True))
-            deploy = stack.enter_context(patch.object(
-                catalog,
-                "_run_with_output",
-                return_value=(
-                    True,
-                    "https://candidate.podcast-scripts.pages.dev",
-                ),
-            ))
-            verify = stack.enter_context(patch.object(
-                catalog,
-                "_verify_publish_with_retry",
-                return_value=verify_report,
-            ))
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "catalog_consistency_errors",
+                    return_value=[],
+                )
+            )
+            upload = stack.enter_context(patch.object(catalog, "_run", return_value=True))
+            deploy = stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_run_with_output",
+                    return_value=(
+                        True,
+                        "https://candidate.podcast-scripts.pages.dev",
+                    ),
+                )
+            )
+            verify = stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_verify_publish_with_retry",
+                    return_value=verify_report,
+                )
+            )
 
-            self.assertTrue(catalog.finish_batch(
-                ["Episode", "Episode Two"]))
+            self.assertTrue(catalog.finish_batch(["Episode", "Episode Two"]))
 
         self.assertEqual(preflight.call_count, 2)
         self.assertEqual(
@@ -443,8 +446,7 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             ["Episode", "Episode Two"],
         )
         self.assertEqual(upload.call_count, 2)
-        sync_site.assert_called_once_with(
-                strict_names={"Episode", "Episode Two"})
+        sync_site.assert_called_once_with(strict_names={"Episode", "Episode Two"})
         deploy.assert_called_once()
         self.assertEqual(verify.call_count, 2)
         self.assertEqual(load_release(self.folder)["state"], "published")
@@ -454,38 +456,38 @@ class CatalogReleaseFlowTests(unittest.TestCase):
         second = self.content / "Episode Two"
         second.mkdir()
         with ExitStack() as stack:
-            stack.enter_context(patch.object(
-                catalog, "CONTENT_DIR", self.content))
+            stack.enter_context(patch.object(catalog, "CONTENT_DIR", self.content))
             stack.enter_context(patch.object(catalog, "validate_for_stage"))
-            stack.enter_context(patch.object(
-                catalog, "_publish_preflight", return_value=True))
-            candidate = stack.enter_context(patch.object(
-                catalog,
-                "_candidate_catalog_errors",
-                side_effect=[[], ["second invalid"]],
-            ))
-            failure = stack.enter_context(patch.object(
-                catalog, "_write_publish_failure"))
+            stack.enter_context(patch.object(catalog, "_publish_preflight", return_value=True))
+            candidate = stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_candidate_catalog_errors",
+                    side_effect=[[], ["second invalid"]],
+                )
+            )
+            failure = stack.enter_context(patch.object(catalog, "_write_publish_failure"))
 
-            self.assertFalse(catalog.finish_batch(
-                ["Episode", "Episode Two"]))
+            self.assertFalse(catalog.finish_batch(["Episode", "Episode Two"]))
 
         self.assertEqual(candidate.call_count, 2)
         self.assertEqual(failure.call_count, 2)
-        self.assertTrue(all(
-            "second invalid" in call.args[2]
-            for call in failure.call_args_list
-        ))
+        self.assertTrue(all("second invalid" in call.args[2] for call in failure.call_args_list))
 
     def test_finish_batch_parallel_upload_still_completes_pages_publish(self):
         second = self.content / "Episode Two"
         second.mkdir()
-        (second / "episode.json").write_text(json.dumps({
-            "schema_version": 1,
-            "slug": "episode-two-12345678",
-            "display_title": "Episode Two",
-            "publish": {"page_path": "episode-two-12345678"},
-        }), encoding="utf-8")
+        (second / "episode.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "slug": "episode-two-12345678",
+                    "display_title": "Episode Two",
+                    "publish": {"page_path": "episode-two-12345678"},
+                }
+            ),
+            encoding="utf-8",
+        )
         second_briefing = second / "讲书稿.md"
         second_mp3 = second / "Episode Two.mp3"
         second_briefing.write_text("第二期发布测试讲稿", encoding="utf-8")
@@ -507,58 +509,58 @@ class CatalogReleaseFlowTests(unittest.TestCase):
             "checks": {},
         }
         with ExitStack() as stack:
-            stack.enter_context(patch.object(
-                catalog, "CONTENT_DIR", self.content))
-            stack.enter_context(patch.object(
-                catalog, "SITE_DIR", self.site))
-            stack.enter_context(patch.object(
-                catalog, "BASE_DIR", self.root))
-            stack.enter_context(patch.object(
-                catalog, "CATALOG", self.catalog_path))
-            stack.enter_context(patch.object(
-                catalog, "R2_PUBLIC_URL", "https://audio.example"))
-            stack.enter_context(patch.object(
-                catalog, "PAGES_BASE_URL", "https://pages.example"))
+            stack.enter_context(patch.object(catalog, "CONTENT_DIR", self.content))
+            stack.enter_context(patch.object(catalog, "SITE_DIR", self.site))
+            stack.enter_context(patch.object(catalog, "BASE_DIR", self.root))
+            stack.enter_context(patch.object(catalog, "CATALOG", self.catalog_path))
+            stack.enter_context(patch.object(catalog, "R2_PUBLIC_URL", "https://audio.example"))
+            stack.enter_context(patch.object(catalog, "PAGES_BASE_URL", "https://pages.example"))
             stack.enter_context(patch.object(catalog, "validate_for_stage"))
-            stack.enter_context(patch.object(
-                catalog, "_publish_preflight", return_value=True))
-            candidate = stack.enter_context(patch.object(
-                catalog, "_candidate_catalog_errors", return_value=[]))
-            stack.enter_context(patch.object(
-                catalog,
-                "_gen_mp3",
-                side_effect=lambda folder: (
-                    self.mp3 if Path(folder) == self.folder else second_mp3
-                ),
-            ))
-            stack.enter_context(patch.object(
-                catalog, "_upload_r2_item", side_effect=upload))
-            sync_site = stack.enter_context(patch.object(
-                catalog, "sync_site"))
-            stack.enter_context(patch.object(
-                catalog, "rebuild_catalog",
-                return_value=["Episode", "Episode Two"]))
+            stack.enter_context(patch.object(catalog, "_publish_preflight", return_value=True))
+            candidate = stack.enter_context(
+                patch.object(catalog, "_candidate_catalog_errors", return_value=[])
+            )
+            stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_gen_mp3",
+                    side_effect=lambda folder: (
+                        self.mp3 if Path(folder) == self.folder else second_mp3
+                    ),
+                )
+            )
+            stack.enter_context(patch.object(catalog, "_upload_r2_item", side_effect=upload))
+            sync_site = stack.enter_context(patch.object(catalog, "sync_site"))
+            stack.enter_context(
+                patch.object(catalog, "rebuild_catalog", return_value=["Episode", "Episode Two"])
+            )
             stack.enter_context(patch.object(catalog, "gen_index"))
-            stack.enter_context(patch.object(
-                catalog, "catalog_consistency_errors", return_value=[]))
-            deploy = stack.enter_context(patch.object(
-                catalog, "_run_with_output",
-                return_value=(
-                    True,
-                    "https://candidate.podcast-scripts.pages.dev",
-                )))
-            verify = stack.enter_context(patch.object(
-                catalog, "_verify_publish_with_retry",
-                return_value=verify_report))
+            stack.enter_context(
+                patch.object(catalog, "catalog_consistency_errors", return_value=[])
+            )
+            deploy = stack.enter_context(
+                patch.object(
+                    catalog,
+                    "_run_with_output",
+                    return_value=(
+                        True,
+                        "https://candidate.podcast-scripts.pages.dev",
+                    ),
+                )
+            )
+            verify = stack.enter_context(
+                patch.object(catalog, "_verify_publish_with_retry", return_value=verify_report)
+            )
 
-            self.assertTrue(catalog.finish_batch(
-                ["Episode", "Episode Two"],
-                upload_concurrency=2,
-            ))
+            self.assertTrue(
+                catalog.finish_batch(
+                    ["Episode", "Episode Two"],
+                    upload_concurrency=2,
+                )
+            )
 
         self.assertEqual(candidate.call_count, 2)
-        sync_site.assert_called_once_with(
-                strict_names={"Episode", "Episode Two"})
+        sync_site.assert_called_once_with(strict_names={"Episode", "Episode Two"})
         deploy.assert_called_once()
         self.assertEqual(verify.call_count, 2)
         self.assertGreaterEqual(len(thread_ids), 2)

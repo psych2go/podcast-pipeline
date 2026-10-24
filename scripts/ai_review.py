@@ -2,6 +2,7 @@
 
 import sys as _sys
 from pathlib import Path as _Path
+
 _ROOT = str(_Path(__file__).resolve().parents[1])
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
@@ -29,8 +30,7 @@ from scripts.evidence import ASR_SOURCE_KINDS, effective_source_kind
 from scripts.run_report import RunReport
 from scripts.source_relevance import refresh_source_relevance_cache
 from scripts.subagent import run_json_task, resolve_stage_strategy
-from scripts.fact_check_cache import (
-    CACHE_FILENAME, build_cache_context, update_cache_from_review)
+from scripts.fact_check_cache import CACHE_FILENAME, build_cache_context, update_cache_from_review
 from scripts.claim_taxonomy import (
     derive_legacy_claim_type,
     AI_REVIEW_SCHEMA_VERSION,
@@ -57,8 +57,11 @@ REVIEW_FILES = (
     "来源.md",
 )
 OPTIONAL_REVIEW_FILES = (
-    "转录_纠错.txt", "tts_lexicon.json", "editorial_corrections.json",
-    "canonical_entities.json", "source_relevance_cache.json",
+    "转录_纠错.txt",
+    "tts_lexicon.json",
+    "editorial_corrections.json",
+    "canonical_entities.json",
+    "source_relevance_cache.json",
     "editorial_fact_checks.json",
 )
 
@@ -89,10 +92,14 @@ REVIEW_SCHEMA = {
                 "passed": {"type": "boolean"},
                 "score": {"type": "number", "minimum": 0, "maximum": 100},
                 "raw_score": {
-                    "type": "number", "minimum": 0, "maximum": 100,
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100,
                 },
                 "corrected_score": {
-                    "type": "number", "minimum": 0, "maximum": 100,
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100,
                 },
                 "accuracy_basis": {
                     "type": "string",
@@ -154,9 +161,13 @@ REVIEW_SCHEMA = {
                             "entity_type": {
                                 "type": "string",
                                 "enum": [
-                                    "person", "company", "product",
-                                    "institution", "title",
-                                    "technical_term", "other",
+                                    "person",
+                                    "company",
+                                    "product",
+                                    "institution",
+                                    "title",
+                                    "technical_term",
+                                    "other",
                                 ],
                             },
                             "observed": {"type": "string"},
@@ -164,7 +175,9 @@ REVIEW_SCHEMA = {
                             "verdict": {
                                 "type": "string",
                                 "enum": [
-                                    "correct", "corrected", "incorrect",
+                                    "correct",
+                                    "corrected",
+                                    "incorrect",
                                     "uncertain",
                                 ],
                             },
@@ -227,22 +240,35 @@ REVIEW_SCHEMA = {
                     "repair_kind": {
                         "type": "string",
                         "enum": [
-                            "manual", "exact_entity", "safe_tts",
-                            "summary_map", "claim_evidence",
+                            "manual",
+                            "exact_entity",
+                            "safe_tts",
+                            "summary_map",
+                            "claim_evidence",
                         ],
                     },
                     "replacement_from": {"type": "string"},
                     "replacement_to": {"type": "string"},
                     "allowed_files": {
-                        "type": "array", "items": {"type": "string"},
+                        "type": "array",
+                        "items": {"type": "string"},
                     },
                 },
                 "required": [
-                    "severity", "category", "file", "statement",
-                    "source_evidence", "evidence_type",
-                    "evidence_segment_ids", "source_urls", "checked_at",
-                    "recommendation", "repair_kind",
-                    "replacement_from", "replacement_to", "allowed_files",
+                    "severity",
+                    "category",
+                    "file",
+                    "statement",
+                    "source_evidence",
+                    "evidence_type",
+                    "evidence_segment_ids",
+                    "source_urls",
+                    "checked_at",
+                    "recommendation",
+                    "repair_kind",
+                    "replacement_from",
+                    "replacement_to",
+                    "allowed_files",
                 ],
             },
         },
@@ -298,20 +324,39 @@ REVIEW_SCHEMA = {
                     "notes": {"type": "string"},
                 },
                 "required": [
-                    "claim", "parent_claim_id", "subclaim_id", "claim_type",
-                    "claim_origin", "speaker_role", "assertion_type",
-                    "verification_mode", "risk_domain", "verdict",
+                    "claim",
+                    "parent_claim_id",
+                    "subclaim_id",
+                    "claim_type",
+                    "claim_origin",
+                    "speaker_role",
+                    "assertion_type",
+                    "verification_mode",
+                    "risk_domain",
+                    "verdict",
                     "publication_status",
                     "evidence_segment_ids",
-                    "source_urls", "checked_at", "notes",
+                    "source_urls",
+                    "checked_at",
+                    "notes",
                 ],
             },
         },
     },
     "required": [
-        "schema_version", "passed", "summary", "transcript_quality",
-        "coverage", "factuality", "numbers", "attribution",
-        "entity_accuracy", "tts", "publish", "issues", "fact_checks",
+        "schema_version",
+        "passed",
+        "summary",
+        "transcript_quality",
+        "coverage",
+        "factuality",
+        "numbers",
+        "attribution",
+        "entity_accuracy",
+        "tts",
+        "publish",
+        "issues",
+        "fact_checks",
     ],
 }
 
@@ -348,10 +393,7 @@ def review_scope(folder):
             "changed_files": sorted(current),
             "unchanged_files": [],
         }
-    changed = sorted(
-        name for name, digest in current.items()
-        if expected.get(name) != digest
-    )
+    changed = sorted(name for name, digest in current.items() if expected.get(name) != digest)
     changed.extend(sorted(name for name in expected if name not in current))
     changed = sorted(set(changed))
     return {
@@ -363,21 +405,15 @@ def review_scope(folder):
 
 def changed_review_inputs(before, after):
     """Return review inputs changed between two hash snapshots."""
-    return sorted(
-        name for name in set(before) | set(after)
-        if before.get(name) != after.get(name)
-    )
+    return sorted(name for name in set(before) | set(after) if before.get(name) != after.get(name))
 
 
 def assert_review_snapshot(folder, input_snapshot, context_snapshot=None):
     changed = changed_review_inputs(input_snapshot, reviewed_hashes(folder))
-    context_changed = changed_review_inputs(
-        context_snapshot or {}, review_context_hashes(folder))
+    context_changed = changed_review_inputs(context_snapshot or {}, review_context_hashes(folder))
     if changed or context_changed:
         affected = changed + [f"context:{name}" for name in context_changed]
-        raise RuntimeError(
-            "AI 审查期间输入发生变化，已丢弃结果: "
-            + ", ".join(affected))
+        raise RuntimeError("AI 审查期间输入发生变化，已丢弃结果: " + ", ".join(affected))
 
 
 @contextmanager
@@ -403,10 +439,8 @@ def isolated_review_workspace(folder, snapshot, context_snapshot=None):
         changed = changed_review_inputs(snapshot, staged)
         context_changed = changed_review_inputs(context_snapshot, staged_context)
         if changed or context_changed:
-            affected = changed + [
-                f"context:{name}" for name in context_changed]
-            raise RuntimeError(
-                "AI 审查 staging 哈希不一致: " + ", ".join(affected))
+            affected = changed + [f"context:{name}" for name in context_changed]
+            raise RuntimeError("AI 审查 staging 哈希不一致: " + ", ".join(affected))
         yield workspace
 
 
@@ -416,10 +450,7 @@ def _replace_provenance_wording(value):
     if isinstance(value, list):
         return [_replace_provenance_wording(item) for item in value]
     if isinstance(value, dict):
-        return {
-            key: _replace_provenance_wording(item)
-            for key, item in value.items()
-        }
+        return {key: _replace_provenance_wording(item) for key, item in value.items()}
     return value
 
 
@@ -436,24 +467,20 @@ def rebind_provenance_review(folder, output=None):
     expected = review.get("reviewed_files", {})
     current = reviewed_hashes(folder)
     changed = sorted(
-        name for name in set(expected) | set(current)
-        if expected.get(name) != current.get(name)
+        name for name in set(expected) | set(current) if expected.get(name) != current.get(name)
     )
     if not changed:
         return review
     allowed = {"episode.json", "来源.md", "transcript.raw.json"}
     unexpected = sorted(set(changed) - allowed)
     if unexpected:
-        raise RuntimeError(
-            f"存在语义文件变化，必须重新 AI 审查: {unexpected}")
+        raise RuntimeError(f"存在语义文件变化，必须重新 AI 审查: {unexpected}")
 
-    raw = json.loads(
-        (folder / "transcript.raw.json").read_text(encoding="utf-8"))
+    raw = json.loads((folder / "transcript.raw.json").read_text(encoding="utf-8"))
     migration = raw.get("provenance", {}).get("migration", {})
     if migration.get("kind") != "metadata_only":
         raise RuntimeError("transcript.raw.json 缺少 metadata_only 迁移证明")
-    if migration.get("previous_raw_sha256") != expected.get(
-            "transcript.raw.json"):
+    if migration.get("previous_raw_sha256") != expected.get("transcript.raw.json"):
         raise RuntimeError("迁移前 transcript.raw.json 哈希与原审查不匹配")
 
     source_kind = effective_source_kind(folder, raw)
@@ -461,10 +488,8 @@ def rebind_provenance_review(folder, output=None):
         review = _replace_provenance_wording(review)
     if source_kind in ASR_SOURCE_KINDS:
         transcript_quality = review.setdefault("transcript_quality", {})
-        transcript_quality.setdefault(
-            "corrected_score", transcript_quality.get("score"))
-        transcript_quality.setdefault(
-            "accuracy_basis", "semantic_review_only")
+        transcript_quality.setdefault("corrected_score", transcript_quality.get("score"))
+        transcript_quality.setdefault("accuracy_basis", "semantic_review_only")
     review["provenance_rebind"] = {
         "method": "metadata_only",
         "changed_files": changed,
@@ -477,11 +502,9 @@ def rebind_provenance_review(folder, output=None):
     return review
 
 
-
 def _current_claim_texts(folder):
     try:
-        payload = json.loads(
-            (Path(folder) / "content_map.json").read_text(encoding="utf-8"))
+        payload = json.loads((Path(folder) / "content_map.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     claims = []
@@ -509,14 +532,15 @@ def _write_cache_review_context(folder):
     atomic_write_json(path, context)
     return path
 
+
 def _prompt(folder, scope=None):
     folder = Path(folder).resolve()
     scope = scope or review_scope(folder)
     scope_instruction = f"""
 
-本次复审范围线索：{scope['mode']}。
-- 与上次输入哈希相比发生变化的文件：{scope['changed_files']}。
-- 哈希未变化的文件：{scope['unchanged_files']}。
+本次复审范围线索：{scope["mode"]}。
+- 与上次输入哈希相比发生变化的文件：{scope["changed_files"]}。
+- 哈希未变化的文件：{scope["unchanged_files"]}。
 - staging 中不会提供上次 ai_review.json、passed、分数或结论；必须从当前证据独立判断。
 - 先重点重审发生变化的文件及其关联 claim；最后必须重新执行一次完整发布判定。
 - 即使没有文件变化，也必须独立输出本次审查结果。
@@ -638,8 +662,7 @@ def _prompt(folder, scope=None):
 
 def _content_map_claim_ids(workspace):
     try:
-        payload = json.loads(
-            (Path(workspace) / "content_map.json").read_text(encoding="utf-8"))
+        payload = json.loads((Path(workspace) / "content_map.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, TypeError):
         return None
     if not isinstance(payload, dict):
@@ -656,9 +679,17 @@ def _review_semantic_fingerprint(review):
     semantic = {
         key: review.get(key)
         for key in (
-            "passed", "summary", "transcript_quality", "coverage",
-            "factuality", "numbers", "attribution", "entity_accuracy",
-            "tts", "publish", "issues",
+            "passed",
+            "summary",
+            "transcript_quality",
+            "coverage",
+            "factuality",
+            "numbers",
+            "attribution",
+            "entity_accuracy",
+            "tts",
+            "publish",
+            "issues",
         )
     }
     fact_checks = []
@@ -666,14 +697,25 @@ def _review_semantic_fingerprint(review):
         if not isinstance(item, dict):
             fact_checks.append(item)
             continue
-        fact_checks.append({
-            key: item.get(key)
-            for key in (
-                "claim", "parent_claim_id", "claim_origin", "speaker_role",
-                "assertion_type", "risk_domain", "evidence_segment_ids",
-                "verdict", "publication_status", "source_urls", "checked_at", "notes",
-            )
-        })
+        fact_checks.append(
+            {
+                key: item.get(key)
+                for key in (
+                    "claim",
+                    "parent_claim_id",
+                    "claim_origin",
+                    "speaker_role",
+                    "assertion_type",
+                    "risk_domain",
+                    "evidence_segment_ids",
+                    "verdict",
+                    "publication_status",
+                    "source_urls",
+                    "checked_at",
+                    "notes",
+                )
+            }
+        )
     semantic["fact_checks"] = fact_checks
     return semantic
 
@@ -682,8 +724,14 @@ _HIGH_RISK_DOMAINS = {"medical", "legal", "financial", "safety"}
 
 
 _MECHANICAL_FC_FIELDS = ("claim_type", "subclaim_id", "verification_mode")
-_SPECIALIZED_ASSERTIONS = {"opinion", "prediction", "recommendation", "explanation",
-                           "definition", "allegation"}
+_SPECIALIZED_ASSERTIONS = {
+    "opinion",
+    "prediction",
+    "recommendation",
+    "explanation",
+    "definition",
+    "allegation",
+}
 
 
 def _expected_verification_mode(item):
@@ -692,12 +740,13 @@ def _expected_verification_mode(item):
     if item.get("publication_status") == "excluded":
         return None
     assertion = item.get("assertion_type")
-    if (assertion == "recommendation"
-            and item.get("risk_domain") in _HIGH_RISK_DOMAINS
-            and item.get("source_urls")):
+    if (
+        assertion == "recommendation"
+        and item.get("risk_domain") in _HIGH_RISK_DOMAINS
+        and item.get("source_urls")
+    ):
         return "safety_cross_check"
-    if (item.get("claim_origin") == "speaker_firsthand"
-            and assertion not in _SPECIALIZED_ASSERTIONS):
+    if item.get("claim_origin") == "speaker_firsthand" and assertion not in _SPECIALIZED_ASSERTIONS:
         return "transcript_attribution"
     return None
 
@@ -715,15 +764,27 @@ def _deterministic_mode_fixes(review):
             continue
         mode = _expected_verification_mode(item)
         if mode and item.get("verification_mode") != mode:
-            fixed.append({"index": index, "claim": item.get("claim"),
-                          "field": "verification_mode",
-                          "from": item.get("verification_mode"), "to": mode})
+            fixed.append(
+                {
+                    "index": index,
+                    "claim": item.get("claim"),
+                    "field": "verification_mode",
+                    "from": item.get("verification_mode"),
+                    "to": mode,
+                }
+            )
             item["verification_mode"] = mode
         legacy = derive_legacy_claim_type(item)
         if item.get("claim_type") != legacy:
-            fixed.append({"index": index, "claim": item.get("claim"),
-                          "field": "claim_type",
-                          "from": item.get("claim_type"), "to": legacy})
+            fixed.append(
+                {
+                    "index": index,
+                    "claim": item.get("claim"),
+                    "field": "claim_type",
+                    "from": item.get("claim_type"),
+                    "to": legacy,
+                }
+            )
             item["claim_type"] = legacy
     return fixed
 
@@ -737,10 +798,12 @@ def _restore_frozen_semantics(original, corrected):
     if len(orig_fcs) != len(corr_fcs):
         raise RuntimeError("AI review 机械纠错改变了 fact_checks 数量")
     restored = copy.deepcopy(original)
-    reverted = [key for key, value in _review_semantic_fingerprint(corrected).items()
-                if key != "fact_checks"
-                and value != _review_semantic_fingerprint(original).get(key)]
-    for index, (o, c) in enumerate(zip(orig_fcs, corr_fcs)):
+    reverted = [
+        key
+        for key, value in _review_semantic_fingerprint(corrected).items()
+        if key != "fact_checks" and value != _review_semantic_fingerprint(original).get(key)
+    ]
+    for index, (o, c) in enumerate(zip(orig_fcs, corr_fcs, strict=False)):
         if not isinstance(o, dict) or not isinstance(c, dict):
             continue
         for key in set(o) | set(c):
@@ -779,14 +842,28 @@ class ReviewContractError(RuntimeError):
 
 
 def _call_metrics(result):
-    return {key: result.get(key) for key in (
-        "task_name", "model", "duration_ms", "retry_count", "runner_index",
-        "prompt_effort", "thinking_source", "retry_events", "budget_remaining")}
+    return {
+        key: result.get(key)
+        for key in (
+            "task_name",
+            "model",
+            "duration_ms",
+            "retry_count",
+            "runner_index",
+            "prompt_effort",
+            "thinking_source",
+            "retry_events",
+            "budget_remaining",
+        )
+    }
 
 
 def _validate_or_retry_review(workspace, review, *, model, effort):
-    diagnostic = {"original_output": copy.deepcopy(review), "corrected_output": None,
-                  "audit": {"retry_count": 0}}
+    diagnostic = {
+        "original_output": copy.deepcopy(review),
+        "corrected_output": None,
+        "audit": {"retry_count": 0},
+    }
     audit = diagnostic["audit"]
     try:
         normalize_review_fact_checks(review)
@@ -798,8 +875,7 @@ def _validate_or_retry_review(workspace, review, *, model, effort):
         fixed = _deterministic_mode_fixes(review)
         if fixed:
             audit["deterministic_mode_fixes"] = fixed
-            errors, warnings = validate_review_fact_checks(
-                review, valid_claim_ids=claim_ids)
+            errors, warnings = validate_review_fact_checks(review, valid_claim_ids=claim_ids)
             audit.update(post_fix_errors=errors, post_fix_warnings=warnings)
             if not errors:
                 return review, audit, None
@@ -824,34 +900,56 @@ CHUNK_AUDIT_SCHEMA = {
         "transcript_quality_score": {"type": "integer", "minimum": 0, "maximum": 100},
         "coverage_score": {"type": "integer", "minimum": 0, "maximum": 100},
         "factuality_score": {"type": "integer", "minimum": 0, "maximum": 100},
-        "issues": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False,
-            "properties": {
-                "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-                "category": {"type": "string"},
-                "file": {"type": "string"},
-                "statement": {"type": "string"},
-                "source_evidence": {"type": "string"},
-                "evidence_segment_ids": {"type": "array", "items": {"type": "string"}},
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                    "category": {"type": "string"},
+                    "file": {"type": "string"},
+                    "statement": {"type": "string"},
+                    "source_evidence": {"type": "string"},
+                    "evidence_segment_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": [
+                    "severity",
+                    "category",
+                    "file",
+                    "statement",
+                    "source_evidence",
+                    "evidence_segment_ids",
+                ],
             },
-            "required": ["severity", "category", "file", "statement",
-                         "source_evidence", "evidence_segment_ids"],
-        }},
+        },
         "summary": {"type": "string"},
     },
-    "required": ["chunk_id", "audit_complete", "units_reviewed",
-                 "transcript_quality_score", "coverage_score",
-                 "factuality_score", "issues", "summary"],
+    "required": [
+        "chunk_id",
+        "audit_complete",
+        "units_reviewed",
+        "transcript_quality_score",
+        "coverage_score",
+        "factuality_score",
+        "issues",
+        "summary",
+    ],
 }
 
 
 def _chunk_enabled():
     return os.environ.get("SUBAGENT_REVIEW_CHUNKED", "").strip().lower() in {
-        "1", "true", "yes", "on"}
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _script_chapters_for(workspace, unit_ids):
     from scripts.content_map import briefing_chapters
+
     workspace = Path(workspace)
     try:
         sm = json.loads((workspace / "summary_map.json").read_text(encoding="utf-8"))
@@ -862,7 +960,8 @@ def _script_chapters_for(workspace, unit_ids):
     out = {}
     for ch in sm.get("chapters", []):
         units = set(ch.get("unit_ids") or []) | {
-            str(c).split("-")[0] for c in ch.get("claim_ids") or []}
+            str(c).split("-")[0] for c in ch.get("claim_ids") or []
+        }
         if units & wanted and ch.get("title") in chapters:
             out[ch["title"]] = chapters[ch["title"]]
     return out
@@ -875,6 +974,7 @@ def build_review_chunks(workspace, max_chars=None):
     chunked pass is exhaustive by construction; nothing is sampled or skipped.
     """
     import re as _re
+
     max_chars = int(max_chars or os.environ.get("SUBAGENT_REVIEW_CHUNK_CHARS", 40000))
     workspace = Path(workspace)
     raw = json.loads((workspace / "transcript.raw.json").read_text(encoding="utf-8"))
@@ -883,21 +983,23 @@ def build_review_chunks(workspace, max_chars=None):
     manifest_path = workspace / "correction_manifest.json"
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        corrected = {str(i.get("segment_id")): i.get("corrected_text", "")
-                     for i in manifest.get("segments", []) if isinstance(i, dict)}
+        corrected = {
+            str(i.get("segment_id")): i.get("corrected_text", "")
+            for i in manifest.get("segments", [])
+            if isinstance(i, dict)
+        }
     corrected_txt = workspace / "转录_纠错.txt"
     if not corrected and corrected_txt.exists():
         lines = corrected_txt.read_text(encoding="utf-8").strip().split("\n")
         if len(lines) == len(segments):
-            for seg, line in zip(segments, lines):
+            for seg, line in zip(segments, lines, strict=False):
                 speaker = seg.get("speaker")
                 prefix = f"[{speaker}] " if speaker else ""
                 if prefix and line.startswith(prefix):
-                    line = line[len(prefix):]
+                    line = line[len(prefix) :]
                 corrected[str(seg.get("id"))] = line.strip()
         else:
-            raise RuntimeError(
-                "转录_纠错.txt 行数与 transcript 片段数不一致，无法构建分块审查输入")
+            raise RuntimeError("转录_纠错.txt 行数与 transcript 片段数不一致，无法构建分块审查输入")
     if corrected_txt.exists() and not corrected:
         raise RuntimeError("分块审查无法取得纠错文本，拒绝回退到原始听写")
     cmap = json.loads((workspace / "content_map.json").read_text(encoding="utf-8"))
@@ -912,8 +1014,9 @@ def build_review_chunks(workspace, max_chars=None):
     chunks, current, size = [], [], 0
     for unit in units:
         ids = (unit.get("evidence") or {}).get("segment_ids") or []
-        cost = sum(len(str(segments[order[i]].get("text", ""))) * 2
-                   for i in ids if i in order) + len(json.dumps(unit, ensure_ascii=False))
+        cost = sum(
+            len(str(segments[order[i]].get("text", ""))) * 2 for i in ids if i in order
+        ) + len(json.dumps(unit, ensure_ascii=False))
         if current and size + cost > max_chars:
             chunks.append(current)
             current, size = [], 0
@@ -933,18 +1036,29 @@ def build_review_chunks(workspace, max_chars=None):
         last = seg_owner.setdefault(sid, last)
     out = []
     for idx, chunk in enumerate(chunks):
-        seg_rows = [{
-            "id": str(s.get("id")), "start": s.get("start"), "end": s.get("end"),
-            "speaker": s.get("speaker"),
-            "text": corrected.get(str(s.get("id")), s.get("text", "")),
-        } for s in segments if seg_owner.get(str(s.get("id"))) == idx]
+        seg_rows = [
+            {
+                "id": str(s.get("id")),
+                "start": s.get("start"),
+                "end": s.get("end"),
+                "speaker": s.get("speaker"),
+                "text": corrected.get(str(s.get("id")), s.get("text", "")),
+            }
+            for s in segments
+            if seg_owner.get(str(s.get("id"))) == idx
+        ]
         unit_ids = [u.get("id") for u in chunk]
-        out.append({
-            "chunk_id": f"K{idx + 1:02d}", "total_chunks": len(chunks),
-            "unit_ids": unit_ids, "segments": seg_rows, "units": chunk,
-            "notes_lines": {u: note_lines.get(u, []) for u in unit_ids},
-            "script_chapters": _script_chapters_for(workspace, unit_ids),
-        })
+        out.append(
+            {
+                "chunk_id": f"K{idx + 1:02d}",
+                "total_chunks": len(chunks),
+                "unit_ids": unit_ids,
+                "segments": seg_rows,
+                "units": chunk,
+                "notes_lines": {u: note_lines.get(u, []) for u in unit_ids},
+                "script_chapters": _script_chapters_for(workspace, unit_ids),
+            }
+        )
     return out
 
 
@@ -952,8 +1066,10 @@ UNCLEAR_SCORING_RULE = {
     "id": "unclear_not_deductible_v1",
     "approved_by": "user",
     "approved_at": "2026-10-21",
-    "text": ("纠错稿中诚实标注的 [unclear]（原音确实无法恢复）不扣转录分；"
-             "未标注的乱码、错词、人名错误仍照常扣分；笔记/讲稿不得把 [unclear] 处内容当作事实。"),
+    "text": (
+        "纠错稿中诚实标注的 [unclear]（原音确实无法恢复）不扣转录分；"
+        "未标注的乱码、错词、人名错误仍照常扣分；笔记/讲稿不得把 [unclear] 处内容当作事实。"
+    ),
 }
 UNCLEAR_RULE_PROMPT = """
 [unclear] 评分规则（用户批准，unclear_not_deductible_v1）：纠错稿中的 [unclear] 标记表示原音确实无法恢复，是诚实的标注。
@@ -964,10 +1080,20 @@ UNCLEAR_RULE_PROMPT = """
 
 
 def _chunk_prompt(workspace, chunk_file, chunk):
-    payload = {k: chunk[k] for k in (
-        "chunk_id", "total_chunks", "unit_ids", "segments", "units", "notes_lines",
-        "script_chapters") if k in chunk}
-    return f"""你是播客流水线最终发布审查的分块审查员（第 {chunk['chunk_id']} 块，共 {chunk['total_chunks']} 块）。
+    payload = {
+        k: chunk[k]
+        for k in (
+            "chunk_id",
+            "total_chunks",
+            "unit_ids",
+            "segments",
+            "units",
+            "notes_lines",
+            "script_chapters",
+        )
+        if k in chunk
+    }
+    return f"""你是播客流水线最终发布审查的分块审查员（第 {chunk["chunk_id"]} 块，共 {chunk["total_chunks"]} 块）。
 你没有任何文件读取工具；本块全部审查材料已完整内嵌在下方 JSON 中，只能依据它作出判断（本块不联网；外部事实核查由最终审查员负责，不得引用任何外部转录稿）：
 - segments：本块全部转录片段的规范化纠错文本 text（即 转录_纠错.txt 对应片段）；
 - units：content_map 单元及其 claims、numbers、examples、claim_evidence；
@@ -981,7 +1107,7 @@ def _chunk_prompt(workspace, chunk_file, chunk):
 3. 事实：笔记中的数字、归因、事实性表述是否与片段一致；明显需要外部限定的外部事实请作为待最终审查核查的问题列出。
 {UNCLEAR_RULE_PROMPT}
 分数为本块的诚实估计（0-100）；只有确实逐段读完本块全部片段和单元时才可将 audit_complete 设为 true，否则必须为 false 且分数不得高于实际把握。
-不得因为其他块或整体印象抬高分数。只返回符合 schema 的 JSON，chunk_id 填 {chunk['chunk_id']}。
+不得因为其他块或整体印象抬高分数。只返回符合 schema 的 JSON，chunk_id 填 {chunk["chunk_id"]}。
 
 本块材料 JSON：
 {json.dumps(payload, ensure_ascii=False)}"""
@@ -997,9 +1123,18 @@ def _chunk_concurrency():
 
 def _rate_limit_error(exc):
     text = str(exc).lower()
-    return any(term in text for term in (
-        "rate limit", "rate_limit", "usage limit", "usage_limit", "overloaded",
-        "too many requests", "429"))
+    return any(
+        term in text
+        for term in (
+            "rate limit",
+            "rate_limit",
+            "usage limit",
+            "usage_limit",
+            "overloaded",
+            "too many requests",
+            "429",
+        )
+    )
 
 
 def _run_chunk_with_backoff(chunk, workspace, model, effort, cache_file, max_retries=4):
@@ -1009,7 +1144,7 @@ def _run_chunk_with_backoff(chunk, workspace, model, effort, cache_file, max_ret
         except Exception as exc:
             if not _rate_limit_error(exc) or attempt >= max_retries:
                 raise
-            time.sleep(min(30, 2 ** attempt))
+            time.sleep(min(30, 2**attempt))
 
 
 def _run_one_chunk(chunk, workspace, model, effort, cache_file):
@@ -1017,13 +1152,21 @@ def _run_one_chunk(chunk, workspace, model, effort, cache_file):
     prev_flag = os.environ.get("SUBAGENT_PI_NO_FILE_TOOLS")
     os.environ["SUBAGENT_PI_NO_FILE_TOOLS"] = "1"
     try:
-        res = run_json_task(chunk_ws, _chunk_prompt(chunk_ws, None, chunk) +
-            f"\\n本次审查 effort 要求：{effort}。", CHUNK_AUDIT_SCHEMA,
-            task_name="ai_review_chunk", enable_search=False, model=model or None,
-            timeout=1800, effort=effort)
+        res = run_json_task(
+            chunk_ws,
+            _chunk_prompt(chunk_ws, None, chunk) + f"\\n本次审查 effort 要求：{effort}。",
+            CHUNK_AUDIT_SCHEMA,
+            task_name="ai_review_chunk",
+            enable_search=False,
+            model=model or None,
+            timeout=1800,
+            effort=effort,
+        )
     finally:
-        if prev_flag is None: os.environ.pop("SUBAGENT_PI_NO_FILE_TOOLS", None)
-        else: os.environ["SUBAGENT_PI_NO_FILE_TOOLS"] = prev_flag
+        if prev_flag is None:
+            os.environ.pop("SUBAGENT_PI_NO_FILE_TOOLS", None)
+        else:
+            os.environ["SUBAGENT_PI_NO_FILE_TOOLS"] = prev_flag
         shutil.rmtree(chunk_ws, ignore_errors=True)
     payload = res.get("payload")
     if not isinstance(payload, dict):
@@ -1032,7 +1175,9 @@ def _run_one_chunk(chunk, workspace, model, effort, cache_file):
     payload["expected_unit_ids"] = chunk["unit_ids"]
     payload["segment_count"] = len(chunk["segments"])
     missing = sorted(set(chunk["unit_ids"]) - set(payload.get("units_reviewed") or []))
-    if missing: payload["audit_complete"] = False; payload["missing_units"] = missing
+    if missing:
+        payload["audit_complete"] = False
+        payload["missing_units"] = missing
     payload["call"] = _call_metrics(res)
     if cache_file is not None:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1046,6 +1191,7 @@ def run_chunked_audits(workspace, *, model, effort):
     results = []
     chunk_dir = workspace / "_review_chunks"
     chunk_dir.mkdir(exist_ok=True)
+
     def prepare(chunk):
         path = chunk_dir / f"{chunk['chunk_id']}.json"
         path.write_text(json.dumps(chunk, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -1053,9 +1199,16 @@ def run_chunked_audits(workspace, *, model, effort):
         cache_file = None
         if cache_dir:
             code_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-            key = hashlib.sha256((json.dumps(chunk, ensure_ascii=False, sort_keys=True)
-                + _chunk_prompt(None, None, chunk) + str(model) + str(effort)
-                + os.environ.get("SUBAGENT_REVIEW_THINKING", "") + code_hash).encode()).hexdigest()
+            key = hashlib.sha256(
+                (
+                    json.dumps(chunk, ensure_ascii=False, sort_keys=True)
+                    + _chunk_prompt(None, None, chunk)
+                    + str(model)
+                    + str(effort)
+                    + os.environ.get("SUBAGENT_REVIEW_THINKING", "")
+                    + code_hash
+                ).encode()
+            ).hexdigest()
             cache_file = Path(cache_dir) / f"{chunk['chunk_id']}-{key}.json"
             if cache_file.exists():
                 return json.loads(cache_file.read_text(encoding="utf-8"))
@@ -1068,7 +1221,8 @@ def run_chunked_audits(workspace, *, model, effort):
     results.sort(key=lambda item: item.get("chunk_id", ""))
     summary = {"chunks": results, "total_chunks": len(chunks)}
     (workspace / "chunk_audits.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
+        json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
     return summary
 
 
@@ -1100,7 +1254,7 @@ def aggregate_chunk_audits(review, audits):
     agg = {}
     for section, field in _CHUNK_SCORE_FIELDS.items():
         vals = [int(c.get(field) or 0) for c in chunks]
-        mean = sum(v * w for v, w in zip(vals, weights)) / sum(weights)
+        mean = sum(v * w for v, w in zip(vals, weights, strict=False)) / sum(weights)
         chunk_score = int(min(mean, min(vals) + 5))
         agg[section] = chunk_score
         block = review.get(section)
@@ -1126,14 +1280,29 @@ def aggregate_chunk_audits(review, audits):
                 continue
             if item.get("statement") in known:
                 continue
-            entry = {"evidence_type": "transcript", "source_urls": [],
-                     "checked_at": datetime.now(UTC).isoformat(),
-                     "recommendation": "按分块审查意见修复后重审。",
-                     "repair_kind": "manual", "replacement_from": "",
-                     "replacement_to": "", "allowed_files": []}
-            entry.update({k: item.get(k) for k in (
-                "severity", "category", "file", "statement", "source_evidence",
-                "evidence_segment_ids")})
+            entry = {
+                "evidence_type": "transcript",
+                "source_urls": [],
+                "checked_at": datetime.now(UTC).isoformat(),
+                "recommendation": "按分块审查意见修复后重审。",
+                "repair_kind": "manual",
+                "replacement_from": "",
+                "replacement_to": "",
+                "allowed_files": [],
+            }
+            entry.update(
+                {
+                    k: item.get(k)
+                    for k in (
+                        "severity",
+                        "category",
+                        "file",
+                        "statement",
+                        "source_evidence",
+                        "evidence_segment_ids",
+                    )
+                }
+            )
             entry["statement"] = f"[{c['chunk_id']}] " + str(item.get("statement"))
             issues.append(entry)
             review["passed"] = False
@@ -1143,16 +1312,32 @@ def aggregate_chunk_audits(review, audits):
         review["passed"] = False
     review["scoring_rules"] = [dict(UNCLEAR_SCORING_RULE)]
     review["chunk_audit"] = {
-        "total_chunks": len(chunks), "all_complete": all_complete,
+        "total_chunks": len(chunks),
+        "all_complete": all_complete,
         "aggregate_scores": agg,
-        "chunks": [{k: c.get(k) for k in (
-            "chunk_id", "audit_complete", "expected_unit_ids", "missing_units",
-            "segment_count", "transcript_quality_score", "coverage_score",
-            "factuality_score", "summary")} | {
-            "issue_counts": {sev: sum(1 for i in c.get("issues") or []
-                                      if i.get("severity") == sev)
-                             for sev in ("critical", "high", "medium", "low")}}
-            for c in chunks],
+        "chunks": [
+            {
+                k: c.get(k)
+                for k in (
+                    "chunk_id",
+                    "audit_complete",
+                    "expected_unit_ids",
+                    "missing_units",
+                    "segment_count",
+                    "transcript_quality_score",
+                    "coverage_score",
+                    "factuality_score",
+                    "summary",
+                )
+            }
+            | {
+                "issue_counts": {
+                    sev: sum(1 for i in c.get("issues") or [] if i.get("severity") == sev)
+                    for sev in ("critical", "high", "medium", "low")
+                }
+            }
+            for c in chunks
+        ],
     }
     return review
 
@@ -1161,24 +1346,27 @@ def _hide_raw_transcript(workspace):
     """Final chunked review sees only the corrected transcript, never raw ASR."""
     workspace = Path(workspace)
     raw_path = workspace / "transcript.raw.json"
-    manifest_path = workspace / "correction_manifest.json"
     if raw_path.exists() and (workspace / "转录_纠错.txt").exists():
         raw = json.loads(raw_path.read_text(encoding="utf-8"))
-        corrected = {s["id"]: s["text"] for c in build_review_chunks(workspace)
-                     for s in c["segments"]}
+        corrected = {
+            s["id"]: s["text"] for c in build_review_chunks(workspace) for s in c["segments"]
+        }
         for seg in raw.get("segments", []) or []:
             if isinstance(seg, dict) and corrected.get(str(seg.get("id"))):
                 seg["text"] = corrected[str(seg.get("id"))]
             if isinstance(seg, dict):
                 seg.pop("words", None)
-        raw["staging_note"] = "segments[].text 已替换为 转录_纠错.txt 的规范化纠错文本；原始听写不提供给本次审查。"
+        raw["staging_note"] = (
+            "segments[].text 已替换为 转录_纠错.txt 的规范化纠错文本；原始听写不提供给本次审查。"
+        )
         raw_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
     for name in ("原始转录.txt",):
         (workspace / name).unlink(missing_ok=True)
 
 
 def _chunk_final_instruction():
-    return """
+    return (
+        """
 
 本次 staging 不提供原始听写：原始转录.txt 不存在，transcript.raw.json 的 segments[].text 已替换为规范化纠错文本（与 转录_纠错.txt 一致）。忽略上文要求读取 原始转录.txt 的指示；只读取本工作目录内的文件，不得访问工作目录之外的任何路径。转录质量以 转录_纠错.txt 为准评价。
 
@@ -1186,39 +1374,46 @@ def _chunk_final_instruction():
 - 你必须读取 chunk_audits.json，并把其中所有 critical/high 问题纳入 issues 与判定；可以复核或补充，但不得无依据推翻。
 - transcript、coverage、factuality_numbers、attribution_evidence、entities、exhaustive_inventory_completed 的逐项穷尽检查可以以分块结果为基础；只有全部分块 audit_complete 为 true 且你完成了跨块与全局检查（讲书稿、summary_map、哈希、TTS、发布判定）时，才能把对应 audit_completion 设为 true。
 - 最终分数会与分块分数取较低值，不会被抬高；请给出你独立的诚实分数。
-""" + UNCLEAR_RULE_PROMPT
+"""
+        + UNCLEAR_RULE_PROMPT
+    )
 
 
-def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True,
-                  diagnostic_id=None):
+def run_ai_review(
+    folder, output=None, model=None, effort="max", *, persist=True, diagnostic_id=None
+):
     folder = Path(folder).resolve()
     missing = [name for name in REVIEW_FILES if not (folder / name).exists()]
     if missing:
         raise RuntimeError(f"缺少 AI 审查输入文件: {missing}")
     print(
-        f"[AI审查] subagent model={model or 'default'} "
-        f"effort={effort} folder={folder.name}",
-        file=sys.stderr, flush=True)
+        f"[AI审查] subagent model={model or 'default'} effort={effort} folder={folder.name}",
+        file=sys.stderr,
+        flush=True,
+    )
     refresh_source_relevance_cache(folder)
     input_snapshot = reviewed_hashes(folder)
     context_snapshot = review_context_hashes(folder)
     scope = review_scope(folder)
     schema_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", encoding="utf-8", delete=False)
+        mode="w", suffix=".json", encoding="utf-8", delete=False
+    )
     schema_path = Path(schema_file.name)
     try:
         json.dump(REVIEW_SCHEMA, schema_file, ensure_ascii=False)
         schema_file.close()
-        with isolated_review_workspace(
-                folder, input_snapshot, context_snapshot) as workspace:
+        with isolated_review_workspace(folder, input_snapshot, context_snapshot) as workspace:
             _write_cache_review_context(workspace)
             checkpoint_dir = folder / "_review_checkpoints"
             checkpoint_dir.mkdir(exist_ok=True)
             previous_chunk_cache = os.environ.get("SUBAGENT_REVIEW_CHUNK_CACHE")
             os.environ["SUBAGENT_REVIEW_CHUNK_CACHE"] = str(checkpoint_dir)
             try:
-                chunk_audits = (run_chunked_audits(workspace, model=model, effort=effort)
-                                if _chunk_enabled() else None)
+                chunk_audits = (
+                    run_chunked_audits(workspace, model=model, effort=effort)
+                    if _chunk_enabled()
+                    else None
+                )
             finally:
                 if previous_chunk_cache is None:
                     os.environ.pop("SUBAGENT_REVIEW_CHUNK_CACHE", None)
@@ -1229,38 +1424,53 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
             result = run_json_task(
                 workspace,
                 _prompt(workspace, scope)
-                + (_chunk_final_instruction() if chunk_audits else "") + (
-                    f"\n本次审查 effort 要求：{effort}。"
-                    "只返回符合 schema 的 JSON，不修改任何文件。"),
-                schema_path, task_name="ai_review", enable_search=True,
-                model=model or None, timeout=1800, effort=effort)
+                + (_chunk_final_instruction() if chunk_audits else "")
+                + (
+                    f"\n本次审查 effort 要求：{effort}。只返回符合 schema 的 JSON，不修改任何文件。"
+                ),
+                schema_path,
+                task_name="ai_review",
+                enable_search=True,
+                model=model or None,
+                timeout=1800,
+                effort=effort,
+            )
             review = result["payload"]
             try:
                 review, mechanical_audit, retry_result = _validate_or_retry_review(
-                    workspace, review, model=model, effort=effort)
+                    workspace, review, model=model, effort=effort
+                )
             except ReviewContractError as exc:
-                path = folder / "ai_review_contract_failures" / (
-                    f"{diagnostic_id or uuid.uuid4().hex}.json")
-                atomic_write_json(path, {
-                    "schema_version": 1, "authoritative": False,
-                    "kind": "review_contract_failure", "error": str(exc),
-                    "recorded_at": datetime.now(UTC).isoformat(),
-                    "reviewed_files": input_snapshot, "review_context": context_snapshot,
-                    "initial_call": _call_metrics(result), "effort": effort,
-                    **exc.diagnostic,
-                })
+                path = (
+                    folder
+                    / "ai_review_contract_failures"
+                    / (f"{diagnostic_id or uuid.uuid4().hex}.json")
+                )
+                atomic_write_json(
+                    path,
+                    {
+                        "schema_version": 1,
+                        "authoritative": False,
+                        "kind": "review_contract_failure",
+                        "error": str(exc),
+                        "recorded_at": datetime.now(UTC).isoformat(),
+                        "reviewed_files": input_snapshot,
+                        "review_context": context_snapshot,
+                        "initial_call": _call_metrics(result),
+                        "effort": effort,
+                        **exc.diagnostic,
+                    },
+                )
                 exc.diagnostic_path = path.relative_to(folder).as_posix()
                 raise
             if retry_result is not None:
                 result = {
                     **retry_result,
                     "duration_ms": (
-                        (result.get("duration_ms") or 0)
-                        + (retry_result.get("duration_ms") or 0)
+                        (result.get("duration_ms") or 0) + (retry_result.get("duration_ms") or 0)
                     ),
                     "retry_count": (
-                        (result.get("retry_count") or 0)
-                        + (retry_result.get("retry_count") or 0)
+                        (result.get("retry_count") or 0) + (retry_result.get("retry_count") or 0)
                     ),
                 }
             review["mechanical_validation"] = mechanical_audit
@@ -1278,7 +1488,9 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
     review["audit_contract_version"] = 1
     review["reviewed_at"] = datetime.now(UTC).isoformat()
     review["reviewer"] = {
-        "strategy": resolve_stage_strategy("ai_review", model=model, effort=effort, enable_search=True),
+        "strategy": resolve_stage_strategy(
+            "ai_review", model=model, effort=effort, enable_search=True
+        ),
         **_call_metrics(result),
         "command": result.get("command", "codex exec"),
         "effort": effort,
@@ -1288,8 +1500,7 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
         "reported_cost_usd": None,
         "usage": {},
         "retry_count": result.get("retry_count", 0),
-        "mechanical_retry_count": review.get(
-            "mechanical_validation", {}).get("retry_count", 0),
+        "mechanical_retry_count": review.get("mechanical_validation", {}).get("retry_count", 0),
     }
     review["review_scope"] = scope
     review["reviewed_files"] = input_snapshot
@@ -1299,14 +1510,13 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
         output = Path(output) if output else folder / "ai_review.json"
         assert_review_snapshot(folder, input_snapshot, context_snapshot)
         atomic_write_json(output, review)
-        review["fact_check_cache_entries_written"] = (
-            update_cache_from_review(folder, review))
+        review["fact_check_cache_entries_written"] = update_cache_from_review(folder, review)
     return review
 
 
 def review_status_transition(folder, passed):
-    from scripts.episode import (
-        apply_review_status_update, build_review_status_update)
+    from scripts.episode import apply_review_status_update, build_review_status_update
+
     payload, source_text = build_review_status_update(folder, passed)
     return payload, source_text, apply_review_status_update
 
@@ -1316,59 +1526,55 @@ def update_source_status(folder, passed):
     return apply_update(folder, payload, source_text)
 
 
-def review_episode(
-        folder, output=None, model="", effort="max", run_report=None):
+def review_episode(folder, output=None, model="", effort="max", run_report=None):
     """完成审查、更新来源状态，并以更新后的文件哈希写入最终审查记录。"""
     folder = Path(folder)
     output = Path(output) if output else folder / "ai_review.json"
     owns_report = run_report is None
-    report = run_report or RunReport(folder, "ai_review", {
-        "model": model,
-        "effort": effort,
-    })
+    report = run_report or RunReport(
+        folder,
+        "ai_review",
+        {
+            "model": model,
+            "effort": effort,
+        },
+    )
     try:
         with report.stage("ai_review") as stage:
             try:
                 review = run_ai_review(
-                    folder, output, model, effort, persist=False,
-                    diagnostic_id=stage.payload["id"])
+                    folder, output, model, effort, persist=False, diagnostic_id=stage.payload["id"]
+                )
             except ReviewContractError as exc:
                 stage.metrics["contract_failure_snapshot"] = exc.diagnostic_path
                 raise
             before_status = dict(review["reviewed_files"])
             context_snapshot = dict(review.get("review_context", {}))
-            expected_episode, expected_source, apply_update = (
-                review_status_transition(
-                    folder, review.get("passed", False)))
+            expected_episode, expected_source, apply_update = review_status_transition(
+                folder, review.get("passed", False)
+            )
             # The expected transition is built from the reviewed files. Recheck
             # before applying it so a concurrent edit is never folded into trust.
-            assert_review_snapshot(
-                folder, before_status, context_snapshot)
-            apply_update(
-                folder, expected_episode, expected_source)
-            actual_episode = json.loads(
-                (folder / "episode.json").read_text(encoding="utf-8"))
+            assert_review_snapshot(folder, before_status, context_snapshot)
+            apply_update(folder, expected_episode, expected_source)
+            actual_episode = json.loads((folder / "episode.json").read_text(encoding="utf-8"))
             actual_source = (folder / "来源.md").read_text(encoding="utf-8")
-            if (
-                    actual_episode != expected_episode
-                    or actual_source != expected_source):
-                raise RuntimeError(
-                    "AI 审查后状态绑定内容超出预期 metadata transition")
+            if actual_episode != expected_episode or actual_source != expected_source:
+                raise RuntimeError("AI 审查后状态绑定内容超出预期 metadata transition")
             after_status = reviewed_hashes(folder)
             status_changes = changed_review_inputs(before_status, after_status)
             expected_changes = {"episode.json", "来源.md"}
             if set(status_changes) - expected_changes:
                 raise RuntimeError(
-                    "AI 审查后状态绑定出现非预期输入变化: "
-                    + ", ".join(status_changes))
+                    "AI 审查后状态绑定出现非预期输入变化: " + ", ".join(status_changes)
+                )
             review["status_binding"] = {
                 "trusted_metadata_files": status_changes,
                 "reason": "exact_pipeline_review_status_transition",
             }
             review["reviewed_files"] = after_status
             # Last check is immediately adjacent to the authoritative write.
-            assert_review_snapshot(
-                folder, after_status, context_snapshot)
+            assert_review_snapshot(folder, after_status, context_snapshot)
             atomic_write_json(output, review)
             if not review.get("passed"):
                 # Retain this verdict before a later review overwrites ai_review.json.
@@ -1380,26 +1586,29 @@ def review_episode(
                 # cross-episode trending never has to reopen snapshots.
                 stage.metrics["rejection"] = attribute_rejection(review)
             try:
-                review["fact_check_cache_entries_written"] = (
-                    update_cache_from_review(folder, review))
+                review["fact_check_cache_entries_written"] = update_cache_from_review(
+                    folder, review
+                )
             except Exception as exc:
                 review["fact_check_cache_update_error"] = str(exc)
                 print(
-                    f"[AI审查][警告] fact-check cache 更新失败: {exc}",
-                    file=sys.stderr, flush=True)
+                    f"[AI审查][警告] fact-check cache 更新失败: {exc}", file=sys.stderr, flush=True
+                )
             reviewer = review.get("reviewer", {})
-            stage.metrics.update({
-                "passed": bool(review.get("passed")),
-                "issue_count": len(review.get("issues", [])),
-                "fact_check_count": len(review.get("fact_checks", [])),
-                "reported_cost_usd": reviewer.get("reported_cost_usd"),
-                "duration_api_ms": reviewer.get("duration_api_ms"),
-                "retry_count": reviewer.get("retry_count", 0),
-                "usage": reviewer.get("usage"),
-                "strategy": reviewer.get("strategy"),
-                "retry_events": reviewer.get("retry_events", []),
-                "budget_remaining": reviewer.get("budget_remaining"),
-            })
+            stage.metrics.update(
+                {
+                    "passed": bool(review.get("passed")),
+                    "issue_count": len(review.get("issues", [])),
+                    "fact_check_count": len(review.get("fact_checks", [])),
+                    "reported_cost_usd": reviewer.get("reported_cost_usd"),
+                    "duration_api_ms": reviewer.get("duration_api_ms"),
+                    "retry_count": reviewer.get("retry_count", 0),
+                    "usage": reviewer.get("usage"),
+                    "strategy": reviewer.get("strategy"),
+                    "retry_events": reviewer.get("retry_events", []),
+                    "budget_remaining": reviewer.get("budget_remaining"),
+                }
+            )
             if not review.get("passed"):
                 stage.fail("AI review did not pass")
     except Exception as exc:
@@ -1418,12 +1627,14 @@ def main():
     parser = argparse.ArgumentParser(description="使用 subagent 自动审查播客最终产物")
     parser.add_argument("folder")
     parser.add_argument("--out", default=None)
+    parser.add_argument("--model", default=os.environ.get("SUBAGENT_REVIEW_MODEL", ""))
+    parser.add_argument("--effort", default=os.environ.get("SUBAGENT_REVIEW_EFFORT", "max"))
     parser.add_argument(
-        "--model", default=os.environ.get("SUBAGENT_REVIEW_MODEL", ""))
-    parser.add_argument(
-        "--effort", default=os.environ.get("SUBAGENT_REVIEW_EFFORT", "max"))
-    parser.add_argument("--concurrency", type=int, default=None,
-                        help="并发分块数（默认 3，也可用 SUBAGENT_REVIEW_CONCURRENCY）")
+        "--concurrency",
+        type=int,
+        default=None,
+        help="并发分块数（默认 3，也可用 SUBAGENT_REVIEW_CONCURRENCY）",
+    )
     parser.add_argument(
         "--rebind-provenance",
         action="store_true",
@@ -1435,8 +1646,7 @@ def main():
     else:
         if args.concurrency is not None:
             os.environ["SUBAGENT_REVIEW_CONCURRENCY"] = str(args.concurrency)
-        review = review_episode(
-            args.folder, args.out, model=args.model, effort=args.effort)
+        review = review_episode(args.folder, args.out, model=args.model, effort=args.effort)
     print(json.dumps(review, ensure_ascii=False, indent=2))
     return 0 if review.get("passed") else 1
 

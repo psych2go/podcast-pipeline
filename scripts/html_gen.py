@@ -10,6 +10,7 @@ HTML 生成模块 — 将讲书稿.md 转为精美、自包含的 HTML 阅读页
     python scripts/html_gen.py "content/播客名/讲书稿.md"
     python scripts/html_gen.py "content/播客名/讲书稿.md" -o "output.html"
 """
+
 import sys
 from pathlib import Path
 
@@ -34,11 +35,11 @@ from scripts.sections import parse_markdown_sections
 
 # ── Markdown 解析 ─────────────────────────────────────────────────
 
+
 def parse_sections(md_text):
     """Compatibility adapter over the canonical section parser."""
     return [
-        (section.index, section.title, section.body)
-        for section in parse_markdown_sections(md_text)
+        (section.index, section.title, section.body) for section in parse_markdown_sections(md_text)
     ]
 
 
@@ -75,9 +76,8 @@ def _text_to_html(text):
 
 # ── 构建 HTML ────────────────────────────────────────────────────
 
-def _build_html(
-        title, sections, word_count=None, date_str=None, mp3_url=None,
-        source_sha256=""):
+
+def _build_html(title, sections, word_count=None, date_str=None, mp3_url=None, source_sha256=""):
     """从解析好的 sections 构建完整 HTML 页面。mp3_url 为音频播放器引用（相对/绝对均可）。"""
     # ── TOC ──
     toc_lines = []
@@ -107,9 +107,7 @@ def _build_html(
         if sec_title is None:
             body_html = _text_to_html(body)
             content_parts.append(
-                f'<section id="sec-intro" class="chapter chapter-intro">\n'
-                f'{body_html}\n'
-                f'</section>'
+                f'<section id="sec-intro" class="chapter chapter-intro">\n{body_html}\n</section>'
             )
         else:
             anchor = f"sec-{idx}"
@@ -121,11 +119,11 @@ def _build_html(
                 f'<div class="chapter-decoration">'
                 f'<span class="chapter-num">{num}</span>'
                 f'<span class="chapter-total">/{total}</span>'
-                f'</div>\n'
+                f"</div>\n"
                 f'<div class="chapter-divider"></div>\n'
                 f'<h2 class="chapter-title">{safe_title}</h2>\n'
-                f'{body_html}\n'
-                f'</section>'
+                f"{body_html}\n"
+                f"</section>"
             )
     content_html = "\n\n".join(content_parts)
 
@@ -137,9 +135,7 @@ def _build_html(
         hero_title = hero_title.split(" — ", 1)[0].strip()
     safe_hero_title = _escape_html(hero_title)
     hero_title_class = (
-        "title-xlong" if len(hero_title) > 90
-        else "title-long" if len(hero_title) > 55
-        else ""
+        "title-xlong" if len(hero_title) > 90 else "title-long" if len(hero_title) > 55 else ""
     )
     wc_str = f"{word_count:,} 字" if word_count else ""
     date_str = date_str or date.today().isoformat()
@@ -1180,6 +1176,7 @@ body:not(.toc-hidden) main { width: min(calc(100% - 3rem), 70rem); margin-inline
 
 # ── 主函数（库接口）────────────────────────────────────────────────
 
+
 def md_to_html(md_path, output_path=None, podcast_title=None):
     """
     将讲书稿.md 转为精美 HTML 页面。
@@ -1241,8 +1238,8 @@ def md_to_html(md_path, output_path=None, podcast_title=None):
         mp3_url = f"{md_path.parent.name}.mp3"
 
     html = _build_html(
-        podcast_title, sections, word_count, date_str, mp3_url,
-        source_sha256=source_sha256)
+        podcast_title, sections, word_count, date_str, mp3_url, source_sha256=source_sha256
+    )
 
     # 输出路径
     if not output_path:
@@ -1258,16 +1255,14 @@ def md_to_html(md_path, output_path=None, podcast_title=None):
 
 # ── CLI 入口 ──────────────────────────────────────────────────────
 
+
 def cli_main():
-    parser = argparse.ArgumentParser(
-        description="将讲书稿.md 转为精美 HTML 阅读页面"
+    parser = argparse.ArgumentParser(description="将讲书稿.md 转为精美 HTML 阅读页面")
+    parser.add_argument("input_md", nargs="?", help="讲书稿.md 文件路径")
+    parser.add_argument(
+        "-o", "--output", default=None, help="输出 HTML 路径（默认同目录下 讲书稿.html）"
     )
-    parser.add_argument("input_md", nargs="?",
-                        help="讲书稿.md 文件路径")
-    parser.add_argument("-o", "--output", default=None,
-                        help="输出 HTML 路径（默认同目录下 讲书稿.html）")
-    parser.add_argument("--title", default=None,
-                        help="播客标题（默认取文件夹名）")
+    parser.add_argument("--title", default=None, help="播客标题（默认取文件夹名）")
     parser.add_argument(
         "--allow-unchecked",
         action="store_true",
@@ -1283,19 +1278,26 @@ def cli_main():
 
     from scripts.preflight import quality_gate
     from scripts.run_report import RunReport
+
     folder = Path(input_md).parent
-    report = RunReport(folder, "html.cli", {
-        "entry_point": "html.cli",
-        "allow_unchecked": args.allow_unchecked,
-    })
+    report = RunReport(
+        folder,
+        "html.cli",
+        {
+            "entry_point": "html.cli",
+            "allow_unchecked": args.allow_unchecked,
+        },
+    )
     try:
         if args.allow_unchecked:
             with report.stage("quality_gate_bypass") as stage:
-                stage.metrics.update({
-                    "entry_point": "html.cli",
-                    "allow_unchecked": True,
-                    "reason": "explicit CLI flag",
-                })
+                stage.metrics.update(
+                    {
+                        "entry_point": "html.cli",
+                        "allow_unchecked": True,
+                        "reason": "explicit CLI flag",
+                    }
+                )
         else:
             with report.stage("quality_gate") as stage:
                 passed = quality_gate(folder, run_report=report)

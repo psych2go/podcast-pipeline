@@ -1,4 +1,5 @@
 """Persistent per-episode pipeline run metrics."""
+
 import json
 import os
 import time
@@ -41,9 +42,7 @@ def _load_report(path, episode):
     payload.setdefault("episode", episode)
     payload.setdefault("runs", [])
     for run in payload["runs"]:
-        if (
-                run.get("status") == "running"
-                and not _process_is_running(run.get("pid"))):
+        if run.get("status") == "running" and not _process_is_running(run.get("pid")):
             run["status"] = "failed"
             run["completed_at"] = _utc_now()
             run["error"] = "previous process ended before recording completion"
@@ -86,12 +85,14 @@ class RunStage:
         self._started = time.monotonic()
         self._closed = False
         self.report._start_stage(self.payload)
-        _emit_progress({
-            "run_id": self.report.run["id"],
-            "stage": name,
-            "status": "running",
-            "started_at": self.payload["started_at"],
-        })
+        _emit_progress(
+            {
+                "run_id": self.report.run["id"],
+                "stage": name,
+                "status": "running",
+                "started_at": self.payload["started_at"],
+            }
+        )
 
     @property
     def metrics(self):
@@ -107,8 +108,7 @@ class RunStage:
         if self._closed:
             return
         self.payload["completed_at"] = _utc_now()
-        self.payload["duration_seconds"] = round(
-            time.monotonic() - self._started, 3)
+        self.payload["duration_seconds"] = round(time.monotonic() - self._started, 3)
         self.payload["status"] = status
         if error:
             self.payload["error"] = error
@@ -117,27 +117,36 @@ class RunStage:
         trend = self.payload["metrics"]
         trend["stage_count"] = len(self.report.run.get("stages", []))
         trend["completed_stage_count"] = sum(
-            1 for item in self.report.run.get("stages", [])
-            if item.get("status") in {"passed", "failed"})
+            1
+            for item in self.report.run.get("stages", [])
+            if item.get("status") in {"passed", "failed"}
+        )
         trend["failed_stage_count"] = sum(
-            1 for item in self.report.run.get("stages", [])
-            if item.get("status") == "failed")
-        trend["stage_duration_seconds"] = round(sum(
-            float(item.get("duration_seconds", 0) or 0)
-            for item in self.report.run.get("stages", [])), 3)
+            1 for item in self.report.run.get("stages", []) if item.get("status") == "failed"
+        )
+        trend["stage_duration_seconds"] = round(
+            sum(
+                float(item.get("duration_seconds", 0) or 0)
+                for item in self.report.run.get("stages", [])
+            ),
+            3,
+        )
         if status == "failed":
             trend["last_failure_code"] = (
                 self.metrics.get("failure_kind")
                 or self.metrics.get("runner_failure", {}).get("failure_kind")
-                or "stage_failed")
+                or "stage_failed"
+            )
         self.report._update_stage(self.payload)
-        _emit_progress({
-            "run_id": self.report.run["id"],
-            "stage": self.payload["name"],
-            "status": status,
-            "duration_seconds": self.payload["duration_seconds"],
-            "completed_at": self.payload["completed_at"],
-        })
+        _emit_progress(
+            {
+                "run_id": self.report.run["id"],
+                "stage": self.payload["name"],
+                "status": status,
+                "duration_seconds": self.payload["duration_seconds"],
+                "completed_at": self.payload["completed_at"],
+            }
+        )
         self._closed = True
 
 
@@ -165,8 +174,7 @@ class RunReport:
         with exclusive_file_lock(f"run-report:{self.path.resolve()}"):
             payload = _load_report(self.path, self.folder.name)
             existing = [
-                item for item in payload.get("runs", [])
-                if item.get("id") != self.run["id"]
+                item for item in payload.get("runs", []) if item.get("id") != self.run["id"]
             ]
             payload["runs"] = (existing + [self.run])[-MAX_RUN_HISTORY:]
             payload["episode"] = self.folder.name
@@ -206,28 +214,36 @@ class RunReport:
         if self._finished:
             return
         self.run["completed_at"] = _utc_now()
-        self.run["duration_seconds"] = round(
-            time.monotonic() - self._started, 3)
+        self.run["duration_seconds"] = round(time.monotonic() - self._started, 3)
         self.run["status"] = "passed" if passed else "failed"
         if error:
             self.run["error"] = _error_text(error)
         if metrics:
             self.run["metrics"] = dict(metrics)
         self.run.setdefault("metrics", {})
-        self.run["metrics"].update({
-            "stage_count": len(self.run.get("stages", [])),
-            "failed_stage_count": sum(1 for item in self.run.get("stages", [])
-                                       if item.get("status") == "failed"),
-            "stage_duration_seconds": round(sum(
-                float(item.get("duration_seconds", 0) or 0)
-                for item in self.run.get("stages", [])), 3),
-        })
+        self.run["metrics"].update(
+            {
+                "stage_count": len(self.run.get("stages", [])),
+                "failed_stage_count": sum(
+                    1 for item in self.run.get("stages", []) if item.get("status") == "failed"
+                ),
+                "stage_duration_seconds": round(
+                    sum(
+                        float(item.get("duration_seconds", 0) or 0)
+                        for item in self.run.get("stages", [])
+                    ),
+                    3,
+                ),
+            }
+        )
         self._finished = True
         self._persist()
-        _emit_progress({
-            "run_id": self.run["id"],
-            "command": self.run["command"],
-            "status": self.run["status"],
-            "duration_seconds": self.run["duration_seconds"],
-            "completed_at": self.run["completed_at"],
-        })
+        _emit_progress(
+            {
+                "run_id": self.run["id"],
+                "command": self.run["command"],
+                "status": self.run["status"],
+                "duration_seconds": self.run["duration_seconds"],
+                "completed_at": self.run["completed_at"],
+            }
+        )

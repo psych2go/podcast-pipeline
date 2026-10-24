@@ -19,36 +19,75 @@ def test_external_fail_closed_error_categories_are_detected():
 def test_chunk_checkpoint_key_changes_with_code_and_input_material():
     code = hashlib.sha256(Path("scripts/ai_review.py").read_bytes()).hexdigest()
     assert len(code) == 64
-    assert hashlib.sha256(b"input-a" + code.encode()).hexdigest() != hashlib.sha256(
-        b"input-b" + code.encode()).hexdigest()
+    assert (
+        hashlib.sha256(b"input-a" + code.encode()).hexdigest()
+        != hashlib.sha256(b"input-b" + code.encode()).hexdigest()
+    )
 
 
 def test_quality_gate_blocks_unverifiable_health_claim_but_allows_attributed_guest_opinion():
-    medical = {"fact_checks": [{"claim": "健康建议", "claim_type": "public_fact",
-        "verification_mode": "web_required", "verdict": "qualified",
-        "publication_status": "used_as_fact", "source_urls": [],
-        "evidence_segment_ids": []}]}
-    guest = {"fact_checks": [{"claim": "嘉宾看法", "claim_type": "guest_opinion",
-        "verification_mode": "transcript_attribution", "verdict": "faithfully_attributed",
-        "publication_status": "attributed_or_qualified", "source_urls": [],
-        "evidence_segment_ids": ["S1"]}]}
+    medical = {
+        "fact_checks": [
+            {
+                "claim": "健康建议",
+                "claim_type": "public_fact",
+                "verification_mode": "web_required",
+                "verdict": "qualified",
+                "publication_status": "used_as_fact",
+                "source_urls": [],
+                "evidence_segment_ids": [],
+            }
+        ]
+    }
+    guest = {
+        "fact_checks": [
+            {
+                "claim": "嘉宾看法",
+                "claim_type": "guest_opinion",
+                "verification_mode": "transcript_attribution",
+                "verdict": "faithfully_attributed",
+                "publication_status": "attributed_or_qualified",
+                "source_urls": [],
+                "evidence_segment_ids": ["S1"],
+            }
+        ]
+    }
     assert _ai_fact_check_consistency(medical)[0]
     assert _ai_fact_check_consistency(guest)[0] == []
 
 
 def test_shared_source_cache_reuses_success_across_episodes(monkeypatch):
     calls = []
+
     def fetch(url):
         calls.append(url)
-        return {"status": "fetched", "title": "Health source", "excerpt": "health",
-                "content_sha256": "abc", "final_url": url, "content_type": "text/html"}
+        return {
+            "status": "fetched",
+            "title": "Health source",
+            "excerpt": "health",
+            "content_sha256": "abc",
+            "final_url": url,
+            "content_type": "text/html",
+        }
+
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         monkeypatch.setenv("SOURCE_RELEVANCE_SHARED_CACHE", str(root / "shared.json"))
         for name in ("one", "two"):
             folder = root / name
             folder.mkdir()
-            (folder / "editorial_corrections.json").write_text(json.dumps({"corrections":[{"correction_id":"C1", "source_urls":["https://Example.com/a?utm_source=x"]}]}))
+            (folder / "editorial_corrections.json").write_text(
+                json.dumps(
+                    {
+                        "corrections": [
+                            {
+                                "correction_id": "C1",
+                                "source_urls": ["https://Example.com/a?utm_source=x"],
+                            }
+                        ]
+                    }
+                )
+            )
             refresh_source_relevance_cache(folder, fetcher=fetch)
         assert len(calls) == 1
 
