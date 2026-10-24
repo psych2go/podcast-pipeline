@@ -1031,7 +1031,10 @@ class SourceRelevanceTests(unittest.TestCase):
             result = source_relevance._fetch_source("https://source.example/article")
         request = client.requests[0]
         self.assertEqual(request["url"], "https://93.184.216.34:443/article")
-        self.assertEqual(request["headers"], {"Host": "source.example"})
+        self.assertEqual(
+            request["headers"],
+            {"Host": "source.example", "User-Agent": source_relevance.SOURCE_USER_AGENT},
+        )
         self.assertEqual(request["extensions"], {"sni_hostname": "source.example"})
         self.assertEqual(result["final_url"], "https://source.example/article")
         self.assertFalse(factory.call_args.kwargs["trust_env"])
