@@ -369,6 +369,13 @@ def _ai_entity_accuracy_consistency(review):
 def build_quality_report(folder, strict=True, *, today=None):
     folder = Path(folder)
     episode_quality = inspect_episode_state(folder)
+    # Refresh the local dependency manifest before evaluating quality; stale
+    # downstream artifacts are never silently re-bound by changing a SHA.
+    try:
+        from scripts.artifact_manifest import write_artifact_manifest
+        write_artifact_manifest(folder)
+    except Exception:
+        pass
     report = {
         "folder": str(folder),
         "strict": strict,
@@ -647,10 +654,20 @@ def build_quality_report(folder, strict=True, *, today=None):
             }
             extend_errors(report, CONTENT_MAP_VALIDATION, correction_errors)
         relevance_path = folder / SOURCE_RELEVANCE_CACHE
+        expected_refs = expected_source_references(folder)
+        report["external_verification"] = {
+            "verified_external": 0,
+            "transcript_attributed": 0,
+            "unverified_external": 0,
+            "cache_unavailable": not relevance_path.exists(),
+            "cache_revision": "",
+        }
         if relevance_path.exists():
             relevance_payload = load_json(relevance_path)
+            report["external_verification"]["cache_revision"] = hashlib.sha256(
+                relevance_path.read_bytes()).hexdigest()
             relevance_errors = validate_source_relevance_cache(
-                relevance_payload, expected_source_references(folder))
+                relevance_payload, expected_refs)
             transient_prefixes = (
                 "source relevance cache 抓取失败:",
                 "source relevance cache 缺少内容哈希:",
@@ -674,8 +691,17 @@ def build_quality_report(folder, strict=True, *, today=None):
                 "外部来源缓存暂时不可用，终审仍须独立核查: " + warning
                 for warning in relevance_warnings
             )
+            if relevance_warnings and strict and expected_refs:
+                report["errors"].extend(
+                    "外部来源缓存不可用，外部事实按 fail-closed 处理: " + warning
+                    for warning in relevance_warnings)
+                report["external_verification"]["cache_unavailable"] = True
             extend_errors(
                 report, CONTENT_MAP_VALIDATION, hard_relevance_errors)
+        elif expected_refs:
+            report["external_verification"]["unverified_external"] = len(expected_refs)
+            if strict:
+                report["errors"].append("外部来源缓存不可用，无法验证外部事实")
         progress_path = folder / PROGRESS_FILENAME
         if progress_path.exists():
             progress_payload = load_json(progress_path)

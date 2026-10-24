@@ -53,7 +53,9 @@ def release_fingerprint(folder_or_release):
         return ""
     identity = {key: release.get(key) for key in (
         "schema_version", "release_id", "audio_sha256", "briefing_sha256",
-        "audio_key", "pipeline_version", "git_commit", "git_diff_sha256")}
+        "audio_key", "pipeline_version", "git_commit", "git_diff_sha256",
+        "ai_review_sha256", "quality_report_sha256", "artifact_manifest_sha256",
+        "source_cache_revision", "snapshot_sha256")}
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
@@ -81,6 +83,24 @@ def _git_provenance(folder):
     root = Path(root_raw.decode("utf-8", errors="replace").strip())
     commit_raw = _git_output(root, "rev-parse", "HEAD") or b""
     status_raw = _git_output(root, "status", "--porcelain=v1", "-z") or b""
+    # Private/generated episode artifacts and ignored files are not code provenance.
+    # Keep tracked source changes (and unignored source files) authoritative.
+    entries = []
+    for raw in status_raw.split(b"\0"):
+        if not raw:
+            continue
+        name = raw[3:] if len(raw) >= 4 else raw
+        if name.startswith(b'"'):
+            name = name.strip(b'"')
+        text = name.decode("utf-8", errors="surrogateescape")
+        lower = text.lower()
+        if (lower.endswith(".tgz") or lower.startswith(("content/", "output/", "reports/", ".runlogs/", ".wrangler/"))):
+            continue
+        ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--", text], check=False)
+        if ignored.returncode == 0:
+            continue
+        entries.append(raw)
+    status_raw = b"\0".join(entries)
     # Content/site media may be very large and are already hash-bound by the
     # release manifest. This fingerprint is intentionally scoped to pipeline
     # code/config/docs so provenance remains cheap and repeatable.
@@ -149,7 +169,7 @@ def _git_provenance(folder):
         "git_dirty": bool(status_raw),
         "git_diff_sha256": digest.hexdigest(),
     }
-def prepare_release(folder, mp3_path, briefing_path, *, require_clean=False):
+def prepare_release(folder, mp3_path, briefing_path, *, require_clean=True):
     folder = Path(folder)
     mp3_path = Path(mp3_path)
     briefing_path = Path(briefing_path)

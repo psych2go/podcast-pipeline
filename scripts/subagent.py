@@ -615,8 +615,9 @@ def _pi_command(command, *, task, schema_path, write_files,
         if not _has_option(cmd, *options):
             cmd.extend(options)
 
-    tools = ["read", "grep", "find", "ls"]
-    if write_files:
+    no_file_tools = os.environ.get("SUBAGENT_PI_NO_FILE_TOOLS", "").strip() == "1"
+    tools = [] if no_file_tools else ["read", "grep", "find", "ls"]
+    if write_files and not no_file_tools:
         tools.extend(["edit", "write"])
     if enable_search:
         tools.extend([
@@ -626,7 +627,10 @@ def _pi_command(command, *, task, schema_path, write_files,
         if extension and not _has_option(cmd, "--extension", "-e"):
             cmd.extend(["--extension", extension])
     if not _has_option(cmd, "--tools", "-t"):
-        cmd.extend(["--tools", ",".join(tools)])
+        if tools:
+            cmd.extend(["--tools", ",".join(tools)])
+        else:
+            cmd.append("--no-tools")
 
     if model and not _has_option(cmd, "--model"):
         cmd.extend(["--model", model])
@@ -1506,7 +1510,18 @@ def _run(
                                     schema_failure = "invalid_json"
                                 if schema_failure:
                                     failure_kind, http_status = "schema", None
-                                    schema_feedback = schema_failure
+                                    # Pi runs with --no-session: the retry cannot see
+                                    # its previous answer unless we hand it back, which
+                                    # otherwise yields all-zero placeholder reviews.
+                                    previous = response.strip()
+                                    if len(previous) > 60000:
+                                        previous = previous[:60000] + "\n…（已截断）"
+                                    schema_feedback = (
+                                        schema_failure
+                                        + "\n\n上一次的完整输出如下（在其基础上仅补齐/修正结构，"
+                                        "保留其中已有的评价与事实结论）：\n"
+                                        + previous
+                                    )
                                     last_detail = (
                                         f"schema; exit=0; {schema_failure[:160]}")
                                 else:

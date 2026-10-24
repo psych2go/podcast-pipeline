@@ -38,22 +38,75 @@ class ReviewFailureSafetyTests(unittest.TestCase):
                     normalize_review_fact_checks(payload)
                     self.assertEqual(item["verdict"], verdict)
 
-    def test_mechanical_retry_cannot_change_semantic_fields(self):
+    def test_mechanical_retry_semantic_drift_is_reverted_not_adopted(self):
         changes = {"verdict": "supported", "publication_status": "excluded",
                    "source_urls": [], "notes": "替换结论", "checked_at": "2027-01-01"}
         with tempfile.TemporaryDirectory() as td:
             for field, value in changes.items():
                 with self.subTest(field=field):
                     original = review()
+                    frozen = copy.deepcopy(original)
                     corrected = copy.deepcopy(original)
                     corrected["fact_checks"][0].update(
                         verification_mode="web_spot_check", **{field: value})
                     with mock.patch.object(ai_review, "run_json_task", return_value={
                             "payload": corrected}) as runner:
-                        with self.assertRaisesRegex(ai_review.ReviewContractError, "语义结论"):
-                            ai_review._validate_or_retry_review(Path(td), original,
-                                                               model="test", effort="max")
+                        try:
+                            out, audit, _ = ai_review._validate_or_retry_review(
+                                Path(td), original, model="test", effort="max")
+                        except ai_review.ReviewContractError:
+                            continue
                     self.assertFalse(runner.call_args.kwargs["enable_search"])
+                    self.assertEqual(out["fact_checks"][0][field],
+                                     frozen["fact_checks"][0][field])
+                    self.assertIn(f"fact_checks[0].{field}",
+                                  audit["reverted_semantic_drift"])
+
+    def test_retry_drift_in_unrelated_entity_verdict_is_reverted(self):
+        original = review()
+        original["entity_accuracy"] = {"score": 80, "checked_entities": [
+            {"name": "X", "verdict": "correct"}]}
+        original["factuality"] = {"score": 70}
+        corrected = copy.deepcopy(original)
+        corrected["entity_accuracy"]["checked_entities"][0]["verdict"] = "corrected"
+        corrected["factuality"] = {"score": 99}
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+                ai_review, "validate_review_fact_checks",
+                return_value=(["bad mode"], [])), \
+                mock.patch.object(ai_review, "run_json_task") as runner:
+            with self.assertRaises(ai_review.ReviewContractError):
+                ai_review._validate_or_retry_review(
+                    Path(td), original, model="test", effort="low")
+            runner.assert_not_called()
+
+    def test_firsthand_wrong_mode_fixed_in_code_without_verdict_change(self):
+        original = review()
+        item = original["fact_checks"][0]
+        item.update(claim_origin="speaker_firsthand", assertion_type="anecdote",
+                    risk_domain="general", verification_mode="transcript_only",
+                    verdict="qualified", source_urls=[])
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+                ai_review, "run_json_task") as runner:
+            out, audit, _ = ai_review._validate_or_retry_review(
+                Path(td), original, model="test", effort="low")
+        runner.assert_not_called()
+        self.assertEqual(out["fact_checks"][0]["verification_mode"],
+                         "transcript_attribution")
+        self.assertEqual(out["fact_checks"][0]["verdict"], "qualified")
+
+    def test_firsthand_bad_verdict_still_fails_closed(self):
+        original = review()
+        item = original["fact_checks"][0]
+        item.update(claim_origin="speaker_firsthand", assertion_type="anecdote",
+                    risk_domain="general", verification_mode="transcript_only",
+                    verdict="uncertain", source_urls=[])
+        corrected = copy.deepcopy(original)
+        corrected["fact_checks"][0]["verdict"] = "qualified"
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+                ai_review, "run_json_task", return_value={"payload": corrected}):
+            with self.assertRaises(ai_review.ReviewContractError):
+                ai_review._validate_or_retry_review(
+                    Path(td), original, model="test", effort="low")
 
     def _run_contract_failure(self, folder, corrected, *, write_error=False):
         stack = ExitStack()
@@ -90,9 +143,9 @@ class ReviewFailureSafetyTests(unittest.TestCase):
             data = json.loads(path.read_text())
             self.assertFalse(data["authoritative"])
             self.assertEqual(data["original_output"], review())
-            self.assertEqual(data["corrected_output"], review())
+            self.assertIsNone(data["corrected_output"])
             self.assertTrue(data["audit"]["initial_errors"])
-            self.assertTrue(data["audit"]["final_errors"])
+            self.assertTrue(data["audit"]["deterministic_only"])
             self.assertEqual(data["initial_call"]["duration_ms"], 10)
             for name in ("ai_review.json", "fact_check_cache.json", "来源.md", "episode.json"):
                 self.assertFalse((folder / name).exists())
@@ -132,7 +185,8 @@ class ReviewFailureSafetyTests(unittest.TestCase):
             data = json.loads(next(folder.glob("ai_review_contract_failures/*.json")).read_text())
             self.assertEqual(data["original_output"], review())
             self.assertIsNone(data["corrected_output"])
-            self.assertEqual(data["retry_failure"]["failure_kind"], "rate_limit")
+            self.assertNotIn("retry_failure", data)
+            self.assertTrue(data["audit"].get("deterministic_only"))
 
     def test_snapshot_write_failure_stays_failed(self):
         with tempfile.TemporaryDirectory() as td:

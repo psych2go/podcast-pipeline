@@ -13,6 +13,9 @@ import os
 import shutil
 import sys
 import tempfile
+import concurrent.futures
+import hashlib
+import time
 from contextlib import contextmanager
 from datetime import datetime, UTC
 from pathlib import Path
@@ -29,6 +32,7 @@ from scripts.subagent import run_json_task, resolve_stage_strategy
 from scripts.fact_check_cache import (
     CACHE_FILENAME, build_cache_context, update_cache_from_review)
 from scripts.claim_taxonomy import (
+    derive_legacy_claim_type,
     AI_REVIEW_SCHEMA_VERSION,
     ASSERTION_TYPES,
     CLAIM_ORIGINS,
@@ -674,6 +678,80 @@ def _review_semantic_fingerprint(review):
     return semantic
 
 
+_HIGH_RISK_DOMAINS = {"medical", "legal", "financial", "safety"}
+
+
+_MECHANICAL_FC_FIELDS = ("claim_type", "subclaim_id", "verification_mode")
+_SPECIALIZED_ASSERTIONS = {"opinion", "prediction", "recommendation", "explanation",
+                           "definition", "allegation"}
+
+
+def _expected_verification_mode(item):
+    """Return the single contract-mandated verification_mode, or None when the
+    contract allows several values (then the model's choice is kept)."""
+    if item.get("publication_status") == "excluded":
+        return None
+    assertion = item.get("assertion_type")
+    if (assertion == "recommendation"
+            and item.get("risk_domain") in _HIGH_RISK_DOMAINS
+            and item.get("source_urls")):
+        return "safety_cross_check"
+    if (item.get("claim_origin") == "speaker_firsthand"
+            and assertion not in _SPECIALIZED_ASSERTIONS):
+        return "transcript_attribution"
+    return None
+
+
+def _deterministic_mode_fixes(review):
+    """Fix only mechanical check-type fields whose value the contract fixes
+    uniquely (verification_mode, derived claim_type).
+
+    Semantic fields (verdict, sources, notes, roles, scores...) are never
+    touched, so this can never raise a score or change a conclusion.
+    """
+    fixed = []
+    for index, item in enumerate(review.get("fact_checks", []) or []):
+        if not isinstance(item, dict):
+            continue
+        mode = _expected_verification_mode(item)
+        if mode and item.get("verification_mode") != mode:
+            fixed.append({"index": index, "claim": item.get("claim"),
+                          "field": "verification_mode",
+                          "from": item.get("verification_mode"), "to": mode})
+            item["verification_mode"] = mode
+        legacy = derive_legacy_claim_type(item)
+        if item.get("claim_type") != legacy:
+            fixed.append({"index": index, "claim": item.get("claim"),
+                          "field": "claim_type",
+                          "from": item.get("claim_type"), "to": legacy})
+            item["claim_type"] = legacy
+    return fixed
+
+
+def _restore_frozen_semantics(original, corrected):
+    """Keep only mechanical fact_check fields from the retry; every frozen
+    semantic field (scores, verdicts, entities, sources...) comes from the
+    original review. Returns (restored, reverted_paths)."""
+    orig_fcs = original.get("fact_checks") or []
+    corr_fcs = corrected.get("fact_checks") or []
+    if len(orig_fcs) != len(corr_fcs):
+        raise RuntimeError("AI review 机械纠错改变了 fact_checks 数量")
+    restored = copy.deepcopy(original)
+    reverted = [key for key, value in _review_semantic_fingerprint(corrected).items()
+                if key != "fact_checks"
+                and value != _review_semantic_fingerprint(original).get(key)]
+    for index, (o, c) in enumerate(zip(orig_fcs, corr_fcs)):
+        if not isinstance(o, dict) or not isinstance(c, dict):
+            continue
+        for key in set(o) | set(c):
+            if key not in _MECHANICAL_FC_FIELDS and o.get(key) != c.get(key):
+                reverted.append(f"fact_checks[{index}].{key}")
+        for key in _MECHANICAL_FC_FIELDS:
+            if key in c:
+                restored["fact_checks"][index][key] = c[key]
+    return restored, reverted
+
+
 def _mechanical_retry_prompt(review, errors):
     return f"""上一次 AI review 的语义结论已经冻结，但 fact_checks 违反确定性合同。
 只允许修正 fact_checks 的 claim_type、subclaim_id、verification_mode。
@@ -717,34 +795,398 @@ def _validate_or_retry_review(workspace, review, *, model, effort):
         audit.update(initial_errors=errors, initial_warnings=warnings)
         if not errors:
             return review, audit, None
-        semantic = copy.deepcopy(_review_semantic_fingerprint(review))
-        audit["retry_count"] = 1
-        retry_result = run_json_task(
-            workspace,
-            _mechanical_retry_prompt(review, errors) + (
-                f"\n本次机械纠错 effort 要求：{effort}。只返回 JSON。"),
-            REVIEW_SCHEMA, task_name="ai_review_mechanical_retry",
-            enable_search=False, model=model or None, timeout=900, effort=effort,
-        )
-        corrected = retry_result.get("payload")
-        diagnostic["corrected_output"] = copy.deepcopy(corrected)
-        diagnostic["retry_call"] = _call_metrics(retry_result)
-        if not isinstance(corrected, dict):
-            raise RuntimeError("AI review 机械纠错输出必须是对象")
-        normalize_review_fact_checks(corrected)
-        final_errors, final_warnings = validate_review_fact_checks(
-            corrected, valid_claim_ids=claim_ids)
-        audit.update(final_errors=final_errors, final_warnings=final_warnings)
-        if _review_semantic_fingerprint(corrected) != semantic:
-            raise RuntimeError("AI review 机械纠错修改了冻结的语义结论")
-        if final_errors:
-            raise RuntimeError("AI review 机械纠错后仍不符合合同: "
-                               + "; ".join(final_errors[:10]))
-        return corrected, audit, retry_result
+        fixed = _deterministic_mode_fixes(review)
+        if fixed:
+            audit["deterministic_mode_fixes"] = fixed
+            errors, warnings = validate_review_fact_checks(
+                review, valid_claim_ids=claim_ids)
+            audit.update(post_fix_errors=errors, post_fix_warnings=warnings)
+            if not errors:
+                return review, audit, None
+        # Contract repair is deliberately deterministic: never ask the model to
+        # rewrite verdicts, scores, evidence, entities, or URLs.
+        audit["retry_count"] = 0
+        audit["deterministic_only"] = True
+        raise RuntimeError("AI review 合同错误无法机械修复: " + "; ".join(errors[:10]))
     except Exception as exc:
         if getattr(exc, "failure_metrics", None):
             diagnostic["retry_failure"] = exc.failure_metrics
         raise ReviewContractError(str(exc), diagnostic) from exc
+
+
+CHUNK_AUDIT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "chunk_id": {"type": "string"},
+        "audit_complete": {"type": "boolean"},
+        "units_reviewed": {"type": "array", "items": {"type": "string"}},
+        "transcript_quality_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "coverage_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "factuality_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "issues": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                "category": {"type": "string"},
+                "file": {"type": "string"},
+                "statement": {"type": "string"},
+                "source_evidence": {"type": "string"},
+                "evidence_segment_ids": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["severity", "category", "file", "statement",
+                         "source_evidence", "evidence_segment_ids"],
+        }},
+        "summary": {"type": "string"},
+    },
+    "required": ["chunk_id", "audit_complete", "units_reviewed",
+                 "transcript_quality_score", "coverage_score",
+                 "factuality_score", "issues", "summary"],
+}
+
+
+def _chunk_enabled():
+    return os.environ.get("SUBAGENT_REVIEW_CHUNKED", "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def _script_chapters_for(workspace, unit_ids):
+    from scripts.content_map import briefing_chapters
+    workspace = Path(workspace)
+    try:
+        sm = json.loads((workspace / "summary_map.json").read_text(encoding="utf-8"))
+        chapters = briefing_chapters((workspace / "讲书稿.md").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    wanted = set(unit_ids)
+    out = {}
+    for ch in sm.get("chapters", []):
+        units = set(ch.get("unit_ids") or []) | {
+            str(c).split("-")[0] for c in ch.get("claim_ids") or []}
+        if units & wanted and ch.get("title") in chapters:
+            out[ch["title"]] = chapters[ch["title"]]
+    return out
+
+
+def build_review_chunks(workspace, max_chars=None):
+    """Split content units (with their transcript segments) into review chunks.
+
+    Every unit and every transcript segment lands in exactly one chunk, so the
+    chunked pass is exhaustive by construction; nothing is sampled or skipped.
+    """
+    import re as _re
+    max_chars = int(max_chars or os.environ.get("SUBAGENT_REVIEW_CHUNK_CHARS", 40000))
+    workspace = Path(workspace)
+    raw = json.loads((workspace / "transcript.raw.json").read_text(encoding="utf-8"))
+    segments = [s for s in raw.get("segments", []) if isinstance(s, dict)]
+    corrected = {}
+    manifest_path = workspace / "correction_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        corrected = {str(i.get("segment_id")): i.get("corrected_text", "")
+                     for i in manifest.get("segments", []) if isinstance(i, dict)}
+    corrected_txt = workspace / "转录_纠错.txt"
+    if not corrected and corrected_txt.exists():
+        lines = corrected_txt.read_text(encoding="utf-8").strip().split("\n")
+        if len(lines) == len(segments):
+            for seg, line in zip(segments, lines):
+                speaker = seg.get("speaker")
+                prefix = f"[{speaker}] " if speaker else ""
+                if prefix and line.startswith(prefix):
+                    line = line[len(prefix):]
+                corrected[str(seg.get("id"))] = line.strip()
+        else:
+            raise RuntimeError(
+                "转录_纠错.txt 行数与 transcript 片段数不一致，无法构建分块审查输入")
+    if corrected_txt.exists() and not corrected:
+        raise RuntimeError("分块审查无法取得纠错文本，拒绝回退到原始听写")
+    cmap = json.loads((workspace / "content_map.json").read_text(encoding="utf-8"))
+    units = [u for u in cmap.get("units", []) if isinstance(u, dict)]
+    notes = (workspace / "中文完整笔记.md").read_text(encoding="utf-8")
+    note_lines = {}
+    for line in notes.splitlines():
+        m = _re.match(r"^(U\d{4,})，", line)
+        if m:
+            note_lines.setdefault(m.group(1), []).append(line)
+    order = {str(s.get("id")): i for i, s in enumerate(segments)}
+    chunks, current, size = [], [], 0
+    for unit in units:
+        ids = (unit.get("evidence") or {}).get("segment_ids") or []
+        cost = sum(len(str(segments[order[i]].get("text", ""))) * 2
+                   for i in ids if i in order) + len(json.dumps(unit, ensure_ascii=False))
+        if current and size + cost > max_chars:
+            chunks.append(current)
+            current, size = [], 0
+        current.append(unit)
+        size += cost
+    if current:
+        chunks.append(current)
+    # assign every segment to a chunk: by unit ranges, gaps go to the preceding chunk
+    seg_owner = {}
+    for idx, chunk in enumerate(chunks):
+        for unit in chunk:
+            for i in (unit.get("evidence") or {}).get("segment_ids") or []:
+                seg_owner.setdefault(i, idx)
+    last = 0
+    for s in segments:
+        sid = str(s.get("id"))
+        last = seg_owner.setdefault(sid, last)
+    out = []
+    for idx, chunk in enumerate(chunks):
+        seg_rows = [{
+            "id": str(s.get("id")), "start": s.get("start"), "end": s.get("end"),
+            "speaker": s.get("speaker"),
+            "text": corrected.get(str(s.get("id")), s.get("text", "")),
+        } for s in segments if seg_owner.get(str(s.get("id"))) == idx]
+        unit_ids = [u.get("id") for u in chunk]
+        out.append({
+            "chunk_id": f"K{idx + 1:02d}", "total_chunks": len(chunks),
+            "unit_ids": unit_ids, "segments": seg_rows, "units": chunk,
+            "notes_lines": {u: note_lines.get(u, []) for u in unit_ids},
+            "script_chapters": _script_chapters_for(workspace, unit_ids),
+        })
+    return out
+
+
+UNCLEAR_SCORING_RULE = {
+    "id": "unclear_not_deductible_v1",
+    "approved_by": "user",
+    "approved_at": "2026-10-21",
+    "text": ("纠错稿中诚实标注的 [unclear]（原音确实无法恢复）不扣转录分；"
+             "未标注的乱码、错词、人名错误仍照常扣分；笔记/讲稿不得把 [unclear] 处内容当作事实。"),
+}
+UNCLEAR_RULE_PROMPT = """
+[unclear] 评分规则（用户批准，unclear_not_deductible_v1）：纠错稿中的 [unclear] 标记表示原音确实无法恢复，是诚实的标注。
+- [unclear] 标记本身不得作为扣分理由，也不要因此降低 transcript_quality 分数；不要仅为 [unclear] 单独列 issue。
+- 仍须扣分：未标注的乱码或明显不通、错词、术语/人名错误、遗漏；若 [unclear] 附近明显可以从上下文直接恢复却被标注为 [unclear]，可作为问题指出。
+- 笔记/讲稿若把 [unclear] 处的内容写成确定事实或推断其内容，按事实/归因问题扣分。
+"""
+
+
+def _chunk_prompt(workspace, chunk_file, chunk):
+    payload = {k: chunk[k] for k in (
+        "chunk_id", "total_chunks", "unit_ids", "segments", "units", "notes_lines",
+        "script_chapters") if k in chunk}
+    return f"""你是播客流水线最终发布审查的分块审查员（第 {chunk['chunk_id']} 块，共 {chunk['total_chunks']} 块）。
+你没有任何文件读取工具；本块全部审查材料已完整内嵌在下方 JSON 中，只能依据它作出判断（本块不联网；外部事实核查由最终审查员负责，不得引用任何外部转录稿）：
+- segments：本块全部转录片段的规范化纠错文本 text（即 转录_纠错.txt 对应片段）；
+- units：content_map 单元及其 claims、numbers、examples、claim_evidence；
+- notes_lines：中文完整笔记中对应单元的段落；
+- script_chapters：讲书稿中包含本块单元的章节正文（可能也含其他块的单元，仅作上下文）。
+  注意：script_chapters 里属于其他块单元的内容由对应分块审查，其证据片段可能不在本块；不要因为某句讲稿在本块片段中找不到依据就判为无依据，除非能确认它对应的是本块单元。
+
+必须逐个片段、逐个单元完整审查，不得抽样：
+1. 转录质量：逐段审查 segments[].text，找出其中仍会影响理解或总结的听写错误、术语/人名拼写错误、遗漏或明显不通处。issues 的 source_evidence 必须逐字引用本块 text 中确实存在的文字并注明片段 ID；不得引用本块之外的文本，不得凭记忆或推测编造引文。
+2. 覆盖：每个单元的 claims/numbers/examples 是否被笔记段落忠实覆盖，笔记标注的 S 片段范围是否真正包含其核心主张。
+3. 事实：笔记中的数字、归因、事实性表述是否与片段一致；明显需要外部限定的外部事实请作为待最终审查核查的问题列出。
+{UNCLEAR_RULE_PROMPT}
+分数为本块的诚实估计（0-100）；只有确实逐段读完本块全部片段和单元时才可将 audit_complete 设为 true，否则必须为 false 且分数不得高于实际把握。
+不得因为其他块或整体印象抬高分数。只返回符合 schema 的 JSON，chunk_id 填 {chunk['chunk_id']}。
+
+本块材料 JSON：
+{json.dumps(payload, ensure_ascii=False)}"""
+
+
+def _chunk_concurrency():
+    raw = os.environ.get("SUBAGENT_REVIEW_CONCURRENCY", "3")
+    try:
+        return max(1, min(32, int(raw)))
+    except ValueError:
+        return 3
+
+
+def _rate_limit_error(exc):
+    text = str(exc).lower()
+    return any(term in text for term in (
+        "rate limit", "rate_limit", "usage limit", "usage_limit", "overloaded",
+        "too many requests", "429"))
+
+
+def _run_chunk_with_backoff(chunk, workspace, model, effort, cache_file, max_retries=4):
+    for attempt in range(max_retries + 1):
+        try:
+            return _run_one_chunk(chunk, workspace, model, effort, cache_file)
+        except Exception as exc:
+            if not _rate_limit_error(exc) or attempt >= max_retries:
+                raise
+            time.sleep(min(30, 2 ** attempt))
+
+
+def _run_one_chunk(chunk, workspace, model, effort, cache_file):
+    chunk_ws = Path(tempfile.mkdtemp(prefix="podcast-review-chunk-"))
+    prev_flag = os.environ.get("SUBAGENT_PI_NO_FILE_TOOLS")
+    os.environ["SUBAGENT_PI_NO_FILE_TOOLS"] = "1"
+    try:
+        res = run_json_task(chunk_ws, _chunk_prompt(chunk_ws, None, chunk) +
+            f"\\n本次审查 effort 要求：{effort}。", CHUNK_AUDIT_SCHEMA,
+            task_name="ai_review_chunk", enable_search=False, model=model or None,
+            timeout=1800, effort=effort)
+    finally:
+        if prev_flag is None: os.environ.pop("SUBAGENT_PI_NO_FILE_TOOLS", None)
+        else: os.environ["SUBAGENT_PI_NO_FILE_TOOLS"] = prev_flag
+        shutil.rmtree(chunk_ws, ignore_errors=True)
+    payload = res.get("payload")
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"分块审查 {chunk['chunk_id']} 输出必须是对象")
+    payload["chunk_id"] = chunk["chunk_id"]
+    payload["expected_unit_ids"] = chunk["unit_ids"]
+    payload["segment_count"] = len(chunk["segments"])
+    missing = sorted(set(chunk["unit_ids"]) - set(payload.get("units_reviewed") or []))
+    if missing: payload["audit_complete"] = False; payload["missing_units"] = missing
+    payload["call"] = _call_metrics(res)
+    if cache_file is not None:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return payload
+
+
+def run_chunked_audits(workspace, *, model, effort):
+    workspace = Path(workspace)
+    chunks = build_review_chunks(workspace)
+    results = []
+    chunk_dir = workspace / "_review_chunks"
+    chunk_dir.mkdir(exist_ok=True)
+    def prepare(chunk):
+        path = chunk_dir / f"{chunk['chunk_id']}.json"
+        path.write_text(json.dumps(chunk, ensure_ascii=False, indent=1), encoding="utf-8")
+        cache_dir = os.environ.get("SUBAGENT_REVIEW_CHUNK_CACHE", "").strip()
+        cache_file = None
+        if cache_dir:
+            code_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+            key = hashlib.sha256((json.dumps(chunk, ensure_ascii=False, sort_keys=True)
+                + _chunk_prompt(None, None, chunk) + str(model) + str(effort)
+                + os.environ.get("SUBAGENT_REVIEW_THINKING", "") + code_hash).encode()).hexdigest()
+            cache_file = Path(cache_dir) / f"{chunk['chunk_id']}-{key}.json"
+            if cache_file.exists():
+                return json.loads(cache_file.read_text(encoding="utf-8"))
+        print(f"[AI审查] 分块 {chunk['chunk_id']}/{len(chunks)}", file=sys.stderr, flush=True)
+        return _run_chunk_with_backoff(chunk, workspace, model, effort, cache_file)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_chunk_concurrency()) as pool:
+        futures = [pool.submit(prepare, chunk) for chunk in chunks]
+        results = [future.result() for future in futures]
+    results.sort(key=lambda item: item.get("chunk_id", ""))
+    summary = {"chunks": results, "total_chunks": len(chunks)}
+    (workspace / "chunk_audits.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
+    return summary
+
+
+_CHUNK_SCORE_FIELDS = {
+    "transcript_quality": "transcript_quality_score",
+    "coverage": "coverage_score",
+    "factuality": "factuality_score",
+}
+_CHUNK_COMPLETION_KEYS = {
+    "transcript_quality": ["transcript"],
+    "coverage": ["coverage", "exhaustive_inventory_completed"],
+    "factuality": ["factuality_numbers", "attribution_evidence", "entities"],
+}
+
+
+def aggregate_chunk_audits(review, audits):
+    """Combine chunk audits into the final review without ever raising a score.
+
+    Each headline score becomes min(final reviewer score, segment-weighted mean of
+    chunk scores, min chunk score + 5). Any incomplete chunk forces the matching
+    audit_completion flags false and fails that section. Chunk high/critical issues
+    are carried into the final issue list.
+    """
+    chunks = audits.get("chunks", [])
+    if not chunks:
+        return review
+    all_complete = all(c.get("audit_complete") for c in chunks)
+    weights = [max(1, int(c.get("segment_count") or 1)) for c in chunks]
+    agg = {}
+    for section, field in _CHUNK_SCORE_FIELDS.items():
+        vals = [int(c.get(field) or 0) for c in chunks]
+        mean = sum(v * w for v, w in zip(vals, weights)) / sum(weights)
+        chunk_score = int(min(mean, min(vals) + 5))
+        agg[section] = chunk_score
+        block = review.get(section)
+        if isinstance(block, dict) and "score" in block:
+            final = int(block.get("score") or 0)
+            block["final_reviewer_score"] = final
+            block["chunk_aggregate_score"] = chunk_score
+            block["score"] = min(final, chunk_score) if all_complete else min(final, chunk_score, 0)
+            if block["score"] < 90:
+                block["passed"] = False
+    completion = review.get("audit_completion")
+    if isinstance(completion, dict) and not all_complete:
+        for keys in _CHUNK_COMPLETION_KEYS.values():
+            for key in keys:
+                completion[key] = False
+        if isinstance(review.get("publish"), dict):
+            review["publish"]["passed"] = False
+    issues = review.setdefault("issues", [])
+    known = {str(i.get("statement")) for i in issues if isinstance(i, dict)}
+    for c in chunks:
+        for item in c.get("issues") or []:
+            if item.get("severity") not in {"critical", "high"}:
+                continue
+            if item.get("statement") in known:
+                continue
+            entry = {"evidence_type": "transcript", "source_urls": [],
+                     "checked_at": datetime.now(UTC).isoformat(),
+                     "recommendation": "按分块审查意见修复后重审。",
+                     "repair_kind": "manual", "replacement_from": "",
+                     "replacement_to": "", "allowed_files": []}
+            entry.update({k: item.get(k) for k in (
+                "severity", "category", "file", "statement", "source_evidence",
+                "evidence_segment_ids")})
+            entry["statement"] = f"[{c['chunk_id']}] " + str(item.get("statement"))
+            issues.append(entry)
+            review["passed"] = False
+            if isinstance(review.get("publish"), dict):
+                review["publish"]["passed"] = False
+    if not all_complete:
+        review["passed"] = False
+    review["scoring_rules"] = [dict(UNCLEAR_SCORING_RULE)]
+    review["chunk_audit"] = {
+        "total_chunks": len(chunks), "all_complete": all_complete,
+        "aggregate_scores": agg,
+        "chunks": [{k: c.get(k) for k in (
+            "chunk_id", "audit_complete", "expected_unit_ids", "missing_units",
+            "segment_count", "transcript_quality_score", "coverage_score",
+            "factuality_score", "summary")} | {
+            "issue_counts": {sev: sum(1 for i in c.get("issues") or []
+                                      if i.get("severity") == sev)
+                             for sev in ("critical", "high", "medium", "low")}}
+            for c in chunks],
+    }
+    return review
+
+
+def _hide_raw_transcript(workspace):
+    """Final chunked review sees only the corrected transcript, never raw ASR."""
+    workspace = Path(workspace)
+    raw_path = workspace / "transcript.raw.json"
+    manifest_path = workspace / "correction_manifest.json"
+    if raw_path.exists() and (workspace / "转录_纠错.txt").exists():
+        raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        corrected = {s["id"]: s["text"] for c in build_review_chunks(workspace)
+                     for s in c["segments"]}
+        for seg in raw.get("segments", []) or []:
+            if isinstance(seg, dict) and corrected.get(str(seg.get("id"))):
+                seg["text"] = corrected[str(seg.get("id"))]
+            if isinstance(seg, dict):
+                seg.pop("words", None)
+        raw["staging_note"] = "segments[].text 已替换为 转录_纠错.txt 的规范化纠错文本；原始听写不提供给本次审查。"
+        raw_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    for name in ("原始转录.txt",):
+        (workspace / name).unlink(missing_ok=True)
+
+
+def _chunk_final_instruction():
+    return """
+
+本次 staging 不提供原始听写：原始转录.txt 不存在，transcript.raw.json 的 segments[].text 已替换为规范化纠错文本（与 转录_纠错.txt 一致）。忽略上文要求读取 原始转录.txt 的指示；只读取本工作目录内的文件，不得访问工作目录之外的任何路径。转录质量以 转录_纠错.txt 为准评价。
+
+本次采用分块审查：全部转录片段与内容单元已按顺序分成若干块，由分块审查员逐段完整审查，结果在 chunk_audits.json（分块数据在 _review_chunks/）。
+- 你必须读取 chunk_audits.json，并把其中所有 critical/high 问题纳入 issues 与判定；可以复核或补充，但不得无依据推翻。
+- transcript、coverage、factuality_numbers、attribution_evidence、entities、exhaustive_inventory_completed 的逐项穷尽检查可以以分块结果为基础；只有全部分块 audit_complete 为 true 且你完成了跨块与全局检查（讲书稿、summary_map、哈希、TTS、发布判定）时，才能把对应 audit_completion 设为 true。
+- 最终分数会与分块分数取较低值，不会被抬高；请给出你独立的诚实分数。
+""" + UNCLEAR_RULE_PROMPT
 
 
 def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True,
@@ -770,9 +1212,24 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
         with isolated_review_workspace(
                 folder, input_snapshot, context_snapshot) as workspace:
             _write_cache_review_context(workspace)
+            checkpoint_dir = folder / "_review_checkpoints"
+            checkpoint_dir.mkdir(exist_ok=True)
+            previous_chunk_cache = os.environ.get("SUBAGENT_REVIEW_CHUNK_CACHE")
+            os.environ["SUBAGENT_REVIEW_CHUNK_CACHE"] = str(checkpoint_dir)
+            try:
+                chunk_audits = (run_chunked_audits(workspace, model=model, effort=effort)
+                                if _chunk_enabled() else None)
+            finally:
+                if previous_chunk_cache is None:
+                    os.environ.pop("SUBAGENT_REVIEW_CHUNK_CACHE", None)
+                else:
+                    os.environ["SUBAGENT_REVIEW_CHUNK_CACHE"] = previous_chunk_cache
+            if chunk_audits:
+                _hide_raw_transcript(workspace)
             result = run_json_task(
                 workspace,
-                _prompt(workspace, scope) + (
+                _prompt(workspace, scope)
+                + (_chunk_final_instruction() if chunk_audits else "") + (
                     f"\n本次审查 effort 要求：{effort}。"
                     "只返回符合 schema 的 JSON，不修改任何文件。"),
                 schema_path, task_name="ai_review", enable_search=True,
@@ -807,6 +1264,8 @@ def run_ai_review(folder, output=None, model=None, effort="max", *, persist=True
                     ),
                 }
             review["mechanical_validation"] = mechanical_audit
+            if chunk_audits:
+                aggregate_chunk_audits(review, chunk_audits)
     finally:
         try:
             schema_file.close()
@@ -963,6 +1422,8 @@ def main():
         "--model", default=os.environ.get("SUBAGENT_REVIEW_MODEL", ""))
     parser.add_argument(
         "--effort", default=os.environ.get("SUBAGENT_REVIEW_EFFORT", "max"))
+    parser.add_argument("--concurrency", type=int, default=None,
+                        help="并发分块数（默认 3，也可用 SUBAGENT_REVIEW_CONCURRENCY）")
     parser.add_argument(
         "--rebind-provenance",
         action="store_true",
@@ -972,6 +1433,8 @@ def main():
     if args.rebind_provenance:
         review = rebind_provenance_review(args.folder, args.out)
     else:
+        if args.concurrency is not None:
+            os.environ["SUBAGENT_REVIEW_CONCURRENCY"] = str(args.concurrency)
         review = review_episode(
             args.folder, args.out, model=args.model, effort=args.effort)
     print(json.dumps(review, ensure_ascii=False, indent=2))

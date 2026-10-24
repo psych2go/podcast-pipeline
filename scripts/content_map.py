@@ -182,6 +182,11 @@ def enrich_content_map_evidence(content_map, transcript):
                         start is not None and end is None
                         and start in open_anchor_starts
                     )
+                    else [start, max(a for a in open_anchor_starts if a >= start)]
+                    if (
+                        start is not None and end is None
+                        and any(a >= start for a in open_anchor_starts)
+                    )
                     else [start, end]
                 )
             unit["timestamps"] = normalized_timestamps

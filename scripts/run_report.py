@@ -112,6 +112,24 @@ class RunStage:
         self.payload["status"] = status
         if error:
             self.payload["error"] = error
+        # Keep a small structured trend summary alongside detailed stages.
+        self.payload.setdefault("metrics", {})
+        trend = self.payload["metrics"]
+        trend["stage_count"] = len(self.report.run.get("stages", []))
+        trend["completed_stage_count"] = sum(
+            1 for item in self.report.run.get("stages", [])
+            if item.get("status") in {"passed", "failed"})
+        trend["failed_stage_count"] = sum(
+            1 for item in self.report.run.get("stages", [])
+            if item.get("status") == "failed")
+        trend["stage_duration_seconds"] = round(sum(
+            float(item.get("duration_seconds", 0) or 0)
+            for item in self.report.run.get("stages", [])), 3)
+        if status == "failed":
+            trend["last_failure_code"] = (
+                self.metrics.get("failure_kind")
+                or self.metrics.get("runner_failure", {}).get("failure_kind")
+                or "stage_failed")
         self.report._update_stage(self.payload)
         _emit_progress({
             "run_id": self.report.run["id"],
@@ -195,6 +213,15 @@ class RunReport:
             self.run["error"] = _error_text(error)
         if metrics:
             self.run["metrics"] = dict(metrics)
+        self.run.setdefault("metrics", {})
+        self.run["metrics"].update({
+            "stage_count": len(self.run.get("stages", [])),
+            "failed_stage_count": sum(1 for item in self.run.get("stages", [])
+                                       if item.get("status") == "failed"),
+            "stage_duration_seconds": round(sum(
+                float(item.get("duration_seconds", 0) or 0)
+                for item in self.run.get("stages", [])), 3),
+        })
         self._finished = True
         self._persist()
         _emit_progress({

@@ -8,7 +8,7 @@ from contextlib import ExitStack, contextmanager
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -80,13 +80,32 @@ class ReleaseStateTests(unittest.TestCase):
             with patch.object(
                     release_module, "_git_provenance",
                     return_value=provenance):
-                prepared = prepare_release(folder, mp3, briefing)
+                prepared = prepare_release(folder, mp3, briefing, require_clean=False)
                 self.assertEqual(prepared["git_commit"], "abc123")
                 self.assertTrue(prepared["git_dirty"])
                 self.assertEqual(prepared["pipeline_version"], 8)
                 with self.assertRaisesRegex(RuntimeError, "require-clean"):
                     prepare_release(
                         folder, mp3, briefing, require_clean=True)
+
+
+class ProvenanceFilteringTests(unittest.TestCase):
+    def test_generated_content_is_ignored_but_tracked_source_is_dirty(self):
+        def fake_output(folder, *args):
+            if args == ("rev-parse", "--show-toplevel"):
+                return b"/repo\n"
+            if args == ("rev-parse", "HEAD"):
+                return b"abc\n"
+            if args == ("status", "--porcelain=v1", "-z"):
+                return self.status
+            return b""
+
+        with patch.object(release_module, "_git_output", side_effect=fake_output), \
+             patch.object(release_module.subprocess, "run", return_value=Mock(returncode=1)):
+            self.status = b"?? content/Episode\0?? reports/x.json\0"
+            self.assertFalse(release_module._git_provenance("/repo")["git_dirty"])
+            self.status = b"?? content/Episode\0 M scripts/release.py\0"
+            self.assertTrue(release_module._git_provenance("/repo")["git_dirty"])
 
 
 class CatalogReleaseFlowTests(unittest.TestCase):

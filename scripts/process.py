@@ -64,6 +64,7 @@ from scripts.preflight import quality_gate as shared_quality_gate
 from scripts.agent_pipeline import run_content_pipeline
 from scripts.rebuild_plan import build_rebuild_plan
 from scripts.release import prepare_release
+from scripts.artifact_manifest import write_artifact_manifest
 from scripts.run_report import RunReport
 from scripts.tts import build_tts_plan
 from scripts.content_finalizer import (
@@ -670,10 +671,12 @@ def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
             print("[TTS][阻断] 存在失败章节，最终音频未更新", flush=True)
             return False
     with _stage(run_report, "prepare_release") as stage:
+        write_artifact_manifest(folder)
         release = prepare_release(
             folder,
             folder / f"{name}.mp3",
             folder / briefing_file,
+            require_clean=True,
         )
         if stage is not None:
             stage.metrics.update({

@@ -37,6 +37,7 @@ from scripts.publish_errors import (
     RETRYABLE_PAGE_CODES, publish_error_codes,
 )
 from scripts.quality_report import build_quality_report
+from scripts.artifact_manifest import write_artifact_manifest
 from scripts.release import (
     active_audio_key, load_release, update_release_state, release_fingerprint,
 )
@@ -284,6 +285,32 @@ def _candidate_catalog_errors(name):
         errors.append(f"候选播客目录生成失败: {exc}")
     return errors
 
+def readiness_check(name):
+    """Read-only release readiness report; never writes episode artifacts."""
+    folder = CONTENT_DIR / name
+    gaps = []
+    if not folder.is_dir(): return ["missing_episode"]
+    briefing = _find_briefing(folder); mp3 = _gen_mp3(folder)
+    html = folder / f"{name} - content.html"
+    if not briefing: gaps.append("missing_briefing")
+    if not mp3: gaps.append("missing_audio")
+    if not html.exists(): gaps.append("missing_html")
+    release = load_release(folder)
+    if release and release.get("git_dirty"): gaps.append("dirty_provenance")
+    try:
+        from scripts.artifact_manifest import load_manifest
+        for key, item in load_manifest(folder).get("artifacts", {}).items():
+            if item.get("status") == "stale": gaps.append("stale_" + key)
+    except Exception: pass
+    return gaps
+
+
+def readiness_dry_run(name):
+    """Structured, side-effect-free readiness result for CLI and automation."""
+    gaps = readiness_check(name)
+    return {"passed": not gaps, "gaps": gaps, "name": name}
+
+
 def _publish_preflight(name):
     """发布前验证内容质量、产物存在性、新鲜度和音频可解码性。"""
     folder = CONTENT_DIR / name
@@ -291,6 +318,7 @@ def _publish_preflight(name):
         print(f"[发布前检查][阻断] 找不到播客目录: {folder}")
         return False
 
+    write_artifact_manifest(folder)
     report = _live_quality_report_builder()(folder)
     atomic_write_json(folder / "quality_report.json", report)
     if not report.get("passed", False):
@@ -306,6 +334,9 @@ def _publish_preflight(name):
         return False
 
     release = load_release(folder)
+    if release and release.get("git_dirty"):
+        print("[发布前检查][阻断] release.json 记录代码工作区不干净")
+        return False
     if release:
         audio_sha256 = hashlib.sha256(mp3.read_bytes()).hexdigest()
         briefing_sha256 = hashlib.sha256(briefing.read_bytes()).hexdigest()

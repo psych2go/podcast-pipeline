@@ -1044,14 +1044,18 @@ class ReviewMechanicalRetryTests(unittest.TestCase):
             }) as runner:
                 result, audit, wrapper = ai_review._validate_or_retry_review(
                     folder, first, model="", effort="max")
-        self.assertEqual(audit["retry_count"], 1)
-        self.assertEqual(audit["final_errors"], [])
+        # verification_mode for a sourced high-risk recommendation is now
+        # fixed deterministically, so no model retry (which could drift
+        # frozen fields) is needed.
+        self.assertEqual(audit["retry_count"], 0)
+        self.assertEqual(audit["post_fix_errors"], [])
+        self.assertEqual(len(audit["deterministic_mode_fixes"]), 1)
         self.assertEqual(
             result["fact_checks"][0]["verification_mode"],
             "safety_cross_check",
         )
-        self.assertIsNotNone(wrapper)
-        runner.assert_called_once()
+        self.assertIsNone(wrapper)
+        runner.assert_not_called()
 
     def test_mechanical_retry_cannot_flip_review_verdict(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1066,7 +1070,7 @@ class ReviewMechanicalRetryTests(unittest.TestCase):
             with mock.patch.object(ai_review, "run_json_task", return_value={
                 "payload": corrected,
             }):
-                with self.assertRaisesRegex(RuntimeError, "语义结论"):
+                with self.assertRaisesRegex(RuntimeError, "无法机械修复"):
                     ai_review._validate_or_retry_review(
                         folder, first, model="", effort="max")
 

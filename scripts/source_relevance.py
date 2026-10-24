@@ -23,7 +23,10 @@ from scripts.atomic_io import atomic_write_json
 
 
 SCHEMA_VERSION = 1
+EXTRACTOR_VERSION = "readable-html-v1"
 CACHE_FILENAME = "source_relevance_cache.json"
+SHARED_CACHE_ENV = "SOURCE_RELEVANCE_SHARED_CACHE"
+SHARED_CACHE_FILENAME = "source_relevance_shared_cache.json"
 MAX_SOURCE_BYTES = 2_000_000
 MAX_EXCERPT_CHARS = 2000
 MAX_REDIRECTS = 5
@@ -374,6 +377,26 @@ def _fetch_cache_entry(url, fetcher, now):
     return entry
 
 
+def _shared_cache_path():
+    """Return the process-wide cache path (never inside published content)."""
+    import os
+    configured = os.environ.get(SHARED_CACHE_ENV, "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".cache" / "podcast-pipeline" / SHARED_CACHE_FILENAME
+
+
+def _load_shared_entries():
+    payload = _load_json(_shared_cache_path(), {})
+    return payload.get("entries", {}) if isinstance(payload, dict) else {}
+
+
+def _store_shared_entries(entries):
+    path = _shared_cache_path()
+    payload = {"schema_version": SCHEMA_VERSION, "extractor_version": EXTRACTOR_VERSION,
+               "updated_at": datetime.now(UTC).isoformat(), "entries": entries}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, payload)
+
+
 def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
     folder = Path(folder)
     references = expected_source_references(folder)
@@ -391,6 +414,7 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
         return None
     existing = _load_json(path, {"entries": {}})
     old_entries = existing.get("entries", {}) if isinstance(existing, dict) else {}
+    shared_entries = _load_shared_entries()
     if isinstance(old_entries, dict):
         old_entries = {
             normalize_source_url(url): entry
@@ -402,6 +426,9 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
     now = datetime.now(UTC)
     for url, _source_ids in references.items():
         previous = old_entries.get(url) if isinstance(old_entries, dict) else None
+        shared = shared_entries.get(url) if isinstance(shared_entries, dict) else None
+        if not force and isinstance(shared, dict) and shared.get("status") == "fetched" and _recent_success(shared, now):
+            previous = shared
         reused = (
             not force
             and isinstance(previous, dict)
@@ -436,6 +463,10 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
         )
         for url, source_ids in references.items()
     }
+    successful = {url: dict(entry) for url, entry in entries.items()
+                  if entry.get("status") == "fetched" and entry.get("content_sha256")}
+    if successful:
+        _store_shared_entries({**shared_entries, **successful})
     if (
             isinstance(existing, dict)
             and existing.get("schema_version") == SCHEMA_VERSION

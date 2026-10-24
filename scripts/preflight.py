@@ -37,6 +37,22 @@ def _review_recovery_decision(report):
     return review_missing_or_stale, can_auto_review
 
 
+def review_recovery_classification(report, previous=None):
+    """Classify repeat failures without invoking a reviewer."""
+    import hashlib, json
+    details = report.get("error_details") or []
+    codes = sorted(str(x.get("code")) for x in details if isinstance(x, dict) and x.get("code"))
+    semantic = report.get("review_input_sha256") or report.get("input_sha256") or ""
+    failure = hashlib.sha256(json.dumps(codes, sort_keys=True).encode()).hexdigest()
+    current = {"semantic_input_hash": semantic, "failure_snapshot_hash": failure, "rejection_codes": codes}
+    if previous and previous.get("semantic_input_hash") == semantic and previous.get("failure_snapshot_hash") == failure:
+        return "content_change_required", current
+    if any(c in {"runner_timeout", "empty_output", "provider_rate_limit"} for c in codes):
+        return "runner_transient", current
+    if codes: return "checker_suspect", current
+    return "ok", current
+
+
 def quality_gate(
         folder,
         *,
