@@ -689,6 +689,14 @@ key 最多 48 个字符、最多 6 个空格分词、最多 6 个汉字，并且
     return {"repaired": True, "entries": len(lexicon)}
 
 
+def merge_alias_repair_changes(changes, alias_repairs):
+    """Combine finalizer change records with the int count of alias repairs."""
+    merged = list(changes or [])
+    if alias_repairs:
+        merged.append(f"public_entity_alias_repairs: {int(alias_repairs)}")
+    return merged
+
+
 def run_content_pipeline(folder, title, run_report=None, force=False):
     """Run correction, content mapping, writing, evidence, and hash enrichment."""
     folder = Path(folder).resolve()
@@ -1089,7 +1097,8 @@ JSON，不修改文件。""",
             finalized = finalize_content_package(folder)
             briefing_text = finalized["briefing"]
             summary_map = finalized["summary_map"]
-            normalization_changes += alias_repairs
+            normalization_changes = merge_alias_repair_changes(
+                finalized["normalization_changes"], alias_repairs)
         tts_readiness = _ensure_tts_lexicon_ready(
             folder, folder / "讲书稿.md")
         if (not writing_ready) or review_content_changed:
