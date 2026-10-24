@@ -547,7 +547,8 @@ def repair_source_segment_gaps(payload, transcript):
             evidence = unit.get("evidence") if isinstance(unit, dict) else None
             ids = evidence.get("segment_ids", []) if isinstance(evidence, dict) else []
             if ids:
-                candidates.append((min(positions.get(str(value), len(segments)) for value in ids), index))
+                first = min(positions.get(str(value), len(segments)) for value in ids)
+                candidates.append((first, index))
         if not candidates:
             continue
         following = [item for item in candidates if item[0] > position]
@@ -556,7 +557,9 @@ def repair_source_segment_gaps(payload, transcript):
         evidence = unit.setdefault("evidence", {})
         ids = [str(value) for value in evidence.setdefault("segment_ids", [])]
         ids.append(str(segment["id"]))
-        evidence["segment_ids"] = sorted(set(ids), key=lambda value: positions.get(value, len(segments)))
+        evidence["segment_ids"] = sorted(
+            set(ids), key=lambda value: positions.get(value, len(segments))
+        )
     return payload
 
 

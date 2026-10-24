@@ -180,7 +180,7 @@ def repair_public_entity_aliases(payload, *paths):
                 (match.start(), match.end())
                 for match in re.finditer(re.escape(canonical), text, re.IGNORECASE)
             ]
-            def replace(match):
+            def replace(match, canonical=canonical, canonical_spans=canonical_spans):
                 if any(start <= match.start() and match.end() <= end
                        for start, end in canonical_spans):
                     return match.group(0)
