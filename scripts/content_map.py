@@ -383,8 +383,44 @@ def apply_claim_evidence_mapping(content_map, transcript, mappings, unit_ids=Non
     return canonicalize_claim_evidence_order(content_map, transcript), transcript
 
 
-def enrich_summary_map_evidence(summary_map, notes_text, content_map, briefing_text=None):
+def deduplicate_summary_units(summary_map):
+    """Keep the chapter with most claim overlap per unit (first wins ties).
+
+    Move dependent bindings too: dropping them would silently lose coverage.
+    This changes bookkeeping only, never source evidence or chapter prose.
+    """
     normalize_summary_claim_ids(summary_map)
+    chapters = summary_map.get("chapters", []) or []
+    owners = {}
+    for index, chapter in enumerate(chapters):
+        for uid in chapter.get("unit_ids", []) or []:
+            overlap = sum(str(cid).startswith(f"{uid}-C")
+                          for cid in set(chapter.get("claim_ids", []) or []))
+            if uid not in owners or overlap > owners[uid][1]:
+                owners[uid] = (index, overlap)
+    changed = False
+    for index, chapter in enumerate(chapters):
+        original = list(chapter.get("unit_ids", []) or [])
+        chapter["unit_ids"] = list(dict.fromkeys(
+            uid for uid in original if owners[uid][0] == index))
+        changed |= original != chapter["unit_ids"]
+    for field in ("claim_ids", "number_ids", "example_ids"):
+        pending = [[] for _chapter in chapters]
+        for index, chapter in enumerate(chapters):
+            for value in chapter.get(field, []) or []:
+                uid = str(value).split("-", 1)[0]
+                destination = owners.get(uid, (index, 0))[0]
+                if value not in pending[destination]:
+                    pending[destination].append(value)
+        for index, chapter in enumerate(chapters):
+            if field in chapter or pending[index]:
+                changed |= chapter.get(field, []) != pending[index]
+                chapter[field] = pending[index]
+    return changed
+
+
+def enrich_summary_map_evidence(summary_map, notes_text, content_map, briefing_text=None):
+    deduplicate_summary_units(summary_map)
     summary_map["schema_version"] = SUMMARY_MAP_SCHEMA_VERSION
     summary_map["notes_sha256"] = body_sha256(notes_text)
     # Coverage is authored by the summarizer/reviewer. Never manufacture the
@@ -402,9 +438,9 @@ def enrich_summary_map_evidence(summary_map, notes_text, content_map, briefing_t
         if not candidates:
             continue
         mapped.add(claim_id)
-        candidates = [chapter for chapter in summary_map.get("chapters", [])
-                      if unit_id in (chapter.get("unit_ids") or [])]
-        candidates[0].setdefault("claim_ids", []).append(claim_id)
+        claim_ids = candidates[0].setdefault("claim_ids", [])
+        if claim_id not in claim_ids:
+            claim_ids.append(claim_id)
     summary_map["notes_claim_ids"] = sorted(mapped)
     if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION:
         summary_map.setdefault("notes_number_ids", [])
@@ -701,7 +737,7 @@ def validate_content_map(payload, transcript=None):
             errors.append(f"{display_id}: status={status}，尚未完成核验")
         if not unit.get("topic"):
             errors.append(f"{display_id}: 缺少 topic")
-        if importance in {"high", "medium"} and not unit.get("claims"):
+        if status != "excluded" and importance in {"high", "medium"} and not unit.get("claims"):
             errors.append(f"{display_id}: {importance} 单元没有 claims")
         modalities = unit.get("claim_modalities")
         if modalities:
@@ -876,7 +912,8 @@ def validate_content_map(payload, transcript=None):
                                     f"{display_id}-{claim_key}: "
                                     "claim evidence confidence=low，需人工复核"
                                 )
-                                if payload.get("claim_evidence_low_confidence_policy") == "review_flag":
+                                if (payload.get("claim_evidence_low_confidence_policy")
+                                        == "review_flag"):
                                     warnings.append(message)
                                     payload.setdefault("review_flags", []).append(
                                         f"{display_id}-{claim_key}:low_confidence"

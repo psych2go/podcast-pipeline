@@ -340,7 +340,17 @@ AI 不检查 HTML、MP3、R2 或 Pages；这些机械状态由确定性流程负
 
 机械归一化只派生 `claim_type`，不改 verdict。受限机械重试只允许修改
 `claim_type`、`subclaim_id`、`verification_mode`，冻结事实结论、发布状态、
-来源 URL、核查日期和 notes，不允许联网补证据。合同仍不满足则阻断。
+来源 URL、核查日期和 notes，不允许在原审查中联网补证据或翻转 verdict。
+`review_repair.py` 对高风险建议缺安全来源、指控缺原始文件 URL、一手信息归因
+verdict 不合规这三类合同异常调用 `review_contract_repair.py`：在隔离工作区用
+只读 subagent 检索，主流程取回公开页面并复现引文；有效线索写入已有的
+`editorial_corrections.json`，不视为已核实结论。找不到来源则最小化软化、明确
+节目真实说话人归因，或删除不能安全保留的主张；无安全来源的建议不能只加归因。
+删除时同步 claim/number/example、summary、预写作台账及逐 claim evidence 的 ID，
+原始转录、segment 和 unit 证据保留用于来源问责。校验失败不提交暂存修复。
+修复与普通审查共用默认最多两轮预算，每轮修复后必须重新独立审查；耗尽仍阻断，
+不能复用旧的 passed=true。summary 重复 unit 映射按 claim 重叠最多的章节保留，
+平局取首章，并迁移其依赖 ID，不删来源证据；最终质量门仍检查覆盖与章节有效性。
 合同失败的首次原始输出、修复输出（若有）、校验错误、输入哈希和调用指标
 写到本地 `ai_review_contract_failures/<stage-id>.json`，并由
 `run_report.metrics.contract_failure_snapshot` 链接。该诊断标记

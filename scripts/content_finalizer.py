@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from scripts.atomic_io import atomic_write_json, atomic_write_text
-from scripts.content_map import normalize_summary_claim_ids
+from scripts.content_map import deduplicate_summary_units, normalize_summary_claim_ids
 from scripts.tts import apply_tts_lexicon, load_tts_lexicon, normalize_for_tts
 from scripts.validator import (
     MAX_CHAPTER_CHARS,
@@ -256,8 +256,11 @@ def synchronize_summary_chapters(briefing_text, summary_map):
 def finalize_content_artifacts(briefing_text, summary_map):
     """Canonicalize briefing text and keep summary bindings synchronized."""
     aligned = synchronize_summary_chapters(briefing_text, summary_map)
+    deduplicated = deduplicate_summary_units(aligned)
     finalized, aligned, changes = normalize_briefing_artifacts(
         briefing_text, aligned)
+    if deduplicated:
+        changes.append("deduplicate_summary_units")
     aligned = synchronize_summary_chapters(finalized, aligned)
     finalized, aligned, split_long = rebalance_long_chapters(
         finalized, aligned)

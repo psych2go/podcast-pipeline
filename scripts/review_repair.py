@@ -215,6 +215,12 @@ def _refresh_semantic_bindings(folder, replacements):
     summary["transcript_basis"] = _transcript_basis(folder)
     save_json(summary_path, summary)
     _refresh_ledger_binding(folder, replacements)
+    # Repaired prose must bind the actual post-repair semantic inputs, not the
+    # pre-review hashes, or the next normal resume would discard the repair.
+    from scripts.agent_pipeline import WRITING_INPUTS_VERSION, _writing_input_hashes
+    summary["writing_inputs_version"] = WRITING_INPUTS_VERSION
+    summary["writing_inputs"] = _writing_input_hashes(folder)
+    save_json(summary_path, summary)
 
 
 def _repair_snapshot_paths(folder, issues):
@@ -455,13 +461,39 @@ def review_and_repair(
     if reviewer is None:
         from scripts import ai_review
         reviewer = ai_review.review_episode
+    from scripts.ai_review import ReviewContractError
+    from scripts.review_contract_repair import repair_contract_failure
+
     history = []
     review = None
     for round_index in range(max_rounds + 1):
         review_kwargs = {"model": model, "effort": effort}
         if run_report is not None:
             review_kwargs["run_report"] = run_report
-        review = reviewer(folder, **review_kwargs)
+        try:
+            review = reviewer(folder, **review_kwargs)
+        except ReviewContractError as exc:
+            # A contract diagnostic is NOT a failed authoritative review. It
+            # must never enter the normal safe-issue path or become a pass.
+            entry = {
+                "round": round_index, "passed": False,
+                "contract_failure_snapshot": exc.diagnostic_path,
+                "contract_error": str(exc), "repair_actions": [],
+            }
+            history.append(entry)
+            try:
+                if round_index >= max_rounds:
+                    raise RuntimeError("来源/归因合同自动修复已达到轮数上限")
+                entry["repair_actions"].append(repair_contract_failure(
+                    folder, exc.diagnostic, model=model, effort=effort))
+            except Exception as repair_exc:
+                entry["repair_blockers"] = [str(repair_exc)]
+                atomic_write_json(folder / "review_repair.json", {
+                    "schema_version": 1, "completed_at": datetime.now(UTC).isoformat(),
+                    "max_rounds": max_rounds, "passed": False, "history": history,
+                })
+                raise exc from repair_exc
+            continue
         if not isinstance(review, dict):
             # Compatibility with injected/legacy reviewers that only perform
             # side effects. The caller's deterministic quality report remains
