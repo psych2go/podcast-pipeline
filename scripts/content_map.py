@@ -524,6 +524,45 @@ def source_segment_accountability(payload, transcript):
     }
 
 
+def repair_source_segment_gaps(payload, transcript):
+    """Deterministically attach omitted source segments to the next unit.
+
+    LLM maps occasionally leave a one-segment gap between otherwise contiguous
+    units.  The segment still belongs to the map; attaching it to the following
+    unit preserves ordering and avoids dropping source material.
+    """
+    transcript = ensure_segment_ids(transcript or {"segments": []})
+    segments = [s for s in transcript.get("segments", []) if (s.get("text") or "").strip()]
+    positions = {str(s["id"]): i for i, s in enumerate(segments)}
+    referenced = set()
+    for unit in payload.get("units", []) or []:
+        evidence = unit.get("evidence") if isinstance(unit, dict) else None
+        if isinstance(evidence, dict):
+            referenced.update(str(value) for value in evidence.get("segment_ids", []))
+    missing = [s for s in segments if str(s["id"]) not in referenced]
+    for segment in missing:
+        position = positions[str(segment["id"])]
+        candidates = []
+        for index, unit in enumerate(payload.get("units", []) or []):
+            evidence = unit.get("evidence") if isinstance(unit, dict) else None
+            ids = evidence.get("segment_ids", []) if isinstance(evidence, dict) else []
+            if ids:
+                first = min(positions.get(str(value), len(segments)) for value in ids)
+                candidates.append((first, index))
+        if not candidates:
+            continue
+        following = [item for item in candidates if item[0] > position]
+        index = min(following or candidates, key=lambda item: item[0])[1]
+        unit = payload["units"][index]
+        evidence = unit.setdefault("evidence", {})
+        ids = [str(value) for value in evidence.setdefault("segment_ids", [])]
+        ids.append(str(segment["id"]))
+        evidence["segment_ids"] = sorted(
+            set(ids), key=lambda value: positions.get(value, len(segments))
+        )
+    return payload
+
+
 def validate_content_map(payload, transcript=None):
     """校验内容台账是否已经完成人工/LLM 整理。"""
     errors = []

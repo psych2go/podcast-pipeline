@@ -1,5 +1,6 @@
 """Canonical entity contract for names used in public podcast content."""
 import re
+from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -146,6 +147,49 @@ def validate_canonical_entities(payload, transcript=None):
                 and not urls):
             errors.append(f"{prefix}: 公开实体必须提供规范来源 URL")
     return errors
+
+
+def repair_public_entity_aliases(payload, *paths):
+    """Replace unambiguous observed entity variants with canonical names."""
+    changes = 0
+    identity_types = {"person", "company", "product", "institution", "title"}
+    replacements = []
+    for item in payload.get("entities", []) or []:
+        if not isinstance(item, dict) or item.get("entity_type") not in identity_types:
+            continue
+        canonical = str(item.get("canonical_name", "")).strip()
+        if not canonical:
+            continue
+        for observed in item.get("observed_names", []) or []:
+            observed = str(observed).strip()
+            if not observed or observed.casefold() == canonical.casefold():
+                continue
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9]){re.escape(observed)}(?![A-Za-z0-9])",
+                0 if observed.casefold() == canonical.casefold() else re.IGNORECASE,
+            )
+            replacements.append((pattern, canonical))
+    # Longest variants first prevents a short variant from consuming a longer one.
+    replacements.sort(key=lambda pair: len(pair[0].pattern), reverse=True)
+    for path in paths:
+        path = Path(path)
+        text = path.read_text(encoding="utf-8")
+        original = text
+        for pattern, canonical in replacements:
+            canonical_spans = [
+                (match.start(), match.end())
+                for match in re.finditer(re.escape(canonical), text, re.IGNORECASE)
+            ]
+            def replace(match, canonical=canonical, canonical_spans=canonical_spans):
+                if any(start <= match.start() and match.end() <= end
+                       for start, end in canonical_spans):
+                    return match.group(0)
+                return canonical
+            text = pattern.sub(replace, text)
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            changes += 1
+    return changes
 
 
 def public_entity_alias_errors(payload, *texts):

@@ -11,6 +11,7 @@ from scripts.canonical_entities import (
     GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
     SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
     public_entity_alias_errors,
+    repair_public_entity_aliases,
     validate_canonical_entities,
 )
 from scripts.claim_evidence import refine_claim_evidence
@@ -22,6 +23,7 @@ from scripts.content_map import (
     load_json,
     normalize_detail_items,
     normalize_summary_claim_ids,
+    repair_source_segment_gaps,
     save_json,
     CLAIM_MODALITIES,
     STATUS_VALUES,
@@ -32,6 +34,7 @@ from scripts.content_finalizer import (
     finalize_content_package,
     validate_tts_readiness,
 )
+from scripts.validator import integer_to_chinese
 from scripts.episode import (
     quality_metadata,
     sync_episode_state,
@@ -618,8 +621,33 @@ def _tts_lexicon_change_errors(briefing, existing, updated):
     return errors
 
 
+_CHINESE_DIGITS = "零一二三四五六七八九"
+
+
+def _chinese_tts_number(match):
+    value = match if isinstance(match, str) else match.group(0)
+    if value.endswith("%"):
+        return "百分之" + _chinese_tts_number(value[:-1])
+    if "." in value:
+        whole, fraction = value.split(".", 1)
+        return integer_to_chinese(int(whole)) + "点" + "".join(
+            _CHINESE_DIGITS[int(digit)] for digit in fraction)
+    # Four-digit years are conventionally read digit by digit in Chinese.
+    if len(value) == 4 and 1000 <= int(value) <= 2999:
+        return "".join(_CHINESE_DIGITS[int(digit)] for digit in value)
+    return integer_to_chinese(int(value))
+
+
+def _repair_tts_digits(briefing):
+    return re.sub(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?%?", _chinese_tts_number, briefing)
+
+
 def _ensure_tts_lexicon_ready(folder, briefing_path):
     briefing = briefing_path.read_text(encoding="utf-8")
+    repaired_digits = _repair_tts_digits(briefing)
+    if repaired_digits != briefing:
+        briefing_path.write_text(repaired_digits, encoding="utf-8")
+        briefing = repaired_digits
     issues = validate_tts_readiness(briefing, load_tts_lexicon(folder))
     if not issues:
         return {"repaired": False, "entries": len(load_tts_lexicon(folder))}
@@ -659,6 +687,14 @@ key 最多 48 个字符、最多 6 个空格分词、最多 6 个汉字，并且
         raise RuntimeError(
             "TTS 词典受限修复后仍未就绪: " + "; ".join(remaining))
     return {"repaired": True, "entries": len(lexicon)}
+
+
+def merge_alias_repair_changes(changes, alias_repairs):
+    """Combine finalizer change records with the int count of alias repairs."""
+    merged = list(changes or [])
+    if alias_repairs:
+        merged.append(f"public_entity_alias_repairs: {int(alias_repairs)}")
+    return merged
 
 
 def run_content_pipeline(folder, title, run_report=None, force=False):
@@ -823,6 +859,7 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                 required_files=[content_map_path],
             )
             payload = load_json(content_map_path)
+            repair_source_segment_gaps(payload, load_json(raw_path))
             normalize_detail_items(payload)
             payload["prewrite_fact_checks_version"] = (
                 PREWRITE_FACT_CHECKS_VERSION)
@@ -1054,6 +1091,14 @@ JSON，不修改文件。""",
         briefing_text = finalized["briefing"]
         summary_map = finalized["summary_map"]
         normalization_changes = finalized["normalization_changes"]
+        alias_repairs = repair_public_entity_aliases(
+            load_json(entities_path), notes_path, folder / "讲书稿.md")
+        if alias_repairs:
+            finalized = finalize_content_package(folder)
+            briefing_text = finalized["briefing"]
+            summary_map = finalized["summary_map"]
+            normalization_changes = merge_alias_repair_changes(
+                finalized["normalization_changes"], alias_repairs)
         tts_readiness = _ensure_tts_lexicon_ready(
             folder, folder / "讲书稿.md")
         if (not writing_ready) or review_content_changed:
