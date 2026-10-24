@@ -14,6 +14,7 @@ from scripts.content_map import (
     enrich_content_map_evidence,
     segment_evidence_sha256,
     source_segment_accountability,
+    repair_source_segment_gaps,
     validate_content_map,
     validate_summary_map,
 )
@@ -249,6 +250,20 @@ class CompletenessMetricTests(unittest.TestCase):
 
 
 class SourceAccountabilityTests(unittest.TestCase):
+    def test_repair_source_segment_gap_attaches_to_following_unit(self):
+        payload = {"units": [
+            {"id": "U1", "status": "condensed", "evidence": {"segment_ids": ["S0001"]}},
+            {"id": "U2", "status": "condensed", "evidence": {"segment_ids": ["S0003"]}},
+        ]}
+        transcript = {"segments": [
+            {"id": "S0001", "text": "one"},
+            {"id": "S0002", "text": "gap"},
+            {"id": "S0003", "text": "three"},
+        ]}
+        repair_source_segment_gaps(payload, transcript)
+        self.assertEqual(payload["units"][1]["evidence"]["segment_ids"], ["S0002", "S0003"])
+        self.assertEqual(source_segment_accountability(payload, transcript)["missing_ids"], [])
+
     def test_first_middle_and_last_omissions_are_reported(self):
         raw = _raw()
         for missing in range(3):

@@ -23,6 +23,7 @@ from scripts.content_map import (
     load_json,
     normalize_detail_items,
     normalize_summary_claim_ids,
+    repair_source_segment_gaps,
     save_json,
     CLAIM_MODALITIES,
     STATUS_VALUES,
@@ -850,6 +851,7 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                 required_files=[content_map_path],
             )
             payload = load_json(content_map_path)
+            repair_source_segment_gaps(payload, load_json(raw_path))
             normalize_detail_items(payload)
             payload["prewrite_fact_checks_version"] = (
                 PREWRITE_FACT_CHECKS_VERSION)
