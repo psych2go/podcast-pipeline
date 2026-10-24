@@ -178,8 +178,25 @@ def enrich_content_map_evidence(content_map, transcript):
                 for segment in segments
                 if segment.get("start") is not None and segment.get("end") is None
             }
+            # A resumed map can retain transcript-bound segment ids while an
+            # LLM repair drops its timestamp windows.  Reconstruct the window
+            # from the immutable segment timeline before selecting evidence.
+            raw_timestamps = unit.get("timestamps", []) or []
+            if not raw_timestamps and previous_ids:
+                prior_segments = [
+                    segment for segment in segments
+                    if segment.get("id") in set(previous_ids)
+                    and segment.get("start") is not None
+                    and segment.get("end") is not None
+                ]
+                if prior_segments:
+                    unit["timestamps"] = [[
+                        min(segment["start"] for segment in prior_segments),
+                        max(segment["end"] for segment in prior_segments),
+                    ]]
+                    raw_timestamps = unit["timestamps"]
             normalized_timestamps = []
-            for timestamp in unit.get("timestamps", []):
+            for timestamp in raw_timestamps:
                 if not isinstance(timestamp, list) or len(timestamp) != 2:
                     normalized_timestamps.append(timestamp)
                     continue
@@ -229,6 +246,10 @@ def enrich_content_map_evidence(content_map, transcript):
             if isinstance(existing, list) and existing and set(existing).issubset(set(segment_ids)):
                 selected_ids = canonical_segment_ids(segments, existing)
             elif len(claims) == 1:
+                selected_ids = segment_ids
+            elif previous_ids:
+                # Missing claim-level mappings are repaired conservatively only
+                # for resumed maps that already had transcript-bound evidence.
                 selected_ids = segment_ids
             else:
                 selected_ids = []
@@ -851,10 +872,17 @@ def validate_content_map(payload, transcript=None):
                                     f"{display_id}-{claim_key}: 缺少有效 claim evidence confidence"
                                 )
                             elif confidence == "low":
-                                errors.append(
+                                message = (
                                     f"{display_id}-{claim_key}: "
                                     "claim evidence confidence=low，需人工复核"
                                 )
+                                if payload.get("claim_evidence_low_confidence_policy") == "review_flag":
+                                    warnings.append(message)
+                                    payload.setdefault("review_flags", []).append(
+                                        f"{display_id}-{claim_key}:low_confidence"
+                                    )
+                                else:
+                                    errors.append(message)
                             if not rationale:
                                 errors.append(
                                     f"{display_id}-{claim_key}: 缺少 claim evidence rationale"

@@ -89,7 +89,10 @@ def quality_gate(
     from scripts.source_relevance import refresh_source_relevance_cache
 
     try:
-        refresh_source_relevance_cache(folder)
+        # Preflight is the last repair point before strict validation.  Force
+        # a metadata refresh so stale error/partial entries cannot block the
+        # gate indefinitely after a transient source outage.
+        refresh_source_relevance_cache(folder, force=True)
     except Exception as exc:
         print(
             f"[质量门][警告] 来源相关性缓存刷新失败，将按现有缓存校验: {exc}",

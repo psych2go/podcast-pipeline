@@ -475,8 +475,10 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
             not force
             and isinstance(previous, dict)
             and (
-                (previous.get("content_sha256") and _recent_success(previous, now))
-                or _recent_error(previous, now)
+                (
+                    (previous.get("content_sha256") and _recent_success(previous, now))
+                    or _recent_error(previous, now)
+                )
             )
         )
         if reused:
