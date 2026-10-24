@@ -34,7 +34,7 @@ from scripts.content_finalizer import (
     finalize_content_package,
     validate_tts_readiness,
 )
-from scripts.validator import integer_to_chinese, structure_report
+from scripts.validator import integer_to_chinese
 from scripts.episode import (
     quality_metadata,
     sync_episode_state,
@@ -79,6 +79,24 @@ def _env_positive_int(name, default):
     if value < 1:
         raise ValueError(f"{name} 必须 >= 1，当前值: {value}")
     return value
+
+
+def build_depth_repair_request(folder, targets):
+    """Build a writable briefing expansion request with read-only inputs."""
+    folder = Path(folder)
+    briefing_path = folder / "讲书稿.md"
+    return {
+        "prompt": f"""只扩写最薄的章节（优先：{', '.join(targets)}），使每章达到深度门槛。必须基于已有
+证据和 summary_map 的主张补充具体因果链、反例或限定条件；禁止套话、重复、
+审查过程语言和无证据的新事实。只修改讲书稿.md，保留所有章节标题和证据对应关系。""",
+        "allowed_files": [briefing_path],
+        "input_files": [
+            folder / "summary_map.json",
+            folder / "content_map.json",
+            folder / "中文完整笔记.md",
+        ],
+        "required_files": [briefing_path],
+    }
 
 
 def _transcript_basis(folder):
@@ -1104,18 +1122,16 @@ JSON，不修改文件。""",
                 chapters = [(title, len(re.findall(r"[一-鿿]", body)))
                             for title, body in re.findall(
                                 r"(?ms)^##\s+(.+?)\s*$\n(.*?)(?=^##\s+|\Z)", text)]
-                targets = ", ".join(title for title, _ in sorted(chapters, key=lambda item: item[1])[:2])
+                request = build_depth_repair_request(folder, [
+                    title for title, _ in sorted(chapters, key=lambda item: item[1])[:2]
+                ])
                 run_edit_task(
                     folder,
-                    f"""只扩写最薄的章节（优先：{targets}），使每章达到深度门槛。必须基于已有
-证据和 summary_map 的主张补充具体因果链、反例或限定条件；禁止套话、重复、
-审查过程语言和无证据的新事实。只修改讲书稿.md，保留所有章节标题和证据对应关系。""",
+                    request["prompt"],
                     task_name="content_depth_repair",
-                    allowed_files=[briefing_path],
-                    input_files=[briefing_path, folder / "summary_map.json",
-                                 folder / "content_map.json",
-                                 folder / "中文完整笔记.md"],
-                    required_files=[briefing_path],
+                    allowed_files=request["allowed_files"],
+                    input_files=request["input_files"],
+                    required_files=request["required_files"],
                 )
         briefing_text = finalized["briefing"]
         summary_map = finalized["summary_map"]

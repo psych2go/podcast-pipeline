@@ -20,7 +20,7 @@ from urllib.parse import (
 
 import httpx
 
-from scripts.atomic_io import atomic_write_json
+from scripts.atomic_io import atomic_write_json, atomic_write_text
 
 
 SCHEMA_VERSION = 1
@@ -475,10 +475,8 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
             not force
             and isinstance(previous, dict)
             and (
-                (
-                    (previous.get("content_sha256") and _recent_success(previous, now))
-                    or _recent_error(previous, now)
-                )
+                (previous.get("content_sha256") and _recent_success(previous, now))
+                or _recent_error(previous, now)
             )
         )
         if reused:
@@ -520,6 +518,196 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
     }
     atomic_write_json(path, payload)
     return payload
+
+
+def _unconfirmed_source_urls(payload, expected_references):
+    """Return citations that still cannot be confirmed after a refresh."""
+    entries = payload.get("entries", {}) if isinstance(payload, dict) else {}
+    if not isinstance(entries, dict):
+        return set(expected_references)
+    bad = set()
+    for url in expected_references:
+        entry = entries.get(url)
+        if not isinstance(entry, dict):
+            bad.add(url)
+            continue
+        if (
+            entry.get("status") != "fetched"
+            or not entry.get("content_sha256")
+            or not entry.get("title") and not entry.get("excerpt")
+            or entry.get("relevance_status") == "unconfirmed"
+        ):
+            bad.add(url)
+    return bad
+
+
+def _drop_source_urls(value, removed):
+    """Remove only citation fields; URLs identifying the episode stay intact."""
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if key == "source_urls" and isinstance(item, list):
+                result[key] = [
+                    url for url in item
+                    if normalize_source_url(url) not in removed
+                ]
+            else:
+                result[key] = _drop_source_urls(item, removed)
+        return result
+    if isinstance(value, list):
+        return [_drop_source_urls(item, removed) for item in value]
+    return value
+
+
+def _strip_public_citation_links(text, removed):
+    """Remove failed citation links while retaining readable link labels."""
+    def replace(match):
+        url = normalize_source_url(match.group("url"))
+        return match.group("label") if url in removed else match.group(0)
+
+    pattern = re.compile(
+        r"\[(?P<label>[^\]]+)\]\(<?(?P<url>https?://[^\s)>]+)>?\)"
+    )
+    updated = pattern.sub(replace, text)
+    for url in removed:
+        updated = updated.replace(url, "")
+    return updated
+
+
+def _restamp_content_bindings(folder):
+    """Re-run canonical finalization and refresh hashes after citation edits."""
+    folder = Path(folder)
+    briefing_path = folder / "讲书稿.md"
+    summary_path = folder / "summary_map.json"
+    if briefing_path.exists() and summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            from scripts.content_finalizer import finalize_content_artifacts
+
+            briefing, summary, _changes = finalize_content_artifacts(
+                briefing_path.read_text(encoding="utf-8"), summary
+            )
+            atomic_write_text(briefing_path, briefing)
+            try:
+                from scripts.agent_pipeline import _writing_input_hashes
+
+                summary["writing_inputs_version"] = 1
+                summary["writing_inputs"] = _writing_input_hashes(folder)
+            except (ImportError, OSError, ValueError, TypeError):
+                pass
+            atomic_write_json(summary_path, summary)
+        except (OSError, json.JSONDecodeError, ValueError, RuntimeError):
+            # The quality gate remains authoritative for malformed content; a
+            # citation repair must not hide that independent validation error.
+            pass
+
+
+def repair_unconfirmed_source_citations(folder, payload=None):
+    """Drop citations whose refreshed cache entry remains unconfirmed.
+
+    This is deliberately conservative: it edits citation ledgers and public
+    markdown links, never transcript evidence or the episode's source URL.
+    Entity records that would otherwise violate the required-source contract
+    are removed, and all generated bindings are re-stamped before validation.
+    """
+    folder = Path(folder)
+    references = expected_source_references(folder)
+    payload = payload if isinstance(payload, dict) else _load_json(
+        folder / CACHE_FILENAME, {"entries": {}}
+    )
+    removed = _unconfirmed_source_urls(payload, references)
+    if not removed:
+        return {"removed_urls": [], "changed_files": [], "restamped": False}
+
+    changed_files = []
+    json_paths = [
+        folder / "canonical_entities.json",
+        folder / "editorial_fact_checks.json",
+        *(
+            sorted((folder / "editorial_fact_check_batches").glob("*.json"))
+            if (folder / "editorial_fact_check_batches").is_dir()
+            else []
+        ),
+    ]
+    for path in json_paths:
+        if not path.exists():
+            continue
+        try:
+            original = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        updated = _drop_source_urls(original, removed)
+        if path.name == "canonical_entities.json" and isinstance(updated, dict):
+            identity_types = {"person", "company", "product", "institution", "title"}
+            updated["entities"] = [
+                entity for entity in updated.get("entities", []) or []
+                if not isinstance(entity, dict)
+                or entity.get("entity_type") not in identity_types
+                or entity.get("source_urls")
+            ]
+        if path.name == "editorial_fact_checks.json" and isinstance(updated, dict):
+            for claim in updated.get("claims", []) or []:
+                if not isinstance(claim, dict):
+                    continue
+                checks = claim.get("checks", []) or []
+                if not any(check.get("source_urls") for check in checks if isinstance(check, dict)):
+                    claim["requires_web"] = False
+                for check in checks:
+                    if isinstance(check, dict) and not check.get("source_urls"):
+                        check["editorial_correction"] = ""
+            for issue in updated.get("issue_inventory", []) or []:
+                if isinstance(issue, dict) and not issue.get("source_urls"):
+                    issue["source_urls"] = []
+        if updated != original:
+            atomic_write_json(path, updated)
+            changed_files.append(path.relative_to(folder).as_posix())
+
+    for name in ("中文完整笔记.md", "讲书稿.md"):
+        path = folder / name
+        if not path.exists():
+            continue
+        original = path.read_text(encoding="utf-8")
+        updated = _strip_public_citation_links(original, removed)
+        if updated != original:
+            atomic_write_text(path, updated)
+            changed_files.append(name)
+
+    _restamp_content_bindings(folder)
+    raw_entries = payload.get("entries", {})
+    if not isinstance(raw_entries, dict):
+        raw_entries = {}
+    cache_entries = {
+        url: entry for url, entry in raw_entries.items()
+        if url in expected_source_references(folder)
+    }
+    cache_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": datetime.now(UTC).isoformat(),
+        "entries": cache_entries,
+    }
+    atomic_write_json(folder / CACHE_FILENAME, cache_payload)
+    for name in ("ai_review.json", "quality_report.json"):
+        path = folder / name
+        if path.exists():
+            path.unlink()
+            changed_files.append(name)
+    try:
+        from scripts.episode import sync_episode_state
+
+        sync_episode_state(folder)
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        from scripts.artifact_manifest import write_artifact_manifest
+
+        write_artifact_manifest(folder)
+    except (OSError, ValueError, TypeError):
+        pass
+    return {
+        "removed_urls": sorted(removed),
+        "changed_files": sorted(set(changed_files + [CACHE_FILENAME])),
+        "restamped": True,
+    }
 
 
 def validate_source_relevance_cache(payload, expected_references):

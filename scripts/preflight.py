@@ -4,6 +4,11 @@ import os
 from pathlib import Path
 
 from scripts.atomic_io import atomic_write_json
+from scripts.source_relevance import (
+    refresh_source_relevance_cache,
+    repair_unconfirmed_source_citations,
+)
+
 from scripts.quality_errors import (
     AI_REVIEW_FAILED,
     AI_REVIEW_FACT_CHECK,
@@ -17,6 +22,13 @@ from scripts.quality_errors import (
     ENTITY_ACCURACY_FAILED,
     quality_error_alignment,
 )
+
+
+def build_quality_report(*args, **kwargs):
+    """Resolve the report builder lazily so callers can patch its module."""
+    from scripts.quality_report import build_quality_report as builder
+
+    return builder(*args, **kwargs)
 
 
 def _review_recovery_decision(report):
@@ -100,20 +112,27 @@ def quality_gate(
         )
         return True
 
-    from scripts.source_relevance import refresh_source_relevance_cache
-
     try:
         # Preflight is the last repair point before strict validation.  Force
-        # a metadata refresh so stale error/partial entries cannot block the
-        # gate indefinitely after a transient source outage.
-        refresh_source_relevance_cache(folder, force=True)
+        # a metadata refresh, then remove citations that remain unconfirmed.
+        # The second refresh re-stamps the cache against the reduced reference
+        # set before the quality report is built.
+        relevance_cache = refresh_source_relevance_cache(folder, force=True)
+        citation_repair = repair_unconfirmed_source_citations(
+            folder, relevance_cache
+        )
+        if citation_repair.get("removed_urls"):
+            print(
+                "[质量门] 已移除刷新后仍无法确认的外部引用: "
+                + ", ".join(citation_repair["removed_urls"]),
+                flush=True,
+            )
+            refresh_source_relevance_cache(folder, force=True)
     except Exception as exc:
         print(
-            f"[质量门][警告] 来源相关性缓存刷新失败，将按现有缓存校验: {exc}",
+            f"[质量门][警告] 来源相关性缓存刷新/修复失败，将按现有缓存校验: {exc}",
             flush=True,
         )
-
-    from scripts.quality_report import build_quality_report
 
     report = build_quality_report(folder, strict=True)
     out = folder / "quality_report.json"
