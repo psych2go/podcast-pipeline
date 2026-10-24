@@ -46,6 +46,20 @@ TRACKING_QUERY_KEYS = {
 }
 
 
+# The box egress proxy answers DNS for every public host with an address in
+# 198.18.0.0/15 (RFC 2544 benchmark range) and forwards the connection. Allow
+# that range only when a hostname resolves into it; literal IP URLs in the
+# range, and every other private/loopback/link-local range, stay blocked.
+SOURCE_USER_AGENT = (
+    "Mozilla/5.0 (compatible; podcast-pipeline-source-check/1.0; +https://podcast.zhuying.fun)"
+)
+_EGRESS_PROXY_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+
+
+def _is_egress_proxy_address(address):
+    return address.version == 4 and address in _EGRESS_PROXY_NETWORK
+
+
 def normalize_source_url(url):
     """Remove fragments and tracking parameters without changing source identity."""
     value = str(url or "").strip()
@@ -221,7 +235,9 @@ def _resolve_public_source_url(url):
     try:
         literal = ipaddress.ip_address(parts.hostname)
         addresses = [literal]
+        literal_host = literal
     except ValueError:
+        literal_host = None
         try:
             resolved = socket.getaddrinfo(parts.hostname, port, type=socket.SOCK_STREAM)
         except socket.gaierror as exc:
@@ -235,7 +251,12 @@ def _resolve_public_source_url(url):
                 addresses.append(address)
     if not addresses:
         raise ValueError(f"source URL host 没有可用地址: {parts.hostname}")
-    blocked = sorted(str(address) for address in addresses if not address.is_global)
+    blocked = sorted(
+        str(address)
+        for address in addresses
+        if not address.is_global
+        and not (literal_host is None and _is_egress_proxy_address(address))
+    )
     if blocked:
         raise ValueError(f"source URL 指向非公网地址: {parts.hostname}: {blocked}")
     addresses.sort(key=lambda address: (address.version != 4, str(address)))
@@ -290,7 +311,7 @@ def _fetch_source(url):
             with client.stream(
                 "GET",
                 pinned_url,
-                headers={"Host": host_header},
+                headers={"Host": host_header, "User-Agent": SOURCE_USER_AGENT},
                 extensions={"sni_hostname": sni_hostname},
             ) as response:
                 if response.status_code in REDIRECT_STATUSES:
