@@ -10,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import agent_pipeline
+from scripts.canonical_entities import repair_public_entity_aliases
 from scripts import catalog_publish as catalog
 from scripts import claim_evidence
 from scripts import process
@@ -45,6 +46,25 @@ from scripts.subagent import SubagentError, _model_fallback_allowed, _runner_fai
 
 
 class DeterministicPreReviewTests(unittest.TestCase):
+    def test_entity_alias_repair_uses_boundaries_without_double_replacement(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "稿.md"
+            path.write_text("Loud Cloud 与 Loudcloud；Bill Gates 和 Gates。", encoding="utf-8")
+            changed = repair_public_entity_aliases({"entities": [
+                {"entity_type": "company", "canonical_name": "Loudcloud",
+                 "observed_names": ["Loud Cloud"]},
+                {"entity_type": "person", "canonical_name": "Bill Gates",
+                 "observed_names": ["Gates"]},
+            ]}, path)
+            self.assertEqual(changed, 1)
+            self.assertEqual(path.read_text(encoding="utf-8"),
+                             "Loudcloud 与 Loudcloud；Bill Gates 和 Bill Gates。")
+
+    def test_tts_digit_repair_handles_integer_decimal_percent_and_year(self):
+        self.assertEqual(
+            agent_pipeline._repair_tts_digits("3、1.5、20% 和 2024"),
+            "三、 一点五、 百分之二十 和 二零二四".replace("、 ", "、"))
+
     def test_claim_evidence_is_canonicalized_to_transcript_order(self):
         transcript = {
             "segments": [
