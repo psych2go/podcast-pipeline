@@ -21,9 +21,23 @@ from scripts.quality_errors import (
 
 def _review_recovery_decision(report):
     details = report.get("error_details")
-    if not quality_error_alignment(report):
+    # Older resumed runs may have a report produced before structured error
+    # details were added.  Do not let that bookkeeping defect suppress the
+    # recovery that the report explicitly requests.
+    aligned = quality_error_alignment(report)
+    details_present = isinstance(details, list)
+    details = details if details_present else []
+    if details_present and not aligned:
         return False, False
     codes = [item.get("code") for item in details if isinstance(item, dict) and item.get("code")]
+    if not details_present and not codes:
+        messages = [str(message) for message in report.get("errors", [])]
+        if any("ai_review.json" in message for message in messages):
+            codes = [AI_REVIEW_MISSING]
+        if any("内容审查状态未通过: pending" in message for message in messages):
+            codes.append("content_review_status")
+    if not codes:
+        return False, False
     review_missing_or_stale = any(code in {AI_REVIEW_MISSING, AI_REVIEW_STALE} for code in codes)
     stale = AI_REVIEW_STALE in codes
     stale_review_codes = AUTO_REVIEW_CODES | {
