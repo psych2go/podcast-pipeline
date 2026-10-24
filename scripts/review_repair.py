@@ -29,6 +29,7 @@ from scripts.prewrite_fact_checks import (
     validate_ledger as validate_prewrite_fact_checks,
 )
 from scripts.review_attribution import attribute_rejection
+from scripts.subagent import run_edit_task
 
 
 SAFE_SUMMARY_CATEGORIES = {"summary_map", "summary", "coverage_mapping"}
@@ -344,6 +345,55 @@ def _repair_evidence(folder, issues):
     }
 
 
+def _repair_content_revision(folder, review, *, model=""):
+    """Ask pi to apply only review-listed prose fixes, then rebind the package."""
+    folder = Path(folder)
+    output_files = [
+        folder / "中文完整笔记.md",
+        folder / "讲书稿.md",
+        folder / "summary_map.json",
+    ]
+    input_files = [
+        folder / name
+        for name in (
+            "content_map.json", "canonical_entities.json",
+            PREWRITE_FACT_CHECKS_FILENAME, "ai_review.json",
+        )
+        if (folder / name).exists()
+    ]
+    if not output_files or not input_files:
+        raise RuntimeError("AI review revision 缺少写作输入或输出")
+    issues = [
+        issue for issue in review.get("issues", []) or []
+        if isinstance(issue, dict)
+        and issue.get("severity") in {"critical", "high"}
+    ]
+    if not issues:
+        raise RuntimeError("AI review revision 没有明确的 critical/high 修复项")
+    prompt = f"""只修复上一轮 AI review 明确列出的 critical/high 问题，随后返回并写入三份输出。
+不得添加 transcript、content_map 或来源中不存在的新事实，不得修改证据、数字的来源归属、
+实体证据、content_map.json、{PREWRITE_FACT_CHECKS_FILENAME} 或任何输入文件。
+保持所有章节标题、summary_map 的 unit/claim 绑定和公开稿的自然中文；删除审查过程语言。
+只允许修改中文完整笔记.md、讲书稿.md、summary_map.json。修复清单如下：
+{json.dumps(issues, ensure_ascii=False)}
+"""
+    run_edit_task(
+        folder,
+        prompt,
+        task_name="review_content_revision",
+        allowed_files=output_files,
+        input_files=input_files,
+        required_files=output_files,
+        model=model or None,
+    )
+    _refresh_semantic_bindings(folder, [])
+    return {
+        "action": "pi_review_content_revision",
+        "issue_count": len(issues),
+        "files": [path.name for path in output_files],
+    }
+
+
 def repair_safe_issues(folder, review):
     """Apply deterministic repairs only; return actions and blocking reasons."""
     issues = [
@@ -435,8 +485,18 @@ def review_and_repair(
             actions, blockers = [], [str(exc)]
         history[-1]["repair_actions"] = actions
         history[-1]["repair_blockers"] = blockers
-        if blockers or not actions:
+        if not blockers and actions:
+            continue
+        # Safe deterministic repairs cannot address factuality, attribution,
+        # or other prose findings.  Give pi one bounded, review-scoped revision
+        # before the independent re-review; never turn a failed review into a
+        # pass without another reviewer call.
+        try:
+            revision = _repair_content_revision(folder, review, model=model)
+        except Exception as exc:
+            history[-1].setdefault("repair_blockers", []).append(str(exc))
             break
+        history[-1].setdefault("repair_actions", []).append(revision)
 
     payload = {
         "schema_version": 1,

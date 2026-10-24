@@ -186,6 +186,30 @@ class ReviewRepairAttributionTests(unittest.TestCase):
             self.assertIn("ai_review_severe_issue", rejection["codes"])
             self.assertEqual(rejection["issue_counts"], {"factuality": 1})
 
+    def test_failed_review_runs_bounded_pi_revision_before_rereview(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            for name in ("中文完整笔记.md", "讲书稿.md", "summary_map.json", "content_map.json"):
+                (folder / name).write_text("{}", encoding="utf-8")
+            failed = _failed_review(issues=[{
+                "severity": "high", "category": "factuality",
+                "file": "讲书稿.md", "statement": "unsupported",
+                "repair_kind": "manual",
+            }])
+            passed = {"passed": True, "issues": [], "reviewed_files": {}}
+            reviewer = unittest.mock.Mock(side_effect=[failed, passed])
+            with (
+                unittest.mock.patch("scripts.review_repair.run_edit_task") as edit,
+                unittest.mock.patch("scripts.review_repair._refresh_semantic_bindings"),
+            ):
+                result = review_repair.review_and_repair(
+                    folder, reviewer=reviewer, max_rounds=1)
+            self.assertTrue(result["passed"])
+            self.assertEqual(reviewer.call_count, 2)
+            edit.assert_called_once()
+            self.assertEqual(
+                edit.call_args.kwargs["task_name"], "review_content_revision")
+
 
 class HealthAttributionTests(unittest.TestCase):
     def _episode(self, content, name, run_payload, quality_payload):

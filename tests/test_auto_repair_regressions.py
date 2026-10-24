@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -80,6 +81,31 @@ def test_resume_repairs_sources_then_rechecks_ai_review_before_gate():
         review.assert_called_once()
 
 
+def test_resume_retries_current_failed_review_for_revision_loop():
+    with TemporaryDirectory() as td:
+        folder = Path(td)
+        (folder / "content_map.json").write_text("{}", encoding="utf-8")
+        reports = [
+            {
+                "passed": False,
+                "errors": ["AI 最终审查未通过"],
+                "error_details": [
+                    {"code": "ai_review_failed", "message": "AI 最终审查未通过"},
+                ],
+            },
+            {"passed": True, "errors": [], "error_details": []},
+        ]
+        with patch.object(
+            preflight, "refresh_source_relevance_cache", return_value={}
+        ), patch.object(
+            preflight, "repair_unconfirmed_source_citations", return_value={"removed_urls": []}
+        ), patch.object(
+            preflight, "build_quality_report", side_effect=reports
+        ), patch("scripts.review_repair.review_and_repair") as review:
+            assert preflight.quality_gate(folder) is True
+        review.assert_called_once()
+
+
 def test_unconfirmed_source_is_removed_from_citations_and_restamped():
     with TemporaryDirectory() as td:
         folder = Path(td)
@@ -131,6 +157,42 @@ def test_unconfirmed_source_is_removed_from_citations_and_restamped():
         assert source_relevance.expected_source_references(folder) == {}
         assert result["restamped"]
         assert not (folder / "quality_report.json").exists()
+
+
+def test_depth_repair_retries_after_a_shorter_candidate_until_minimum():
+    with TemporaryDirectory() as td:
+        folder = Path(td)
+        body = "甲" * 500
+        (folder / "讲书稿.md").write_text(
+            "全局导览说明本期讨论的主线和范围。\n\n"
+            f"## 第一章\n\n{body}\n\n## 第二章\n\n{body}\n",
+            encoding="utf-8",
+        )
+        _write_json(folder / "summary_map.json", {
+            "schema_version": 2,
+            "chapters": [
+                {"title": "第一章", "unit_ids": [], "claim_ids": []},
+                {"title": "第二章", "unit_ids": [], "claim_ids": []},
+            ],
+        })
+        candidates = [490, 530, 540]
+
+        def expand(target, *_args, **_kwargs):
+            size = candidates.pop(0)
+            target = Path(target) / "讲书稿.md"
+            text = target.read_text(encoding="utf-8")
+            first, second = text.split("## 第二章", 1)
+            first_body = re.search(r"(## 第一章\n\n)([一-鿿]+)", first)
+            assert first_body
+            first = first[:first_body.start(2)] + ("甲" * size) + first[first_body.end(2):]
+            target.write_text(first + "## 第二章" + second, encoding="utf-8")
+
+        with patch.object(agent_pipeline, "run_edit_task", side_effect=expand) as edit:
+            result = agent_pipeline._finalize_with_depth_repair(folder)
+
+        assert result["summary_map"]["chapters"]
+        assert len(re.findall(r"[一-鿿]", result["briefing"].split("## 第二章")[0])) >= 520
+        assert edit.call_count == 3
 
 
 def test_depth_repair_request_does_not_feed_writable_briefing_as_input():

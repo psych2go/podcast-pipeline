@@ -752,16 +752,65 @@ def _expected_verification_mode(item):
 
 
 def _deterministic_mode_fixes(review):
-    """Fix only mechanical check-type fields whose value the contract fixes
-    uniquely (verification_mode, derived claim_type).
+    """Repair fields whose valid value is mechanically determined by the contract.
 
-    Semantic fields (verdict, sources, notes, roles, scores...) are never
-    touched, so this can never raise a score or change a conclusion.
+    Subclaim numbering is pipeline-owned.  A reported-speech fact with an
+    objective verdict is conservatively downgraded to an uncertain,
+    attributed review flag rather than published as an independently
+    established fact.
     """
     fixed = []
+    next_numbers = {}
     for index, item in enumerate(review.get("fact_checks", []) or []):
         if not isinstance(item, dict):
             continue
+        parent = item.get("parent_claim_id")
+        if parent:
+            next_numbers[parent] = next_numbers.get(parent, 0) + 1
+            expected_subclaim = f"{parent}-F{next_numbers[parent]:02d}"
+            if item.get("subclaim_id") != expected_subclaim:
+                fixed.append(
+                    {
+                        "index": index,
+                        "claim": item.get("claim"),
+                        "field": "subclaim_id",
+                        "from": item.get("subclaim_id"),
+                        "to": expected_subclaim,
+                    }
+                )
+                item["subclaim_id"] = expected_subclaim
+        if (
+                item.get("claim_origin") == "speaker_reported"
+                and item.get("assertion_type") == "fact"
+                and item.get("publication_status") != "excluded"
+                and item.get("verdict") not in {
+                    "accurately_reported", "qualified", "uncertain",
+                }
+        ):
+            old_verdict = item.get("verdict")
+            item["verdict"] = "uncertain"
+            fixed.append(
+                {
+                    "index": index,
+                    "claim": item.get("claim"),
+                    "field": "verdict",
+                    "from": old_verdict,
+                    "to": "uncertain",
+                    "reason": "reported_speech_contract_downgrade",
+                }
+            )
+            if item.get("publication_status") == "used_as_fact":
+                fixed.append(
+                    {
+                        "index": index,
+                        "claim": item.get("claim"),
+                        "field": "publication_status",
+                        "from": "used_as_fact",
+                        "to": "attributed_or_qualified",
+                        "reason": "reported_speech_contract_downgrade",
+                    }
+                )
+                item["publication_status"] = "attributed_or_qualified"
         mode = _expected_verification_mode(item)
         if mode and item.get("verification_mode") != mode:
             fixed.append(
@@ -880,7 +929,8 @@ def _validate_or_retry_review(workspace, review, *, model, effort):
             if not errors:
                 return review, audit, None
         # Contract repair is deliberately deterministic: never ask the model to
-        # rewrite verdicts, scores, evidence, entities, or URLs.
+        # rewrite scores, evidence, entities, or URLs.  Reported-speech
+        # downgrades are conservative publication flags, not new fact claims.
         audit["retry_count"] = 0
         audit["deterministic_only"] = True
         raise RuntimeError("AI review 合同错误无法机械修复: " + "; ".join(errors[:10]))

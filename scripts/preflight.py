@@ -51,7 +51,11 @@ def _review_recovery_decision(report):
     if not codes:
         return False, False
     review_missing_or_stale = any(code in {AI_REVIEW_MISSING, AI_REVIEW_STALE} for code in codes)
-    stale = AI_REVIEW_STALE in codes
+    # A persisted failed review is actionable on resume too: the bounded
+    # review→pi revision→independent re-review loop must not require a stale
+    # hash to start repairing the rejected prose.
+    failed_review = AI_REVIEW_FAILED in codes and AI_REVIEW_MISSING not in codes
+    stale = AI_REVIEW_STALE in codes or failed_review
     stale_review_codes = AUTO_REVIEW_CODES | {
         AI_REVIEW_FAILED,
         AI_REVIEW_SECTION,
@@ -63,7 +67,9 @@ def _review_recovery_decision(report):
     }
     allowed_codes = stale_review_codes if stale else AUTO_REVIEW_CODES
     can_auto_review = (
-        review_missing_or_stale and bool(codes) and all(code in allowed_codes for code in codes)
+        (review_missing_or_stale or failed_review)
+        and bool(codes)
+        and all(code in allowed_codes for code in codes)
     )
     return review_missing_or_stale, can_auto_review
 

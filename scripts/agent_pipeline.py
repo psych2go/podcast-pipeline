@@ -6,7 +6,7 @@ import re
 from contextlib import nullcontext
 from pathlib import Path
 
-from scripts.atomic_io import atomic_write_json
+from scripts.atomic_io import atomic_write_bytes, atomic_write_json
 from scripts.canonical_entities import (
     GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
     SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
@@ -15,6 +15,7 @@ from scripts.canonical_entities import (
     validate_canonical_entities,
 )
 from scripts.claim_evidence import refine_claim_evidence
+from scripts.sections import chapter_sections
 from scripts.content_map import (
     body_sha256,
     enrich_content_map_evidence,
@@ -81,6 +82,21 @@ def _env_positive_int(name, default):
     return value
 
 
+def _chapter_depths(text):
+    """Use the same chapter parser as the strict depth gate."""
+    return [
+        (section.title, len(re.findall(r"[一-鿿]", section.body)))
+        for section in chapter_sections(text)
+    ]
+
+
+def _depth_score(text):
+    sizes = [size for _title, size in _chapter_depths(text)]
+    if not sizes:
+        return (0.0, 0)
+    return (sum(sizes) / len(sizes), min(sizes))
+
+
 def build_depth_repair_request(folder, targets):
     """Build a writable briefing expansion request with read-only inputs."""
     folder = Path(folder)
@@ -97,6 +113,53 @@ def build_depth_repair_request(folder, targets):
         ],
         "required_files": [briefing_path],
     }
+
+
+def _finalize_with_depth_repair(folder):
+    """Finalize content, retaining only monotonic bounded depth expansions."""
+    folder = Path(folder)
+    max_expansions = max(0, int(os.environ.get("CONTENT_DEPTH_REPAIR_MAX_ROUNDS", "4")))
+    briefing_path = folder / "讲书稿.md"
+    best_text = briefing_path.read_bytes()
+    best_decoded = best_text.decode("utf-8")
+    best_score = _depth_score(best_decoded)
+    best_titles = [title for title, _size in _chapter_depths(best_decoded)]
+    for attempt in range(max_expansions + 1):
+        try:
+            return finalize_content_package(folder)
+        except Exception as exc:
+            if ("章节深度未通过" not in str(exc)
+                    or attempt >= max_expansions):
+                raise
+            before = briefing_path.read_bytes()
+            before_text = before.decode("utf-8")
+            chapters = _chapter_depths(before_text)
+            request = build_depth_repair_request(folder, [
+                title for title, _size in sorted(chapters, key=lambda item: item[1])[:2]
+            ])
+            run_edit_task(
+                folder,
+                request["prompt"],
+                task_name="content_depth_repair",
+                allowed_files=request["allowed_files"],
+                input_files=request["input_files"],
+                required_files=request["required_files"],
+            )
+            candidate = briefing_path.read_bytes()
+            candidate_text = candidate.decode("utf-8")
+            candidate_titles = [title for title, _size in _chapter_depths(candidate_text)]
+            candidate_score = _depth_score(candidate_text)
+            # Never accept a retry that makes the package thinner or changes
+            # chapter boundaries; the next retry then targets the same deficit.
+            if (
+                    candidate_titles != best_titles
+                    or candidate_score <= best_score):
+                atomic_write_bytes(briefing_path, best_text)
+            else:
+                best_text = candidate
+                best_score = candidate_score
+                best_titles = candidate_titles
+    raise RuntimeError("章节深度修复循环意外结束")
 
 
 def _transcript_basis(folder):
@@ -1108,31 +1171,7 @@ JSON，不修改文件。""",
         # A generated chapter can be just under the depth target.  Resume from
         # the saved briefing and ask the configured runner to expand only the
         # thinnest chapters, keeping the evidence map as the source of truth.
-        max_expansions = max(0, int(os.environ.get("CONTENT_DEPTH_REPAIR_MAX_ROUNDS", "2")))
-        for attempt in range(max_expansions + 1):
-            try:
-                finalized = finalize_content_package(folder)
-                break
-            except Exception as exc:
-                if ("章节深度未通过" not in str(exc)
-                        or attempt >= max_expansions):
-                    raise
-                briefing_path = folder / "讲书稿.md"
-                text = briefing_path.read_text(encoding="utf-8")
-                chapters = [(title, len(re.findall(r"[一-鿿]", body)))
-                            for title, body in re.findall(
-                                r"(?ms)^##\s+(.+?)\s*$\n(.*?)(?=^##\s+|\Z)", text)]
-                request = build_depth_repair_request(folder, [
-                    title for title, _ in sorted(chapters, key=lambda item: item[1])[:2]
-                ])
-                run_edit_task(
-                    folder,
-                    request["prompt"],
-                    task_name="content_depth_repair",
-                    allowed_files=request["allowed_files"],
-                    input_files=request["input_files"],
-                    required_files=request["required_files"],
-                )
+        finalized = _finalize_with_depth_repair(folder)
         briefing_text = finalized["briefing"]
         summary_map = finalized["summary_map"]
         normalization_changes = finalized["normalization_changes"]
