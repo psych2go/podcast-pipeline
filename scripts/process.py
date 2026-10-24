@@ -20,6 +20,7 @@
   python scripts/process.py --name "播客名" --tts-only
   #   或直接：python scripts/tts.py "content/播客名/讲书稿.md"
 """
+
 import sys
 from pathlib import Path
 
@@ -58,12 +59,12 @@ from scripts.fetcher import (
 from scripts.tts import run_tts
 from scripts.tts import load_tts_lexicon
 from scripts.html_gen import md_to_html
-from scripts.hashing import (
-    sha256_file as _source_sha256, sha256_text as _text_sha256)
+from scripts.hashing import sha256_file as _source_sha256, sha256_text as _text_sha256
 from scripts.preflight import quality_gate as shared_quality_gate
 from scripts.agent_pipeline import run_content_pipeline
 from scripts.rebuild_plan import build_rebuild_plan
 from scripts.release import prepare_release
+from scripts.artifact_manifest import write_artifact_manifest
 from scripts.run_report import RunReport
 from scripts.tts import build_tts_plan
 from scripts.content_finalizer import (
@@ -104,13 +105,11 @@ def sanitize_title(name):
 def detect_briefing(folder):
     """定位讲稿文件（兼容 {文件夹名} - 讲书稿.md 与裸 讲书稿.md 命名）。"""
     name = folder.name
-    for cand in ("讲书稿.md", f"{name} - 讲书稿.md",
-                 "简报.md", f"{name} - 简报.md"):
+    for cand in ("讲书稿.md", f"{name} - 讲书稿.md", "简报.md", f"{name} - 简报.md"):
         p = folder / cand
         if p.exists():
             return cand, p
-    hits = sorted(folder.glob("*讲书稿.md")) or sorted(
-        folder.glob("*简报.md"))
+    hits = sorted(folder.glob("*讲书稿.md")) or sorted(folder.glob("*简报.md"))
     if hits:
         return hits[0].name, hits[0]
     return None, None
@@ -150,7 +149,8 @@ def _tts_metrics(folder, briefing_file):
     plan_by_name = {item["filename"]: item for item in plan}
     sections = manifest.get("sections", [])
     synthesized = [
-        section for section in sections
+        section
+        for section in sections
         if section.get("status") == "complete" and not section.get("cached")
     ]
     metrics = {
@@ -158,8 +158,7 @@ def _tts_metrics(folder, briefing_file):
         "expected_sections": manifest.get("expected_sections", 0),
         "completed_sections": manifest.get("completed_sections", 0),
         "cached_sections": sum(
-            section.get("status") == "complete" and section.get("cached")
-            for section in sections
+            section.get("status") == "complete" and section.get("cached") for section in sections
         ),
         "synthesized_sections": len(synthesized),
         "synthesized_characters": sum(
@@ -183,8 +182,7 @@ def _load_existing_evidence(transcript_path, metadata_path):
     if transcript_exists != metadata_exists:
         missing = metadata_path.name if transcript_exists else transcript_path.name
         raise RuntimeError(
-            f"原始证据不完整，缺少 {missing}；"
-            "请先恢复证据，或使用 --force-refetch 创建新 revision"
+            f"原始证据不完整，缺少 {missing}；请先恢复证据，或使用 --force-refetch 创建新 revision"
         )
     if not transcript_exists:
         return None, None
@@ -193,8 +191,7 @@ def _load_existing_evidence(transcript_path, metadata_path):
     expected_hash = metadata.get("evidence", {}).get("transcript_sha256")
     if expected_hash and expected_hash != _text_sha256(transcript):
         raise RuntimeError(
-            "原始转录与 transcript.raw.json 的 evidence hash 不一致，"
-            "拒绝继续使用可能损坏的证据"
+            "原始转录与 transcript.raw.json 的 evidence hash 不一致，拒绝继续使用可能损坏的证据"
         )
     return transcript, metadata
 
@@ -203,11 +200,7 @@ def _archive_existing_evidence(folder, transcript_path, metadata_path):
     if not transcript_path.exists() and not metadata_path.exists():
         return None
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    digest = (
-        _source_sha256(transcript_path)[:8]
-        if transcript_path.exists()
-        else "missing"
-    )
+    digest = _source_sha256(transcript_path)[:8] if transcript_path.exists() else "missing"
     archive = folder / "evidence_history" / f"{timestamp}-{digest}"
     archive.mkdir(parents=True, exist_ok=False)
     archived_files = []
@@ -215,11 +208,14 @@ def _archive_existing_evidence(folder, transcript_path, metadata_path):
         if path.exists():
             atomic_write_bytes(archive / path.name, path.read_bytes())
             archived_files.append(path.name)
-    atomic_write_json(archive / "archive.json", {
-        "archived_at": datetime.now(UTC).isoformat(),
-        "files": archived_files,
-        "reason": "force_refetch",
-    })
+    atomic_write_json(
+        archive / "archive.json",
+        {
+            "archived_at": datetime.now(UTC).isoformat(),
+            "files": archived_files,
+            "reason": "force_refetch",
+        },
+    )
     return archive
 
 
@@ -266,13 +262,15 @@ def _source_identity(source):
     if source.startswith(("http://", "https://")):
         parsed = urlsplit(source)
         path = parsed.path.rstrip("/") or "/"
-        return urlunsplit((
-            "https",
-            parsed.netloc.lower(),
-            path,
-            parsed.query,
-            "",
-        ))
+        return urlunsplit(
+            (
+                "https",
+                parsed.netloc.lower(),
+                path,
+                parsed.query,
+                "",
+            )
+        )
     return os.path.abspath(source)
 
 
@@ -286,13 +284,27 @@ def _upsert_source_field(text, label, value):
     return text.rstrip() + "\n" + replacement + "\n"
 
 
-def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
-                     hotwords=None, quality="balanced", engine="whisper",
-                     lm_path=None, diarize_audio=True,
-                     min_speakers=None, max_speakers=None,
-                     content_policy="faithful", display_title=None,
-                     official_url=None, force_refetch=False, asr_language="en",
-                     adaptive_refinement=True, align_audio=True):
+def fetch_transcript(
+    source,
+    folder,
+    name,
+    asr_model,
+    initial_prompt=None,
+    hotwords=None,
+    quality="balanced",
+    engine="whisper",
+    lm_path=None,
+    diarize_audio=True,
+    min_speakers=None,
+    max_speakers=None,
+    content_policy="faithful",
+    display_title=None,
+    official_url=None,
+    force_refetch=False,
+    asr_language="en",
+    adaptive_refinement=True,
+    align_audio=True,
+):
     """抓取/读取转录，写入纯文本和可审计的 transcript.raw.json。"""
     transcript_path = folder / "原始转录.txt"
     metadata_path = folder / "transcript.raw.json"
@@ -303,23 +315,23 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
 
     try:
         existing_transcript, existing_metadata = _load_existing_evidence(
-            transcript_path, metadata_path)
+            transcript_path, metadata_path
+        )
     except (OSError, json.JSONDecodeError, RuntimeError) as exc:
         if not force_refetch:
             raise
         print(
-            f"[转录][警告] 现有 evidence revision 无法复用，将归档后重抓: "
-            f"{exc}",
+            f"[转录][警告] 现有 evidence revision 无法复用，将归档后重抓: {exc}",
             flush=True,
         )
         existing_transcript, existing_metadata = None, None
     if existing_transcript is not None and not force_refetch:
         existing_source = existing_metadata.get("source", "")
         if (
-                source
-                and existing_source
-                and _source_identity(source) != _source_identity(
-                    existing_source)):
+            source
+            and existing_source
+            and _source_identity(source) != _source_identity(existing_source)
+        ):
             raise RuntimeError(
                 "同名单集目录已绑定不同 source；"
                 "拒绝复用旧证据并改写来源，请确认 --name 或使用 --force-refetch"
@@ -328,8 +340,7 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
         metadata = existing_metadata
         source_kind = metadata.get("source_kind", source_kind)
         print(
-            "[转录] 已存在原始 evidence revision，默认复用；"
-            "需要重新抓取时显式使用 --force-refetch",
+            "[转录] 已存在原始 evidence revision，默认复用；需要重新抓取时显式使用 --force-refetch",
             flush=True,
         )
 
@@ -375,8 +386,7 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
                 context_texts = [Path(source).stem]
                 existing_source_path = folder / "来源.md"
                 if existing_source_path.exists():
-                    context_texts.append(
-                        existing_source_path.read_text(encoding="utf-8"))
+                    context_texts.append(existing_source_path.read_text(encoding="utf-8"))
                 asr_context = build_asr_context(
                     title=display_title or name,
                     context_texts=context_texts,
@@ -384,11 +394,16 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
                     hotwords=hotwords,
                 )
                 result = transcribe(
-                    source, engine=engine, quality=quality,
+                    source,
+                    engine=engine,
+                    quality=quality,
                     asr_model=asr_model,
-                    initial_prompt=initial_prompt, hotwords=hotwords,
-                    lm_path=lm_path, diarize_audio=diarize_audio,
-                    min_speakers=min_speakers, max_speakers=max_speakers,
+                    initial_prompt=initial_prompt,
+                    hotwords=hotwords,
+                    lm_path=lm_path,
+                    diarize_audio=diarize_audio,
+                    min_speakers=min_speakers,
+                    max_speakers=max_speakers,
                     language=asr_language,
                     asr_context=asr_context,
                     adaptive_refinement=adaptive_refinement,
@@ -404,8 +419,7 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
                 }
                 if asr_context.initial_prompt and not initial_prompt:
                     print(
-                        "  [ASR] 自动 initial_prompt: "
-                        f"{asr_context.initial_prompt[:120]}",
+                        f"  [ASR] 自动 initial_prompt: {asr_context.initial_prompt[:120]}",
                         flush=True,
                     )
             else:
@@ -432,10 +446,7 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
             print(f"[错误] 无法识别输入源: {source}", flush=True)
 
     # 回退：读已有转录。不要因为已有文本而覆盖已有结构化结果。
-    if (
-            not transcript
-            and existing_transcript is not None
-            and not force_refetch):
+    if not transcript and existing_transcript is not None and not force_refetch:
         transcript = existing_transcript
         metadata = existing_metadata
 
@@ -454,17 +465,14 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
     if write_evidence:
         if not metadata:
             raise RuntimeError("抓取成功但缺少结构化转录元数据")
-        metadata = _prepare_evidence_metadata(
-            metadata, transcript, folder=folder)
+        metadata = _prepare_evidence_metadata(metadata, transcript, folder=folder)
         archive = None
         if force_refetch:
-            archive = _archive_existing_evidence(
-                folder, transcript_path, metadata_path)
+            archive = _archive_existing_evidence(folder, transcript_path, metadata_path)
         atomic_write_text(transcript_path, transcript)
         atomic_write_json(metadata_path, metadata)
         print(
-            f"[转录] 新 evidence revision: {len(transcript)} 字符 "
-            f"→ {transcript_path.name}",
+            f"[转录] 新 evidence revision: {len(transcript)} 字符 → {transcript_path.name}",
             flush=True,
         )
         print(f"[转录] 结构化结果 → {metadata_path.name}", flush=True)
@@ -480,9 +488,12 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
     source_path = folder / "来源.md"
     if not source_path.exists() and source:
         from datetime import date
+
         today = date.today().isoformat()
         lines = [
-            "# 来源信息", "", "## 原始播客",
+            "# 来源信息",
+            "",
+            "## 原始播客",
             f"- 标题：{display_title or name}",
         ]
         if source.startswith("http"):
@@ -492,17 +503,22 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
             lines.append(f"- 输入文件：{source}")
             if _is_audio_file(source):
                 lines.append("- 转录方式：本地 ASR（Whisper）")
-        lines += ["", "## 处理信息", f"- 处理日期：{today}",
-                  "- pipeline 版本：v8", f"- ASR 质量：{quality}"]
+        lines += [
+            "",
+            "## 处理信息",
+            f"- 处理日期：{today}",
+            "- pipeline 版本：v8",
+            f"- ASR 质量：{quality}",
+        ]
         if metadata and metadata.get("meta", {}).get("diarization"):
             lines.append("- 说话人分离：已启用")
         atomic_write_text(source_path, "\n".join(lines))
         print(f"[来源] 已创建 {source_path.name}", flush=True)
     elif source_path.exists() and source:
         from datetime import date
+
         text = source_path.read_text(encoding="utf-8")
-        text = _upsert_source_field(
-            text, "标题", display_title or name)
+        text = _upsert_source_field(text, "标题", display_title or name)
         if source.startswith("http"):
             text = _upsert_source_field(text, "链接", source)
             text = _upsert_source_field(text, "转录来源", source)
@@ -510,27 +526,20 @@ def fetch_transcript(source, folder, name, asr_model, initial_prompt=None,
         else:
             text = _upsert_source_field(text, "输入文件", source)
             if _is_audio_file(source):
-                text = _upsert_source_field(
-                    text, "转录方式", "本地 ASR（Whisper）")
-        text = _upsert_source_field(
-            text, "处理日期", date.today().isoformat())
+                text = _upsert_source_field(text, "转录方式", "本地 ASR（Whisper）")
+        text = _upsert_source_field(text, "处理日期", date.today().isoformat())
         text = _upsert_source_field(text, "pipeline 版本", "v8")
         text = _upsert_source_field(text, "ASR 质量", quality)
         atomic_write_text(source_path, text)
 
     from scripts.episode import ensure_episode, sync_episode_state
+
     ensure_episode(
         folder,
         display_title=display_title or name,
-        source_url=(
-            official_url
-            or (source if source and source.startswith("http") else "")
-        ),
+        source_url=(official_url or (source if source and source.startswith("http") else "")),
         source_kind=source_kind,
-        extractor=(
-            metadata.get("meta", {}).get("extractor", "")
-            if metadata else ""
-        ),
+        extractor=(metadata.get("meta", {}).get("extractor", "") if metadata else ""),
         quality_mode="strict",
     )
     sync_episode_state(folder)
@@ -556,19 +565,14 @@ def _prepare_briefing_files(folder, briefing_path):
     summary_path = folder / "summary_map.json"
     summary_map = (
         json.loads(summary_path.read_text(encoding="utf-8"))
-        if summary_path.exists() else {"chapters": []}
+        if summary_path.exists()
+        else {"chapters": []}
     )
-    normalized, summary_map, normalization_changes = (
-        normalize_briefing_artifacts(text, summary_map)
-    )
-    fixed, issues, validation = validate_and_fix(
-        normalized, return_details=True)
-    fixed, summary_map, post_validation_changes = (
-        normalize_briefing_artifacts(fixed, summary_map)
-    )
+    normalized, summary_map, normalization_changes = normalize_briefing_artifacts(text, summary_map)
+    fixed, issues, validation = validate_and_fix(normalized, return_details=True)
+    fixed, summary_map, post_validation_changes = normalize_briefing_artifacts(fixed, summary_map)
     normalization_changes.extend(
-        change for change in post_validation_changes
-        if change not in normalization_changes
+        change for change in post_validation_changes if change not in normalization_changes
     )
     if fixed != text:
         atomic_write_text(briefing_path, fixed)
@@ -586,32 +590,25 @@ def _validate_finalized_briefing_files(folder, briefing_path):
         return ["缺少 summary_map.json，不能验证审查后的只读内容"], {}
     try:
         summary_map = json.loads(summary_path.read_text(encoding="utf-8"))
-        finalized, aligned, changes = finalize_content_artifacts(
-            text, summary_map)
+        finalized, aligned, changes = finalize_content_artifacts(text, summary_map)
     except (json.JSONDecodeError, ContentFinalizationError, ValueError) as exc:
         return [f"内容最终化校验失败: {exc}"], {}
     errors = []
     if finalized != text:
-        errors.append(
-            "讲书稿.md 尚未最终化；TTS/HTML 阶段禁止自动修改审查输入")
+        errors.append("讲书稿.md 尚未最终化；TTS/HTML 阶段禁止自动修改审查输入")
     if aligned != summary_map:
-        errors.append(
-            "summary_map.json 尚未最终化或哈希已过期；"
-            "TTS/HTML 阶段禁止自动修改审查输入")
-    tts_issues = validate_tts_readiness(
-        text, load_tts_lexicon(folder))
+        errors.append("summary_map.json 尚未最终化或哈希已过期；TTS/HTML 阶段禁止自动修改审查输入")
+    tts_issues = validate_tts_readiness(text, load_tts_lexicon(folder))
     errors.extend(tts_issues)
     return errors, {
         "normalization_changes_required": changes,
         "briefing_sha256": _text_sha256(text),
-        "summary_sha256": _text_sha256(
-            summary_path.read_text(encoding="utf-8")),
+        "summary_sha256": _text_sha256(summary_path.read_text(encoding="utf-8")),
         "tts_readiness_issue_count": len(tts_issues),
     }
 
 
-def _run_quality_gate(
-        folder, auto_ai_review=True, allow_legacy=False, run_report=None):
+def _run_quality_gate(folder, auto_ai_review=True, allow_legacy=False, run_report=None):
     """Compatibility wrapper around the shared preflight implementation."""
     return shared_quality_gate(
         folder,
@@ -621,8 +618,17 @@ def _run_quality_gate(
     )
 
 
-def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
-                 auto_ai_review=True, allow_legacy=False, run_report=None):
+def run_tts_step(
+    folder,
+    name,
+    briefing_file,
+    tts_speed,
+    force_tts,
+    read_titles,
+    auto_ai_review=True,
+    allow_legacy=False,
+    run_report=None,
+):
     with _stage(run_report, "tts_config_preflight"):
         validate_for_stage("tts")
     # 内容最终化必须由上游内容阶段显式完成。TTS 及 HTML 只读验证，
@@ -632,8 +638,7 @@ def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
         if briefing_path.exists():
             text = briefing_path.read_text(encoding="utf-8")
             _run_structure_check(text)
-            errors, metrics = _validate_finalized_briefing_files(
-                folder, briefing_path)
+            errors, metrics = _validate_finalized_briefing_files(folder, briefing_path)
             if stage is not None:
                 stage.metrics.update(metrics)
                 if errors:
@@ -645,10 +650,8 @@ def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
 
     with _stage(run_report, "quality_gate") as stage:
         quality_ok = _run_quality_gate(
-            folder,
-            auto_ai_review=auto_ai_review,
-            allow_legacy=allow_legacy,
-            run_report=run_report)
+            folder, auto_ai_review=auto_ai_review, allow_legacy=allow_legacy, run_report=run_report
+        )
         if stage is not None:
             stage.metrics.update(_quality_metrics(folder))
             if not quality_ok:
@@ -659,8 +662,13 @@ def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
     with _stage(run_report, "tts") as stage:
         print(f"[TTS] 开始生成音频（讲稿: {briefing_file}）...", flush=True)
         result = run_tts(
-            str(folder), briefing_file, name,
-            speed=tts_speed, fresh=force_tts, read_titles=read_titles)
+            str(folder),
+            briefing_file,
+            name,
+            speed=tts_speed,
+            fresh=force_tts,
+            read_titles=read_titles,
+        )
         print(f"[TTS] {result}", flush=True)
         if stage is not None:
             stage.metrics.update(_tts_metrics(folder, briefing_file))
@@ -670,16 +678,20 @@ def run_tts_step(folder, name, briefing_file, tts_speed, force_tts, read_titles,
             print("[TTS][阻断] 存在失败章节，最终音频未更新", flush=True)
             return False
     with _stage(run_report, "prepare_release") as stage:
+        write_artifact_manifest(folder)
         release = prepare_release(
             folder,
             folder / f"{name}.mp3",
             folder / briefing_file,
+            require_clean=True,
         )
         if stage is not None:
-            stage.metrics.update({
-                "release_id": release.get("release_id"),
-                "audio_key": release.get("audio_key"),
-            })
+            stage.metrics.update(
+                {
+                    "release_id": release.get("release_id"),
+                    "audio_key": release.get("audio_key"),
+                }
+            )
     print(f"\n[完成] 音频: {folder / f'{name}.mp3'}", flush=True)
     return True
 
@@ -688,14 +700,15 @@ def _display_title(name):
     """从 episode.json 读取展示标题；旧期自动从现有元数据回退。"""
     try:
         from scripts.episode import display_title
+
         return display_title(BASE_DIR / name)
     except Exception:
         return name
 
 
 def run_html_step(
-        folder, name, briefing_file, auto_ai_review=True,
-        allow_legacy=False, run_report=None):
+    folder, name, briefing_file, auto_ai_review=True, allow_legacy=False, run_report=None
+):
     """生成 HTML 阅读页面；质量门之后不修改内容源文件。"""
     md_path = folder / briefing_file
     if not md_path.exists():
@@ -714,10 +727,8 @@ def run_html_step(
                 print(f"[内容只读校验][阻断] {error}", flush=True)
             return False
         quality_ok = _run_quality_gate(
-            folder,
-            auto_ai_review=auto_ai_review,
-            allow_legacy=allow_legacy,
-            run_report=run_report)
+            folder, auto_ai_review=auto_ai_review, allow_legacy=allow_legacy, run_report=run_report
+        )
         if stage is not None:
             stage.metrics.update(_quality_metrics(folder))
             if not quality_ok:
@@ -727,14 +738,15 @@ def run_html_step(
     with _stage(run_report, "html") as stage:
         out_path = folder / f"{name} - content.html"
         result = md_to_html(
-            str(md_path), output_path=str(out_path),
-            podcast_title=_display_title(name))
+            str(md_path), output_path=str(out_path), podcast_title=_display_title(name)
+        )
         if stage is not None:
-            stage.metrics.update({
-                "output": out_path.name,
-                "size_bytes": out_path.stat().st_size
-                if out_path.exists() else 0,
-            })
+            stage.metrics.update(
+                {
+                    "output": out_path.name,
+                    "size_bytes": out_path.stat().st_size if out_path.exists() else 0,
+                }
+            )
             if result is None:
                 stage.fail("HTML generation failed")
         return result is not None
@@ -789,30 +801,45 @@ def _process_impl(source, name, folder, run_report, options):
             print(f"[错误] {folder} 下没有讲稿（讲书稿.md / 简报.md）。", flush=True)
             return False
         return run_html_step(
-            folder, name, briefing_file,
+            folder,
+            name,
+            briefing_file,
             auto_ai_review=auto_ai_review,
             allow_legacy=allow_legacy,
-            run_report=run_report)
+            run_report=run_report,
+        )
 
     # ---- 仅 TTS 模式：跳过抓取，对已有讲稿出音频 ----
     if tts_only:
         briefing_file, briefing_path = detect_briefing(folder)
         if not briefing_path:
-            print(f"[错误] {folder} 下没有讲稿（讲书稿.md / 简报.md）。"
-                  f"先运行 subagent 内容编排生成讲书稿。", flush=True)
+            print(
+                f"[错误] {folder} 下没有讲稿（讲书稿.md / 简报.md）。"
+                f"先运行 subagent 内容编排生成讲书稿。",
+                flush=True,
+            )
             return False
         if not run_tts_step(
-                folder, name, briefing_file, tts_speed, force_tts, read_titles,
-                auto_ai_review=auto_ai_review,
-                allow_legacy=allow_legacy,
-                run_report=run_report):
+            folder,
+            name,
+            briefing_file,
+            tts_speed,
+            force_tts,
+            read_titles,
+            auto_ai_review=auto_ai_review,
+            allow_legacy=allow_legacy,
+            run_report=run_report,
+        ):
             return False
         if not no_html:
             return run_html_step(
-                folder, name, briefing_file,
+                folder,
+                name,
+                briefing_file,
                 auto_ai_review=auto_ai_review,
                 allow_legacy=allow_legacy,
-                run_report=run_report)
+                run_report=run_report,
+            )
         return True
 
     # ---- 抓取转录 ----
@@ -821,56 +848,58 @@ def _process_impl(source, name, folder, run_report, options):
         return False
     with _stage(run_report, "fetch") as stage:
         fetched = fetch_transcript(
-            source, folder, name, asr_model, initial_prompt, hotwords,
-            quality=quality, engine=engine, lm_path=lm_path,
+            source,
+            folder,
+            name,
+            asr_model,
+            initial_prompt,
+            hotwords,
+            quality=quality,
+            engine=engine,
+            lm_path=lm_path,
             diarize_audio=diarize_audio,
-            min_speakers=min_speakers, max_speakers=max_speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
             content_policy=content_policy,
             display_title=display_title,
             official_url=official_url,
             force_refetch=force_refetch,
             asr_language=asr_language,
             adaptive_refinement=adaptive_refinement,
-            align_audio=align_audio)
+            align_audio=align_audio,
+        )
         raw_path = folder / "transcript.raw.json"
         if stage is not None and raw_path.exists():
             try:
                 raw = json.loads(raw_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 raw = {}
-            stage.metrics.update({
-                "source_kind": raw.get("source_kind"),
-                "segment_count": len(raw.get("segments", [])),
-                "transcript_chars": raw.get(
-                    "meta", {}).get("transcript_chars"),
-                "transport": raw.get("meta", {}).get("transport"),
-                "retry_count": raw.get("meta", {}).get(
-                    "fetch_retry_count", 0),
-                "tls_downgrade": bool(
-                    raw.get("meta", {}).get("tls_downgrade")),
-                "asr_refinement_ranges": raw.get(
-                    "meta", {}).get(
-                        "adaptive_refinement", {}).get(
-                            "candidate_ranges", 0),
-                "asr_refinement_accepted": raw.get(
-                    "meta", {}).get(
-                        "adaptive_refinement", {}).get(
-                            "accepted_ranges", 0),
-                "asr_refinement_remaining": raw.get(
-                    "meta", {}).get(
-                        "adaptive_refinement", {}).get(
-                            "remaining_segments", 0),
-                "alignment_status": raw.get(
-                    "meta", {}).get("alignment", {}).get("status"),
-                "alignment_coverage": raw.get(
-                    "meta", {}).get(
-                        "alignment", {}).get(
-                            "word_timestamp_coverage"),
-                "diarization_exclusive": raw.get(
-                    "meta", {}).get(
-                        "diarization_meta", {}).get(
-                            "exclusive_used"),
-            })
+            stage.metrics.update(
+                {
+                    "source_kind": raw.get("source_kind"),
+                    "segment_count": len(raw.get("segments", [])),
+                    "transcript_chars": raw.get("meta", {}).get("transcript_chars"),
+                    "transport": raw.get("meta", {}).get("transport"),
+                    "retry_count": raw.get("meta", {}).get("fetch_retry_count", 0),
+                    "tls_downgrade": bool(raw.get("meta", {}).get("tls_downgrade")),
+                    "asr_refinement_ranges": raw.get("meta", {})
+                    .get("adaptive_refinement", {})
+                    .get("candidate_ranges", 0),
+                    "asr_refinement_accepted": raw.get("meta", {})
+                    .get("adaptive_refinement", {})
+                    .get("accepted_ranges", 0),
+                    "asr_refinement_remaining": raw.get("meta", {})
+                    .get("adaptive_refinement", {})
+                    .get("remaining_segments", 0),
+                    "alignment_status": raw.get("meta", {}).get("alignment", {}).get("status"),
+                    "alignment_coverage": raw.get("meta", {})
+                    .get("alignment", {})
+                    .get("word_timestamp_coverage"),
+                    "diarization_exclusive": raw.get("meta", {})
+                    .get("diarization_meta", {})
+                    .get("exclusive_used"),
+                }
+            )
         if stage is not None and not fetched:
             stage.fail("transcript fetch failed")
         if not fetched:
@@ -879,9 +908,15 @@ def _process_impl(source, name, folder, run_report, options):
 
     # Resume through the public entry point, reusing immutable source evidence.
     # Deliberately omit --force-refetch and source-only flags.
-    resume_command = shlex.join([
-        ".venv/bin/python", "scripts/process.py", str(source), "--name", name,
-    ])
+    resume_command = shlex.join(
+        [
+            ".venv/bin/python",
+            "scripts/process.py",
+            str(source),
+            "--name",
+            name,
+        ]
+    )
     # ---- 抓取后：默认由 subagent 自动生成内容 ----
     briefing_file, briefing_path = detect_briefing(folder)
     needs_content = False
@@ -894,11 +929,7 @@ def _process_impl(source, name, folder, run_report, options):
     if needs_content:
         print("[内容计划] " + ", ".join(rebuild_plan["reasons"]), flush=True)
         print("[内容] 内容产物缺失、过期或不完整，启动 subagent 编排...", flush=True)
-        if not run_content_pipeline(
-                folder,
-                display_title or name,
-                run_report,
-                force=force_refetch):
+        if not run_content_pipeline(folder, display_title or name, run_report, force=force_refetch):
             print(
                 "[内容][阻断] 内容编排失败；已有成果保留。"
                 f"请查看 {folder / 'run_report.json'} 的失败阶段，"
@@ -920,17 +951,26 @@ def _process_impl(source, name, folder, run_report, options):
 
     # 讲稿已存在 → 直接出音频
     if not run_tts_step(
-            folder, name, briefing_file, tts_speed, force_tts, read_titles,
-            auto_ai_review=auto_ai_review,
-            allow_legacy=allow_legacy,
-            run_report=run_report):
+        folder,
+        name,
+        briefing_file,
+        tts_speed,
+        force_tts,
+        read_titles,
+        auto_ai_review=auto_ai_review,
+        allow_legacy=allow_legacy,
+        run_report=run_report,
+    ):
         return False
     if not no_html:
         return run_html_step(
-            folder, name, briefing_file,
+            folder,
+            name,
+            briefing_file,
             auto_ai_review=auto_ai_review,
             allow_legacy=allow_legacy,
-            run_report=run_report)
+            run_report=run_report,
+        )
     return True
 
 
@@ -938,10 +978,8 @@ def process_episode(source, name, options):
     """Run one episode through the deep process interface."""
     folder = BASE_DIR / name
     folder.mkdir(parents=True, exist_ok=True)
-    with exclusive_file_lock(
-            f"episode:{folder.resolve()}", blocking=False):
-        report = RunReport(
-            folder, "process", options.run_metadata(source))
+    with exclusive_file_lock(f"episode:{folder.resolve()}", blocking=False):
+        report = RunReport(folder, "process", options.run_metadata(source))
         try:
             ok = _process_impl(source, name, folder, report, options)
         except Exception as exc:
@@ -951,51 +989,75 @@ def process_episode(source, name, options):
         return ok
 
 
-def process(source, name, asr_model=None, tts_speed=1.0,
-            force_tts=False, read_titles=True, fetch_only=False, tts_only=False,
-            html_only=False, no_html=False, quality="balanced",
-            initial_prompt=None, hotwords=None, engine="whisper",
-            lm_path=None, diarize_audio=True,
-            min_speakers=None, max_speakers=None,
-            content_policy="faithful", auto_ai_review=True,
-            allow_legacy=False, display_title=None, official_url=None,
-            force_refetch=False,
-            asr_language="en", auto_content=True, adaptive_refinement=True,
-            align_audio=True):
+def process(
+    source,
+    name,
+    asr_model=None,
+    tts_speed=1.0,
+    force_tts=False,
+    read_titles=True,
+    fetch_only=False,
+    tts_only=False,
+    html_only=False,
+    no_html=False,
+    quality="balanced",
+    initial_prompt=None,
+    hotwords=None,
+    engine="whisper",
+    lm_path=None,
+    diarize_audio=True,
+    min_speakers=None,
+    max_speakers=None,
+    content_policy="faithful",
+    auto_ai_review=True,
+    allow_legacy=False,
+    display_title=None,
+    official_url=None,
+    force_refetch=False,
+    asr_language="en",
+    auto_content=True,
+    adaptive_refinement=True,
+    align_audio=True,
+):
     """Backward-compatible adapter; use process_episode + EpisodeOptions internally."""
-    return process_episode(source, name, EpisodeOptions(
-        asr_model=asr_model,
-        tts_speed=tts_speed,
-        force_tts=force_tts,
-        read_titles=read_titles,
-        fetch_only=fetch_only,
-        tts_only=tts_only,
-        html_only=html_only,
-        no_html=no_html,
-        quality=quality,
-        initial_prompt=initial_prompt,
-        hotwords=hotwords,
-        engine=engine,
-        lm_path=lm_path,
-        diarize_audio=diarize_audio,
-        min_speakers=min_speakers,
-        max_speakers=max_speakers,
-        content_policy=content_policy,
-        auto_ai_review=auto_ai_review,
-        allow_legacy=allow_legacy,
-        display_title=display_title,
-        official_url=official_url,
-        force_refetch=force_refetch,
-        asr_language=asr_language,
-        auto_content=auto_content,
-        adaptive_refinement=adaptive_refinement,
-        align_audio=align_audio,
-    ))
+    return process_episode(
+        source,
+        name,
+        EpisodeOptions(
+            asr_model=asr_model,
+            tts_speed=tts_speed,
+            force_tts=force_tts,
+            read_titles=read_titles,
+            fetch_only=fetch_only,
+            tts_only=tts_only,
+            html_only=html_only,
+            no_html=no_html,
+            quality=quality,
+            initial_prompt=initial_prompt,
+            hotwords=hotwords,
+            engine=engine,
+            lm_path=lm_path,
+            diarize_audio=diarize_audio,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            content_policy=content_policy,
+            auto_ai_review=auto_ai_review,
+            allow_legacy=allow_legacy,
+            display_title=display_title,
+            official_url=official_url,
+            force_refetch=force_refetch,
+            asr_language=asr_language,
+            auto_content=auto_content,
+            adaptive_refinement=adaptive_refinement,
+            align_audio=align_audio,
+        ),
+    )
 
 
 # ===================================================================
 #  命令行入口
 # ===================================================================
+
 
 def main():
     parser = build_process_parser()
@@ -1004,11 +1066,7 @@ def main():
     source = args.source
     if args.transcript:
         source = args.transcript
-    if (
-            not source
-            and not args.tts_only
-            and not args.html_only
-            and not args.upgrade_asr):
+    if not source and not args.tts_only and not args.html_only and not args.upgrade_asr:
         parser.print_help()
         sys.exit(1)
 
@@ -1023,10 +1081,11 @@ def main():
     print(f"[命名] {name}", flush=True)
     official_url = args.official_url
     if (
-            not official_url
-            and source
-            and str(source).startswith("http")
-            and "podscripts.co" in str(source).casefold()):
+        not official_url
+        and source
+        and str(source).startswith("http")
+        and "podscripts.co" in str(source).casefold()
+    ):
         official_url = discover_official_episode_url(source)
         if official_url:
             print(f"[来源] RSS 匹配官方单集: {official_url}", flush=True)

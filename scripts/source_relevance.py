@@ -1,4 +1,5 @@
 """Cache bounded source metadata so reviewers can assess URL relevance."""
+
 import hashlib
 import ipaddress
 import json
@@ -23,7 +24,10 @@ from scripts.atomic_io import atomic_write_json
 
 
 SCHEMA_VERSION = 1
+EXTRACTOR_VERSION = "readable-html-v1"
 CACHE_FILENAME = "source_relevance_cache.json"
+SHARED_CACHE_ENV = "SOURCE_RELEVANCE_SHARED_CACHE"
+SHARED_CACHE_FILENAME = "source_relevance_shared_cache.json"
 MAX_SOURCE_BYTES = 2_000_000
 MAX_EXCERPT_CHARS = 2000
 MAX_REDIRECTS = 5
@@ -33,7 +37,12 @@ SUCCESS_REFRESH_TTL = timedelta(days=7)
 MAX_CLOCK_SKEW = timedelta(minutes=5)
 SOURCE_FETCH_CONCURRENCY = 8
 TRACKING_QUERY_KEYS = {
-    "cid", "fbclid", "gclid", "mc_cid", "mc_eid", "ref",
+    "cid",
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+    "ref",
 }
 
 
@@ -52,13 +61,15 @@ def normalize_source_url(url):
         if folded.startswith("utm_") or folded in TRACKING_QUERY_KEYS:
             continue
         query.append((key, item))
-    return urlunsplit((
-        parts.scheme.casefold(),
-        parts.netloc.casefold(),
-        parts.path or "/",
-        urlencode(query, doseq=True),
-        "",
-    ))
+    return urlunsplit(
+        (
+            parts.scheme.casefold(),
+            parts.netloc.casefold(),
+            parts.path or "/",
+            urlencode(query, doseq=True),
+            "",
+        )
+    )
 
 
 class _ReadableHTML(HTMLParser):
@@ -104,24 +115,20 @@ def _load_json(path, default):
 def expected_source_references(folder):
     folder = Path(folder)
     references = {}
-    corrections = _load_json(
-        folder / "editorial_corrections.json", {"corrections": []})
+    corrections = _load_json(folder / "editorial_corrections.json", {"corrections": []})
     for item in corrections.get("corrections", []) or []:
         if not isinstance(item, dict):
             continue
         reference = item.get("correction_id") or item.get("claim_id")
         for url in item.get("source_urls", []) or []:
-            references.setdefault(normalize_source_url(url), set()).add(
-                str(reference))
-    entities = _load_json(
-        folder / "canonical_entities.json", {"entities": []})
+            references.setdefault(normalize_source_url(url), set()).add(str(reference))
+    entities = _load_json(folder / "canonical_entities.json", {"entities": []})
     for item in entities.get("entities", []) or []:
         if not isinstance(item, dict):
             continue
         reference = item.get("entity_id") or item.get("canonical_name")
         for url in item.get("source_urls", []) or []:
-            references.setdefault(normalize_source_url(url), set()).add(
-                str(reference))
+            references.setdefault(normalize_source_url(url), set()).add(str(reference))
     return {
         url: sorted(filter(None, values))
         for url, values in references.items()
@@ -132,8 +139,7 @@ def expected_source_references(folder):
 def expected_source_terms(folder):
     folder = Path(folder)
     terms = {}
-    corrections = _load_json(
-        folder / "editorial_corrections.json", {"corrections": []})
+    corrections = _load_json(folder / "editorial_corrections.json", {"corrections": []})
     for item in corrections.get("corrections", []) or []:
         if not isinstance(item, dict):
             continue
@@ -143,9 +149,9 @@ def expected_source_terms(folder):
         ]
         for url in item.get("source_urls", []) or []:
             terms.setdefault(normalize_source_url(url), set()).update(
-                str(value).strip() for value in values if str(value).strip())
-    entities = _load_json(
-        folder / "canonical_entities.json", {"entities": []})
+                str(value).strip() for value in values if str(value).strip()
+            )
+    entities = _load_json(folder / "canonical_entities.json", {"entities": []})
     for item in entities.get("entities", []) or []:
         if not isinstance(item, dict):
             continue
@@ -153,14 +159,25 @@ def expected_source_terms(folder):
         values.extend(item.get("public_aliases", []) or [])
         for url in item.get("source_urls", []) or []:
             terms.setdefault(normalize_source_url(url), set()).update(
-                str(value).strip() for value in values if str(value).strip())
+                str(value).strip() for value in values if str(value).strip()
+            )
     return {url: sorted(values) for url, values in terms.items()}
 
 
 def _relevance_tokens(values):
     ignored = {
-        "about", "official", "report", "research", "science", "united",
-        "states", "公司", "节目", "报告", "研究", "官方",
+        "about",
+        "official",
+        "report",
+        "research",
+        "science",
+        "united",
+        "states",
+        "公司",
+        "节目",
+        "报告",
+        "研究",
+        "官方",
     }
     tokens = set()
     for value in values or []:
@@ -174,15 +191,16 @@ def _relevance_tokens(values):
 
 def _annotate_relevance(entry, expected_terms):
     expected_tokens = _relevance_tokens(expected_terms)
-    observed_tokens = _relevance_tokens([
-        entry.get("title", ""), entry.get("excerpt", ""),
-    ])
+    observed_tokens = _relevance_tokens(
+        [
+            entry.get("title", ""),
+            entry.get("excerpt", ""),
+        ]
+    )
     matched = sorted(expected_tokens & observed_tokens)
     entry["expected_terms"] = list(expected_terms or [])
     entry["matched_terms"] = matched
-    entry["relevance_status"] = (
-        "matched" if not expected_tokens or matched else "unconfirmed"
-    )
+    entry["relevance_status"] = "matched" if not expected_tokens or matched else "unconfirmed"
     return entry
 
 
@@ -205,8 +223,7 @@ def _resolve_public_source_url(url):
         addresses = [literal]
     except ValueError:
         try:
-            resolved = socket.getaddrinfo(
-                parts.hostname, port, type=socket.SOCK_STREAM)
+            resolved = socket.getaddrinfo(parts.hostname, port, type=socket.SOCK_STREAM)
         except socket.gaierror as exc:
             raise ValueError(f"source URL host 无法解析: {parts.hostname}") from exc
         addresses = []
@@ -220,8 +237,7 @@ def _resolve_public_source_url(url):
         raise ValueError(f"source URL host 没有可用地址: {parts.hostname}")
     blocked = sorted(str(address) for address in addresses if not address.is_global)
     if blocked:
-        raise ValueError(
-            f"source URL 指向非公网地址: {parts.hostname}: {blocked}")
+        raise ValueError(f"source URL 指向非公网地址: {parts.hostname}: {blocked}")
     addresses.sort(key=lambda address: (address.version != 4, str(address)))
     return value, parts, addresses
 
@@ -237,17 +253,18 @@ def _pinned_source_request(parts, address):
     port = parts.port or (443 if scheme == "https" else 80)
     address_text = str(address)
     address_host = f"[{address_text}]" if address.version == 6 else address_text
-    pinned_url = urlunsplit((
-        scheme,
-        f"{address_host}:{port}",
-        parts.path or "/",
-        parts.query,
-        "",
-    ))
+    pinned_url = urlunsplit(
+        (
+            scheme,
+            f"{address_host}:{port}",
+            parts.path or "/",
+            parts.query,
+            "",
+        )
+    )
     default_port = 443 if scheme == "https" else 80
     original_host = parts.hostname
-    host_value = (
-        f"[{original_host}]" if ":" in original_host else original_host)
+    host_value = f"[{original_host}]" if ":" in original_host else original_host
     if port != default_port:
         host_value = f"{host_value}:{port}"
     return pinned_url, host_value, original_host
@@ -259,8 +276,7 @@ def _read_limited_body(response):
         if not chunk:
             continue
         if len(body) + len(chunk) > MAX_SOURCE_BYTES:
-            raise ValueError(
-                f"source response 超过 {MAX_SOURCE_BYTES} bytes")
+            raise ValueError(f"source response 超过 {MAX_SOURCE_BYTES} bytes")
         body.extend(chunk)
     return bytes(body)
 
@@ -269,15 +285,13 @@ def _fetch_source(url):
     current_url = str(url)
     for redirect_count in range(MAX_REDIRECTS + 1):
         current_url, parts, addresses = _resolve_public_source_url(current_url)
-        pinned_url, host_header, sni_hostname = _pinned_source_request(
-            parts, addresses[0])
-        with httpx.Client(
-                timeout=30, follow_redirects=False, trust_env=False) as client:
+        pinned_url, host_header, sni_hostname = _pinned_source_request(parts, addresses[0])
+        with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
             with client.stream(
-                    "GET",
-                    pinned_url,
-                    headers={"Host": host_header},
-                    extensions={"sni_hostname": sni_hostname},
+                "GET",
+                pinned_url,
+                headers={"Host": host_header},
+                extensions={"sni_hostname": sni_hostname},
             ) as response:
                 if response.status_code in REDIRECT_STATUSES:
                     location = response.headers.get("location", "").strip()
@@ -360,8 +374,7 @@ def _fetch_cache_entry(url, fetcher, now):
             "status": "error",
             "error": str(exc) or type(exc).__name__,
             "error_kind": type(exc).__name__,
-            "http_status": getattr(
-                getattr(exc, "response", None), "status_code", None),
+            "http_status": getattr(getattr(exc, "response", None), "status_code", None),
             "final_url": url,
             "content_type": "",
             "title": "",
@@ -372,6 +385,35 @@ def _fetch_cache_entry(url, fetcher, now):
     if entry.get("status") == "fetched":
         entry["fetched_at"] = now.isoformat()
     return entry
+
+
+def _shared_cache_path():
+    """Return the process-wide cache path (never inside published content)."""
+    import os
+
+    configured = os.environ.get(SHARED_CACHE_ENV, "").strip()
+    return (
+        Path(configured).expanduser()
+        if configured
+        else Path.home() / ".cache" / "podcast-pipeline" / SHARED_CACHE_FILENAME
+    )
+
+
+def _load_shared_entries():
+    payload = _load_json(_shared_cache_path(), {})
+    return payload.get("entries", {}) if isinstance(payload, dict) else {}
+
+
+def _store_shared_entries(entries):
+    path = _shared_cache_path()
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "extractor_version": EXTRACTOR_VERSION,
+        "updated_at": datetime.now(UTC).isoformat(),
+        "entries": entries,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, payload)
 
 
 def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
@@ -391,25 +433,28 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
         return None
     existing = _load_json(path, {"entries": {}})
     old_entries = existing.get("entries", {}) if isinstance(existing, dict) else {}
+    shared_entries = _load_shared_entries()
     if isinstance(old_entries, dict):
-        old_entries = {
-            normalize_source_url(url): entry
-            for url, entry in old_entries.items()
-        }
+        old_entries = {normalize_source_url(url): entry for url, entry in old_entries.items()}
     entries = {}
     pending = []
     fetcher = fetcher or _fetch_source
     now = datetime.now(UTC)
     for url, _source_ids in references.items():
         previous = old_entries.get(url) if isinstance(old_entries, dict) else None
+        shared = shared_entries.get(url) if isinstance(shared_entries, dict) else None
+        if (
+            not force
+            and isinstance(shared, dict)
+            and shared.get("status") == "fetched"
+            and _recent_success(shared, now)
+        ):
+            previous = shared
         reused = (
             not force
             and isinstance(previous, dict)
             and (
-                (
-                    previous.get("content_sha256")
-                    and _recent_success(previous, now)
-                )
+                (previous.get("content_sha256") and _recent_success(previous, now))
                 or _recent_error(previous, now)
             )
         )
@@ -418,12 +463,8 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
         else:
             pending.append(url)
     if pending:
-        with ThreadPoolExecutor(
-                max_workers=min(SOURCE_FETCH_CONCURRENCY, len(pending))) as pool:
-            futures = {
-                pool.submit(_fetch_cache_entry, url, fetcher, now): url
-                for url in pending
-            }
+        with ThreadPoolExecutor(max_workers=min(SOURCE_FETCH_CONCURRENCY, len(pending))) as pool:
+            futures = {pool.submit(_fetch_cache_entry, url, fetcher, now): url for url in pending}
             for future in as_completed(futures):
                 entries[futures[future]] = future.result()
     entries = {
@@ -436,10 +477,18 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
         )
         for url, source_ids in references.items()
     }
+    successful = {
+        url: dict(entry)
+        for url, entry in entries.items()
+        if entry.get("status") == "fetched" and entry.get("content_sha256")
+    }
+    if successful:
+        _store_shared_entries({**shared_entries, **successful})
     if (
-            isinstance(existing, dict)
-            and existing.get("schema_version") == SCHEMA_VERSION
-            and existing.get("entries") == entries):
+        isinstance(existing, dict)
+        and existing.get("schema_version") == SCHEMA_VERSION
+        and existing.get("entries") == entries
+    ):
         return existing
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -465,19 +514,16 @@ def validate_source_relevance_cache(payload, expected_references):
             errors.append(f"source relevance cache 缺少 URL: {url}")
             continue
         if entry.get("status") != "fetched":
-            errors.append(
-                f"source relevance cache 抓取失败: {url}: {entry.get('error', '')}")
+            errors.append(f"source relevance cache 抓取失败: {url}: {entry.get('error', '')}")
         if not entry.get("content_sha256"):
             errors.append(f"source relevance cache 缺少内容哈希: {url}")
         if not entry.get("title") and not entry.get("excerpt"):
             errors.append(f"source relevance cache 缺少标题或摘录: {url}")
         if entry.get("relevance_status") == "unconfirmed":
-            errors.append(
-                f"source relevance cache 语义相关性未确认: {url}")
+            errors.append(f"source relevance cache 语义相关性未确认: {url}")
         missing_refs = set(source_ids) - set(entry.get("source_ids", []) or [])
         if missing_refs:
-            errors.append(
-                f"source relevance cache URL 引用不完整: {url}: {sorted(missing_refs)}")
+            errors.append(f"source relevance cache URL 引用不完整: {url}: {sorted(missing_refs)}")
     extra = sorted(set(entries) - set(expected_references))
     if extra:
         errors.append(f"source relevance cache 包含未引用 URL: {extra}")

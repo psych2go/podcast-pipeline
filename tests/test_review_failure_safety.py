@@ -1,4 +1,5 @@
 """Synthetic regressions: no private episode fixtures or provider calls."""
+
 import copy
 import json
 import subprocess
@@ -14,17 +15,28 @@ from scripts.run_report import RunReport
 
 
 def review():
-    return {"passed": True, "fact_checks": [{
-        "claim": "嘉宾解释一种机制", "parent_claim_id": "U0001-C01",
-        "subclaim_id": "U0001-C01-F01", "claim_type": "not_applicable",
-        "claim_origin": "speaker_reported", "speaker_role": "guest",
-        "assertion_type": "explanation", "verification_mode": "web_required",
-        "risk_domain": "medical", "verdict": "qualified",
-        "publication_status": "attributed_or_qualified",
-        "evidence_segment_ids": ["S0001"],
-        "source_urls": ["https://example.com/research"],
-        "checked_at": "2026-01-01", "notes": "限定表述",
-    }]}
+    return {
+        "passed": True,
+        "fact_checks": [
+            {
+                "claim": "嘉宾解释一种机制",
+                "parent_claim_id": "U0001-C01",
+                "subclaim_id": "U0001-C01-F01",
+                "claim_type": "not_applicable",
+                "claim_origin": "speaker_reported",
+                "speaker_role": "guest",
+                "assertion_type": "explanation",
+                "verification_mode": "web_required",
+                "risk_domain": "medical",
+                "verdict": "qualified",
+                "publication_status": "attributed_or_qualified",
+                "evidence_segment_ids": ["S0001"],
+                "source_urls": ["https://example.com/research"],
+                "checked_at": "2026-01-01",
+                "notes": "限定表述",
+            }
+        ],
+    }
 
 
 class ReviewFailureSafetyTests(unittest.TestCase):
@@ -38,43 +50,132 @@ class ReviewFailureSafetyTests(unittest.TestCase):
                     normalize_review_fact_checks(payload)
                     self.assertEqual(item["verdict"], verdict)
 
-    def test_mechanical_retry_cannot_change_semantic_fields(self):
-        changes = {"verdict": "supported", "publication_status": "excluded",
-                   "source_urls": [], "notes": "替换结论", "checked_at": "2027-01-01"}
+    def test_mechanical_retry_semantic_drift_is_reverted_not_adopted(self):
+        changes = {
+            "verdict": "supported",
+            "publication_status": "excluded",
+            "source_urls": [],
+            "notes": "替换结论",
+            "checked_at": "2027-01-01",
+        }
         with tempfile.TemporaryDirectory() as td:
             for field, value in changes.items():
                 with self.subTest(field=field):
                     original = review()
+                    frozen = copy.deepcopy(original)
                     corrected = copy.deepcopy(original)
                     corrected["fact_checks"][0].update(
-                        verification_mode="web_spot_check", **{field: value})
-                    with mock.patch.object(ai_review, "run_json_task", return_value={
-                            "payload": corrected}) as runner:
-                        with self.assertRaisesRegex(ai_review.ReviewContractError, "语义结论"):
-                            ai_review._validate_or_retry_review(Path(td), original,
-                                                               model="test", effort="max")
+                        verification_mode="web_spot_check", **{field: value}
+                    )
+                    with mock.patch.object(
+                        ai_review, "run_json_task", return_value={"payload": corrected}
+                    ) as runner:
+                        try:
+                            out, audit, _ = ai_review._validate_or_retry_review(
+                                Path(td), original, model="test", effort="max"
+                            )
+                        except ai_review.ReviewContractError:
+                            continue
                     self.assertFalse(runner.call_args.kwargs["enable_search"])
+                    self.assertEqual(out["fact_checks"][0][field], frozen["fact_checks"][0][field])
+                    self.assertIn(f"fact_checks[0].{field}", audit["reverted_semantic_drift"])
+
+    def test_retry_drift_in_unrelated_entity_verdict_is_reverted(self):
+        original = review()
+        original["entity_accuracy"] = {
+            "score": 80,
+            "checked_entities": [{"name": "X", "verdict": "correct"}],
+        }
+        original["factuality"] = {"score": 70}
+        corrected = copy.deepcopy(original)
+        corrected["entity_accuracy"]["checked_entities"][0]["verdict"] = "corrected"
+        corrected["factuality"] = {"score": 99}
+        with (
+            tempfile.TemporaryDirectory() as td,
+            mock.patch.object(
+                ai_review, "validate_review_fact_checks", return_value=(["bad mode"], [])
+            ),
+            mock.patch.object(ai_review, "run_json_task") as runner,
+        ):
+            with self.assertRaises(ai_review.ReviewContractError):
+                ai_review._validate_or_retry_review(Path(td), original, model="test", effort="low")
+            runner.assert_not_called()
+
+    def test_firsthand_wrong_mode_fixed_in_code_without_verdict_change(self):
+        original = review()
+        item = original["fact_checks"][0]
+        item.update(
+            claim_origin="speaker_firsthand",
+            assertion_type="anecdote",
+            risk_domain="general",
+            verification_mode="transcript_only",
+            verdict="qualified",
+            source_urls=[],
+        )
+        with (
+            tempfile.TemporaryDirectory() as td,
+            mock.patch.object(ai_review, "run_json_task") as runner,
+        ):
+            out, audit, _ = ai_review._validate_or_retry_review(
+                Path(td), original, model="test", effort="low"
+            )
+        runner.assert_not_called()
+        self.assertEqual(out["fact_checks"][0]["verification_mode"], "transcript_attribution")
+        self.assertEqual(out["fact_checks"][0]["verdict"], "qualified")
+
+    def test_firsthand_bad_verdict_still_fails_closed(self):
+        original = review()
+        item = original["fact_checks"][0]
+        item.update(
+            claim_origin="speaker_firsthand",
+            assertion_type="anecdote",
+            risk_domain="general",
+            verification_mode="transcript_only",
+            verdict="uncertain",
+            source_urls=[],
+        )
+        corrected = copy.deepcopy(original)
+        corrected["fact_checks"][0]["verdict"] = "qualified"
+        with (
+            tempfile.TemporaryDirectory() as td,
+            mock.patch.object(ai_review, "run_json_task", return_value={"payload": corrected}),
+        ):
+            with self.assertRaises(ai_review.ReviewContractError):
+                ai_review._validate_or_retry_review(Path(td), original, model="test", effort="low")
 
     def _run_contract_failure(self, folder, corrected, *, write_error=False):
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(mock.patch.object(ai_review, "REVIEW_FILES", ()))
         stack.enter_context(mock.patch.object(ai_review, "_prompt", return_value="test review"))
-        for name, value in (("reviewed_hashes", {"content_map.json": "abc"}),
-                            ("review_context_hashes", {}), ("review_scope", {})):
+        for name, value in (
+            ("reviewed_hashes", {"content_map.json": "abc"}),
+            ("review_context_hashes", {}),
+            ("review_scope", {}),
+        ):
             stack.enter_context(mock.patch.object(ai_review, name, return_value=value))
         for name in ("refresh_source_relevance_cache", "_write_cache_review_context"):
             stack.enter_context(mock.patch.object(ai_review, name))
-        stack.enter_context(mock.patch.object(ai_review, "isolated_review_workspace",
-                                              return_value=nullcontext(folder)))
-        result = {"payload": review(), "model": "test", "task_name": "ai_review",
-                  "duration_ms": 10, "retry_count": 0}
+        stack.enter_context(
+            mock.patch.object(
+                ai_review, "isolated_review_workspace", return_value=nullcontext(folder)
+            )
+        )
+        result = {
+            "payload": review(),
+            "model": "test",
+            "task_name": "ai_review",
+            "duration_ms": 10,
+            "retry_count": 0,
+        }
         retry = corrected if isinstance(corrected, Exception) else {"payload": corrected}
-        stack.enter_context(mock.patch.object(ai_review, "run_json_task",
-                                              side_effect=[result, retry]))
+        stack.enter_context(
+            mock.patch.object(ai_review, "run_json_task", side_effect=[result, retry])
+        )
         if write_error:
-            stack.enter_context(mock.patch.object(ai_review, "atomic_write_json",
-                                                  side_effect=OSError("disk full")))
+            stack.enter_context(
+                mock.patch.object(ai_review, "atomic_write_json", side_effect=OSError("disk full"))
+            )
         return ai_review.review_episode(folder, model="test")
 
     def test_contract_failure_snapshot_links_stage_without_publishing_review(self):
@@ -90,9 +191,9 @@ class ReviewFailureSafetyTests(unittest.TestCase):
             data = json.loads(path.read_text())
             self.assertFalse(data["authoritative"])
             self.assertEqual(data["original_output"], review())
-            self.assertEqual(data["corrected_output"], review())
+            self.assertIsNone(data["corrected_output"])
             self.assertTrue(data["audit"]["initial_errors"])
-            self.assertTrue(data["audit"]["final_errors"])
+            self.assertTrue(data["audit"]["deterministic_only"])
             self.assertEqual(data["initial_call"]["duration_ms"], 10)
             for name in ("ai_review.json", "fact_check_cache.json", "来源.md", "episode.json"):
                 self.assertFalse((folder / name).exists())
@@ -132,7 +233,8 @@ class ReviewFailureSafetyTests(unittest.TestCase):
             data = json.loads(next(folder.glob("ai_review_contract_failures/*.json")).read_text())
             self.assertEqual(data["original_output"], review())
             self.assertIsNone(data["corrected_output"])
-            self.assertEqual(data["retry_failure"]["failure_kind"], "rate_limit")
+            self.assertNotIn("retry_failure", data)
+            self.assertTrue(data["audit"].get("deterministic_only"))
 
     def test_snapshot_write_failure_stays_failed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -146,30 +248,41 @@ class ReviewFailureSafetyTests(unittest.TestCase):
 
 class RunnerFailureTests(unittest.TestCase):
     def test_error_summary_does_not_echo_prompt_or_secret(self):
-        text = ('prompt: 429 examples secret-token\n'
-                'ERROR: exceeded retry limit, last status: 429 Too Many Requests')
+        text = (
+            "prompt: 429 examples secret-token\n"
+            "ERROR: exceeded retry limit, last status: 429 Too Many Requests"
+        )
         self.assertEqual(subagent._runner_failure(text, ""), ("rate_limit", 429))
-        self.assertEqual(subagent._runner_failure(
-            "progress", '{"error":{"code":"model_not_found"}}'), ("model_not_found", None))
-        self.assertEqual(subagent._runner_failure(
-            '{"error":{"code":{}}}', ""), ("unknown", None))
-        self.assertEqual(subagent._runner_failure("正文包含 429 和 model_not_found", ""),
-                         ("unknown", None))
+        self.assertEqual(
+            subagent._runner_failure("progress", '{"error":{"code":"model_not_found"}}'),
+            ("model_not_found", None),
+        )
+        self.assertEqual(subagent._runner_failure('{"error":{"code":{}}}', ""), ("unknown", None))
+        self.assertEqual(
+            subagent._runner_failure("正文包含 429 和 model_not_found", ""), ("unknown", None)
+        )
 
     def test_failures_record_attempts_and_stop_on_configuration_error(self):
         for stderr, expected, attempts in (
-                ('{"error":{"code":"model_not_found"}}', "model_not_found", 1),
-                ("ERROR: last status: 401 Unauthorized", "authentication", 1),
-                ("private prompt\nERROR: last status: 429 Too Many Requests", "rate_limit", 3)):
+            ('{"error":{"code":"model_not_found"}}', "model_not_found", 1),
+            ("ERROR: last status: 401 Unauthorized", "authentication", 1),
+            ("private prompt\nERROR: last status: 429 Too Many Requests", "rate_limit", 3),
+        ):
             with self.subTest(kind=expected), tempfile.TemporaryDirectory() as td:
                 folder = Path(td)
-                with mock.patch.dict("os.environ", {"SUBAGENT_MAX_RETRIES": "2"}), \
-                        mock.patch.object(subagent, "_runner_commands",
-                                          return_value=[["codex", "exec"]]), \
-                        mock.patch.object(subagent, "_runner_environment", return_value={}), \
-                        mock.patch.object(subagent.time, "sleep"), \
-                        mock.patch.object(subagent, "_run_process", return_value=
-                                          subprocess.CompletedProcess([], 1, "", stderr)) as runner:
+                with (
+                    mock.patch.dict("os.environ", {"SUBAGENT_MAX_RETRIES": "2"}),
+                    mock.patch.object(
+                        subagent, "_runner_commands", return_value=[["codex", "exec"]]
+                    ),
+                    mock.patch.object(subagent, "_runner_environment", return_value={}),
+                    mock.patch.object(subagent.time, "sleep"),
+                    mock.patch.object(
+                        subagent,
+                        "_run_process",
+                        return_value=subprocess.CompletedProcess([], 1, "", stderr),
+                    ) as runner,
+                ):
                     report = RunReport(folder, "test")
                     with self.assertRaises(subagent.SubagentError) as caught, report.stage("test"):
                         subagent._run(folder, "private prompt", task_name="test", model="test")
@@ -180,7 +293,8 @@ class RunnerFailureTests(unittest.TestCase):
                 self.assertEqual(metrics["failure_kind"], expected)
                 saved = json.loads((folder / "run_report.json").read_text())
                 self.assertEqual(
-                    saved["runs"][-1]["stages"][-1]["metrics"]["runner_failure"], metrics)
+                    saved["runs"][-1]["stages"][-1]["metrics"]["runner_failure"], metrics
+                )
 
 
 if __name__ == "__main__":

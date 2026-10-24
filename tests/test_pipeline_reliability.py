@@ -57,23 +57,25 @@ def review_payload():
         "tts": {"passed": True},
         "publish": {"passed": True},
         "issues": [],
-        "fact_checks": [{
-            "claim": "嘉宾提出用产品责任促进 AI 安全",
-            "parent_claim_id": "U0001-C01",
-            "subclaim_id": "U0001-C01-F01",
-            "claim_type": "guest_opinion",
-            "claim_origin": "speaker_firsthand",
-            "speaker_role": "guest",
-            "assertion_type": "recommendation",
-            "verification_mode": "transcript_attribution",
-            "risk_domain": "legal",
-            "verdict": "qualified",
-            "publication_status": "attributed_or_qualified",
-            "evidence_segment_ids": ["S0001"],
-            "source_urls": [],
-            "checked_at": "2026-08-23T00:00:00Z",
-            "notes": "节目中的治理建议。",
-        }],
+        "fact_checks": [
+            {
+                "claim": "嘉宾提出用产品责任促进 AI 安全",
+                "parent_claim_id": "U0001-C01",
+                "subclaim_id": "U0001-C01-F01",
+                "claim_type": "guest_opinion",
+                "claim_origin": "speaker_firsthand",
+                "speaker_role": "guest",
+                "assertion_type": "recommendation",
+                "verification_mode": "transcript_attribution",
+                "risk_domain": "legal",
+                "verdict": "qualified",
+                "publication_status": "attributed_or_qualified",
+                "evidence_segment_ids": ["S0001"],
+                "source_urls": [],
+                "checked_at": "2026-08-23T00:00:00Z",
+                "notes": "节目中的治理建议。",
+            }
+        ],
     }
 
 
@@ -82,22 +84,28 @@ class CondensedCoverageTests(unittest.TestCase):
         content_map = {
             "units": [
                 {
-                    "id": "U0001", "status": "included",
-                    "importance": "high", "claims": ["required"],
+                    "id": "U0001",
+                    "status": "included",
+                    "importance": "high",
+                    "claims": ["required"],
                 },
                 {
-                    "id": "U0002", "status": "condensed",
-                    "importance": "medium", "claims": ["notes only"],
+                    "id": "U0002",
+                    "status": "condensed",
+                    "importance": "medium",
+                    "claims": ["notes only"],
                 },
             ],
         }
         summary = {
             "schema_version": 2,
-            "chapters": [{
-                "title": "chapter",
-                "unit_ids": ["U0001"],
-                "claim_ids": ["U0001-C01"],
-            }],
+            "chapters": [
+                {
+                    "title": "chapter",
+                    "unit_ids": ["U0001"],
+                    "claim_ids": ["U0001-C01"],
+                }
+            ],
             "notes_claim_ids": ["U0001-C01", "U0002-C01"],
         }
         report = coverage_report(content_map, summary)
@@ -121,78 +129,105 @@ class CorrectedClaimEvidenceTests(unittest.TestCase):
                     {"id": "S0002", "text": "raw two"},
                 ],
             }
-            items = [{
-                "segment_id": segment["id"],
-                "corrected_text": segment["text"],
-                "status": "unchanged",
-                "change_types": [],
-                "verification": "not_required",
-                "unresolved": [],
-            } for segment in transcript["segments"]]
+            items = [
+                {
+                    "segment_id": segment["id"],
+                    "corrected_text": segment["text"],
+                    "status": "unchanged",
+                    "change_types": [],
+                    "verification": "not_required",
+                    "unresolved": [],
+                }
+                for segment in transcript["segments"]
+            ]
             manifest = build_manifest(transcript, items)
             (folder / "correction_manifest.json").write_text(
-                json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+                json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+            )
             (folder / "转录_纠错.txt").write_text(
                 render_corrected_transcript(transcript, manifest),
                 encoding="utf-8",
             )
-            aligned = claim_evidence._corrected_segment_texts(
-                folder, transcript)
-            payloads = claim_evidence._unit_payloads({
-                "units": [{
-                    "id": "U0001", "status": "included",
-                    "topic": "topic", "claims": ["claim"],
-                    "evidence": {"segment_ids": ["S0002"]},
-                }],
-            }, transcript, folder=folder)
+            aligned = claim_evidence._corrected_segment_texts(folder, transcript)
+            payloads = claim_evidence._unit_payloads(
+                {
+                    "units": [
+                        {
+                            "id": "U0001",
+                            "status": "included",
+                            "topic": "topic",
+                            "claims": ["claim"],
+                            "evidence": {"segment_ids": ["S0002"]},
+                        }
+                    ],
+                },
+                transcript,
+                folder=folder,
+            )
         self.assertEqual(aligned["S0002"], "raw two")
-        self.assertEqual(
-            payloads[0]["segments"][0]["corrected_text"], "raw two")
+        self.assertEqual(payloads[0]["segments"][0]["corrected_text"], "raw two")
 
     def test_corrected_paragraphs_align_to_segment_ids(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
             (folder / "转录_纠错.txt").write_text(
-                "corrected one\n\ncorrected two", encoding="utf-8")
+                "corrected one\n\ncorrected two", encoding="utf-8"
+            )
             transcript = {
                 "segments": [
                     {"id": "S0001", "text": "raw one"},
                     {"id": "S0002", "text": "raw two"},
                 ],
             }
-            aligned = claim_evidence._corrected_segment_texts(
-                folder, transcript)
-            payloads = claim_evidence._unit_payloads({
-                "units": [{
-                    "id": "U0001", "status": "included",
-                    "topic": "topic", "claims": ["claim"],
-                    "evidence": {"segment_ids": ["S0002"]},
-                }],
-            }, transcript, folder=folder)
+            aligned = claim_evidence._corrected_segment_texts(folder, transcript)
+            payloads = claim_evidence._unit_payloads(
+                {
+                    "units": [
+                        {
+                            "id": "U0001",
+                            "status": "included",
+                            "topic": "topic",
+                            "claims": ["claim"],
+                            "evidence": {"segment_ids": ["S0002"]},
+                        }
+                    ],
+                },
+                transcript,
+                folder=folder,
+            )
         self.assertEqual(aligned["S0002"], "corrected two")
-        self.assertEqual(
-            payloads[0]["segments"][0]["corrected_text"],
-            "corrected two")
+        self.assertEqual(payloads[0]["segments"][0]["corrected_text"], "corrected two")
 
     def test_low_confidence_unit_is_retried_at_max_effort(self):
-        batch = [{
-            "unit_id": "U0001",
-            "claims": [{"claim_id": "U0001-C01", "text": "claim"}],
-            "segments": [{"id": "S0001", "text": "source"}],
-        }]
-        low = [{
-            "claim_id": "U0001-C01", "segment_ids": ["S0001"],
-            "confidence": "low", "rationale": "insufficient initial support",
-        }]
-        high = [{
-            "claim_id": "U0001-C01", "segment_ids": ["S0001"],
-            "confidence": "high", "rationale": "source directly supports claim",
-        }]
+        batch = [
+            {
+                "unit_id": "U0001",
+                "claims": [{"claim_id": "U0001-C01", "text": "claim"}],
+                "segments": [{"id": "S0001", "text": "source"}],
+            }
+        ]
+        low = [
+            {
+                "claim_id": "U0001-C01",
+                "segment_ids": ["S0001"],
+                "confidence": "low",
+                "rationale": "insufficient initial support",
+            }
+        ]
+        high = [
+            {
+                "claim_id": "U0001-C01",
+                "segment_ids": ["S0001"],
+                "confidence": "high",
+                "rationale": "source directly supports claim",
+            }
+        ]
         with mock.patch.object(
-                claim_evidence, "_run_batch",
-                return_value=({"claims": high}, {"duration_ms": 1})) as runner:
+            claim_evidence, "_run_batch", return_value=({"claims": high}, {"duration_ms": 1})
+        ) as runner:
             mappings, wrappers = claim_evidence._retry_low_confidence_units(
-                Path("/tmp"), batch, low, "model", 1)
+                Path("/tmp"), batch, low, "model", 1
+            )
         self.assertEqual(mappings, high)
         self.assertEqual(len(wrappers), 1)
         self.assertEqual(runner.call_args.args[3], "max")
@@ -211,35 +246,40 @@ class CorrectedClaimEvidenceTests(unittest.TestCase):
             content_map = {
                 "schema_version": 3,
                 "evidence_mode": "timestamp",
-                "units": [{
-                    "id": "U0001", "topic": "topic",
-                    "claims": ["one", "two"],
-                    "importance": "high", "status": "included",
-                    "timestamps": [[0, 10]],
-                }],
+                "units": [
+                    {
+                        "id": "U0001",
+                        "topic": "topic",
+                        "claims": ["one", "two"],
+                        "importance": "high",
+                        "status": "included",
+                        "timestamps": [[0, 10]],
+                    }
+                ],
             }
-            (folder / "transcript.raw.json").write_text(
-                json.dumps(transcript), encoding="utf-8")
-            (folder / "content_map.json").write_text(
-                json.dumps(content_map), encoding="utf-8")
+            (folder / "transcript.raw.json").write_text(json.dumps(transcript), encoding="utf-8")
+            (folder / "content_map.json").write_text(json.dumps(content_map), encoding="utf-8")
 
             def low_result(_folder, batch, _model, _effort, _index):
-                claims = [{
-                    "claim_id": claim["claim_id"],
-                    "segment_ids": [batch[0]["segments"][0]["id"]],
-                    "confidence": "low",
-                    "rationale": "source remains insufficient after review",
-                } for claim in batch[0]["claims"]]
+                claims = [
+                    {
+                        "claim_id": claim["claim_id"],
+                        "segment_ids": [batch[0]["segments"][0]["id"]],
+                        "confidence": "low",
+                        "rationale": "source remains insufficient after review",
+                    }
+                    for claim in batch[0]["claims"]
+                ]
                 return {"claims": claims}, {"duration_ms": 1}
 
-            with mock.patch.object(
-                    claim_evidence, "_run_batch", side_effect=low_result):
+            with mock.patch.object(claim_evidence, "_run_batch", side_effect=low_result):
                 with self.assertRaisesRegex(RuntimeError, "confidence=low"):
                     claim_evidence.refine_claim_evidence(
-                        folder, concurrency=1, max_batch_chars=100000)
+                        folder, concurrency=1, max_batch_chars=100000
+                    )
             progress = json.loads(
-                (folder / claim_evidence.PROGRESS_FILENAME).read_text(
-                    encoding="utf-8"))
+                (folder / claim_evidence.PROGRESS_FILENAME).read_text(encoding="utf-8")
+            )
         self.assertEqual(progress["status"], "invalid_result")
         self.assertEqual(progress["failed_unit_ids"], ["U0001"])
         self.assertEqual(progress["completed_unit_ids"], [])
@@ -255,37 +295,44 @@ class LowConfidenceClaimRepairTests(unittest.TestCase):
             content_map = {
                 "units": [
                     {
-                        "id": "U0001", "topic": "topic",
+                        "id": "U0001",
+                        "topic": "topic",
                         "claims": ["overbroad claim"],
                         "claim_modalities": ["general_claim"],
                         "evidence": {"segment_ids": ["S0001"]},
                     },
                     {
-                        "id": "U0002", "topic": "untouched",
+                        "id": "U0002",
+                        "topic": "untouched",
                         "claims": ["keep"],
                         "claim_modalities": ["actual_event"],
                         "evidence": {"segment_ids": ["S0001"]},
                     },
                 ],
             }
-            (folder / "transcript.raw.json").write_text(
-                json.dumps(raw), encoding="utf-8")
-            (folder / "content_map.json").write_text(
-                json.dumps(content_map), encoding="utf-8")
-            with mock.patch.object(agent_pipeline, "run_json_task", return_value={
-                "payload": {"units": [{
-                    "unit_id": "U0001",
-                    "claims": ["direct support"],
-                    "claim_modalities": ["actual_event"],
-                }]},
-            }):
+            (folder / "transcript.raw.json").write_text(json.dumps(raw), encoding="utf-8")
+            (folder / "content_map.json").write_text(json.dumps(content_map), encoding="utf-8")
+            with mock.patch.object(
+                agent_pipeline,
+                "run_json_task",
+                return_value={
+                    "payload": {
+                        "units": [
+                            {
+                                "unit_id": "U0001",
+                                "claims": ["direct support"],
+                                "claim_modalities": ["actual_event"],
+                            }
+                        ]
+                    },
+                },
+            ):
                 repaired = agent_pipeline._repair_low_confidence_claims(
                     folder,
                     folder / "transcript.raw.json",
                     RuntimeError("U0001-C01: confidence=low"),
                 )
-            result = json.loads(
-                (folder / "content_map.json").read_text(encoding="utf-8"))
+            result = json.loads((folder / "content_map.json").read_text(encoding="utf-8"))
         self.assertEqual(repaired, ["U0001"])
         self.assertEqual(result["units"][0]["claims"], ["direct support"])
         self.assertEqual(result["units"][1]["claims"], ["keep"])
@@ -295,26 +342,31 @@ class EvidenceEnrichmentSafetyTests(unittest.TestCase):
     def test_open_ended_last_unit_window_is_normalized_without_erasing_evidence(self):
         transcript = {
             "meta": {"timestamped": True, "evidence_mode": "timestamp"},
-            "segments": [{
-                "id": "S0001", "start": 12, "end": None,
-                "text": "final segment",
-            }],
+            "segments": [
+                {
+                    "id": "S0001",
+                    "start": 12,
+                    "end": None,
+                    "text": "final segment",
+                }
+            ],
         }
         content_map = {
             "schema_version": 3,
             "evidence_mode": "timestamp",
-            "units": [{
-                "id": "U0001",
-                "timestamps": [[12, None]],
-                "evidence": {
-                    "mode": "timestamp",
-                    "segment_ids": ["S0001"],
-                    "source_sha256": "existing",
-                },
-            }],
+            "units": [
+                {
+                    "id": "U0001",
+                    "timestamps": [[12, None]],
+                    "evidence": {
+                        "mode": "timestamp",
+                        "segment_ids": ["S0001"],
+                        "source_sha256": "existing",
+                    },
+                }
+            ],
         }
-        enriched, _transcript = enrich_content_map_evidence(
-            content_map, transcript)
+        enriched, _transcript = enrich_content_map_evidence(content_map, transcript)
         self.assertEqual(enriched["units"][0]["timestamps"], [[12, 12]])
         self.assertEqual(
             enriched["units"][0]["evidence"]["segment_ids"],
@@ -329,21 +381,27 @@ class EvidenceEnrichmentSafetyTests(unittest.TestCase):
         content_map = {
             "schema_version": 3,
             "evidence_mode": "text_anchor",
-            "units": [{
-                "id": "U0001",
-                "evidence": {"segment_ids": ["S9999"]},
-            }],
+            "units": [
+                {
+                    "id": "U0001",
+                    "evidence": {"segment_ids": ["S9999"]},
+                }
+            ],
         }
         with self.assertRaisesRegex(ValueError, "enrichment 结果为空"):
             enrich_content_map_evidence(content_map, transcript)
 
     def test_claim_payload_without_segments_fails_before_runner(self):
         with self.assertRaisesRegex(RuntimeError, "不重试"):
-            claim_evidence._validate_payload_sources([{
-                "unit_id": "U0001",
-                "claims": [{"claim_id": "U0001-C01", "text": "claim"}],
-                "segments": [],
-            }])
+            claim_evidence._validate_payload_sources(
+                [
+                    {
+                        "unit_id": "U0001",
+                        "claims": [{"claim_id": "U0001-C01", "text": "claim"}],
+                        "segments": [],
+                    }
+                ]
+            )
 
 
 class ClaimEvidenceProgressTests(unittest.TestCase):
@@ -353,33 +411,41 @@ class ClaimEvidenceProgressTests(unittest.TestCase):
             transcript = {
                 "evidence": {"revision_sha256": "revision"},
                 "meta": {"timestamped": True, "evidence_mode": "timestamp"},
-                "segments": [{
-                    "id": "S0001", "start": 0, "end": 5, "text": "source",
-                }],
+                "segments": [
+                    {
+                        "id": "S0001",
+                        "start": 0,
+                        "end": 5,
+                        "text": "source",
+                    }
+                ],
             }
             content_map = {
                 "schema_version": 3,
                 "evidence_mode": "timestamp",
-                "units": [{
-                    "id": "U0001", "topic": "topic",
-                    "claims": ["claim one", "claim two"],
-                    "importance": "high", "status": "included",
-                    "timestamps": [[0, 5]],
-                }],
+                "units": [
+                    {
+                        "id": "U0001",
+                        "topic": "topic",
+                        "claims": ["claim one", "claim two"],
+                        "importance": "high",
+                        "status": "included",
+                        "timestamps": [[0, 5]],
+                    }
+                ],
             }
-            (folder / "transcript.raw.json").write_text(
-                json.dumps(transcript), encoding="utf-8")
-            (folder / "content_map.json").write_text(
-                json.dumps(content_map), encoding="utf-8")
+            (folder / "transcript.raw.json").write_text(json.dumps(transcript), encoding="utf-8")
+            (folder / "content_map.json").write_text(json.dumps(content_map), encoding="utf-8")
             with mock.patch.object(
-                    claim_evidence, "_run_batch",
-                    side_effect=RuntimeError("runner down")):
+                claim_evidence, "_run_batch", side_effect=RuntimeError("runner down")
+            ):
                 with self.assertRaises(RuntimeError):
                     claim_evidence.refine_claim_evidence(
-                        folder, concurrency=1, max_batch_chars=100000)
+                        folder, concurrency=1, max_batch_chars=100000
+                    )
             progress = json.loads(
-                (folder / claim_evidence.PROGRESS_FILENAME).read_text(
-                    encoding="utf-8"))
+                (folder / claim_evidence.PROGRESS_FILENAME).read_text(encoding="utf-8")
+            )
         self.assertEqual(progress["status"], "partial")
         self.assertEqual(progress["evidence_revision"], "revision")
         self.assertEqual(progress["failed_unit_ids"], ["U0001"])
@@ -397,13 +463,14 @@ class ClaimEvidenceProgressTests(unittest.TestCase):
             "pending_unit_ids": [],
             "failed_unit_ids": [],
         }
-        self.assertEqual(
-            claim_evidence.validate_progress(payload, transcript), [])
+        self.assertEqual(claim_evidence.validate_progress(payload, transcript), [])
         payload["evidence_revision"] = "stale"
-        self.assertTrue(any(
-            "revision" in error
-            for error in claim_evidence.validate_progress(payload, transcript)
-        ))
+        self.assertTrue(
+            any(
+                "revision" in error
+                for error in claim_evidence.validate_progress(payload, transcript)
+            )
+        )
 
 
 class PodcastRootTests(unittest.TestCase):
@@ -420,13 +487,12 @@ class PodcastRootTests(unittest.TestCase):
             site = root / "private-site"
             catalog_path = content / "catalog.md"
             try:
-                with mock.patch.object(catalog_cli, "CONFIG_ROOT", root), \
-                        mock.patch.object(
-                            catalog_cli, "CONFIG_CONTENT_DIR", content), \
-                        mock.patch.object(
-                            catalog_cli, "CONFIG_SITE_DIR", site), \
-                        mock.patch.object(
-                            catalog_cli, "CONFIG_CATALOG", catalog_path):
+                with (
+                    mock.patch.object(catalog_cli, "CONFIG_ROOT", root),
+                    mock.patch.object(catalog_cli, "CONFIG_CONTENT_DIR", content),
+                    mock.patch.object(catalog_cli, "CONFIG_SITE_DIR", site),
+                    mock.patch.object(catalog_cli, "CONFIG_CATALOG", catalog_path),
+                ):
                     paths = catalog_cli._configure_cli_paths()
                 self.assertEqual(paths.base_dir, root)
                 self.assertEqual(catalog_core.CONTENT_DIR, content)
@@ -460,28 +526,31 @@ class ClaimEvidenceRoleTests(unittest.TestCase):
         content_map = {
             "schema_version": 3,
             "evidence_mode": "timestamp",
-            "units": [{
-                "id": "U0001",
-                "topic": "topic",
-                "claims": ["claim"],
-                "importance": "high",
-                "status": "included",
-                "timestamps": [[0, 10]],
-            }],
+            "units": [
+                {
+                    "id": "U0001",
+                    "topic": "topic",
+                    "claims": ["claim"],
+                    "importance": "high",
+                    "status": "included",
+                    "timestamps": [[0, 10]],
+                }
+            ],
         }
-        content_map, transcript = enrich_content_map_evidence(
-            content_map, transcript)
+        content_map, transcript = enrich_content_map_evidence(content_map, transcript)
         content_map, transcript = apply_claim_evidence_mapping(
             content_map,
             transcript,
-            [{
-                "claim_id": "U0001-C01",
-                "segment_ids": ["S0001", "S0002"],
-                "primary_segment_ids": ["S0001"],
-                "context_segment_ids": ["S0002"],
-                "confidence": "high",
-                "rationale": "S0001 directly supports the claim; S0002 adds context.",
-            }],
+            [
+                {
+                    "claim_id": "U0001-C01",
+                    "segment_ids": ["S0001", "S0002"],
+                    "primary_segment_ids": ["S0001"],
+                    "context_segment_ids": ["S0002"],
+                    "confidence": "high",
+                    "rationale": "S0001 directly supports the claim; S0002 adds context.",
+                }
+            ],
         )
         roles = content_map["units"][0]["claim_evidence_roles"]["C01"]
         self.assertEqual(roles["primary_segment_ids"], ["S0001"])
@@ -493,22 +562,26 @@ class RebuildPlanTests(unittest.TestCase):
     def test_transcript_basis_change_requires_rebuild(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
-            for name in (
-                    "transcript.raw.json", "content_map.json",
-                    "中文完整笔记.md", "讲书稿.md"):
-                (folder / name).write_text(
-                    '{"schema_version": 3}', encoding="utf-8")
+            for name in ("transcript.raw.json", "content_map.json", "中文完整笔记.md", "讲书稿.md"):
+                (folder / name).write_text('{"schema_version": 3}', encoding="utf-8")
             (folder / "原始转录.txt").write_text("source", encoding="utf-8")
             (folder / "转录_纠错.txt").write_text("corrected", encoding="utf-8")
-            (folder / "summary_map.json").write_text(json.dumps({
-                "transcript_basis": {
-                    "file": "转录_纠错.txt",
-                    "sha256": "stale",
-                },
-                "chapters": [],
-            }), encoding="utf-8")
-            with mock.patch("scripts.agent_pipeline.quality_metadata", return_value={
-                    "transcript_status": "已纠错"}):
+            (folder / "summary_map.json").write_text(
+                json.dumps(
+                    {
+                        "transcript_basis": {
+                            "file": "转录_纠错.txt",
+                            "sha256": "stale",
+                        },
+                        "chapters": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "scripts.agent_pipeline.quality_metadata",
+                return_value={"transcript_status": "已纠错"},
+            ):
                 plan = build_rebuild_plan(folder)
         self.assertTrue(plan["needs_content"])
         self.assertEqual(plan["reasons"], ["deterministic_validation"])
@@ -520,35 +593,49 @@ class RebuildPlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
             for needed, force in ((False, False), (True, False), (True, True)):
-                with self.subTest(needed=needed, force=force), mock.patch(
-                        "scripts.rebuild_plan.content_pipeline_needed",
-                        return_value=needed) as check:
+                with (
+                    self.subTest(needed=needed, force=force),
+                    mock.patch(
+                        "scripts.rebuild_plan.content_pipeline_needed", return_value=needed
+                    ) as check,
+                ):
                     plan = build_rebuild_plan(folder, force=force)
                     check.assert_called_once_with(folder, force=force)
                     self.assertEqual(plan["needs_content"], needed)
                     self.assertEqual(bool(plan["stages"]), needed)
                     self.assertEqual(plan["affected_units"], [])
                     self.assertEqual(plan["affected_chapters"], [])
-                    self.assertEqual(plan["reasons"], (
-                        ["force_rebuild" if force else "deterministic_validation"]
-                        if needed else []))
+                    self.assertEqual(
+                        plan["reasons"],
+                        (
+                            ["force_rebuild" if force else "deterministic_validation"]
+                            if needed
+                            else []
+                        ),
+                    )
 
     def test_process_uses_reported_decision_without_rechecking(self):
         for needed in (False, True):
             with self.subTest(needed=needed), tempfile.TemporaryDirectory() as td:
                 folder = Path(td)
                 report = RunReport(folder, "process", {})
-                with mock.patch("scripts.process.fetch_transcript", return_value=True), \
-                        mock.patch("scripts.rebuild_plan.content_pipeline_needed",
-                                   return_value=needed) as check, \
-                        mock.patch("scripts.process.run_content_pipeline",
-                                   return_value=True) as run:
-                    self.assertTrue(pipeline_process._process_impl(
-                        "source.txt", "Episode", folder, report, EpisodeOptions()))
+                with (
+                    mock.patch("scripts.process.fetch_transcript", return_value=True),
+                    mock.patch(
+                        "scripts.rebuild_plan.content_pipeline_needed", return_value=needed
+                    ) as check,
+                    mock.patch("scripts.process.run_content_pipeline", return_value=True) as run,
+                ):
+                    self.assertTrue(
+                        pipeline_process._process_impl(
+                            "source.txt", "Episode", folder, report, EpisodeOptions()
+                        )
+                    )
                 check.assert_called_once_with(folder, force=False)
                 self.assertEqual(run.call_count, int(needed))
-                stage = next(item for item in report.run["stages"]
-                             if item["name"] == "rebuild_plan")
+                stage = next(
+                    item for item in report.run["stages"] if item["name"] == "rebuild_plan"
+                )
                 self.assertEqual(stage["metrics"]["needs_content"], needed)
 
     def test_recovery_message_uses_public_entry_and_quotes_arguments(self):
@@ -558,20 +645,32 @@ class RebuildPlanTests(unittest.TestCase):
             with self.subTest(fetch_only=fetch_only), tempfile.TemporaryDirectory() as td:
                 folder = Path(td)
                 output = io.StringIO()
-                with mock.patch("sys.stdout", output), mock.patch(
-                        "scripts.process.fetch_transcript", return_value=True), mock.patch(
-                        "scripts.process.build_rebuild_plan", return_value={
+                with (
+                    mock.patch("sys.stdout", output),
+                    mock.patch("scripts.process.fetch_transcript", return_value=True),
+                    mock.patch(
+                        "scripts.process.build_rebuild_plan",
+                        return_value={
                             "needs_content": True,
-                            "reasons": ["deterministic_validation"]}), mock.patch(
-                        "scripts.process.run_content_pipeline", return_value=False):
+                            "reasons": ["deterministic_validation"],
+                        },
+                    ),
+                    mock.patch("scripts.process.run_content_pipeline", return_value=False),
+                ):
                     result = pipeline_process._process_impl(
-                        source, name, folder, None, EpisodeOptions(fetch_only=fetch_only))
+                        source, name, folder, None, EpisodeOptions(fetch_only=fetch_only)
+                    )
                 self.assertEqual(result, fetch_only)
                 message = output.getvalue()
-                command = next(line.strip() for line in message.splitlines()
-                               if line.startswith("  .venv/bin/python"))
-                self.assertEqual(shlex.split(command), [
-                    ".venv/bin/python", "scripts/process.py", source, "--name", name])
+                command = next(
+                    line.strip()
+                    for line in message.splitlines()
+                    if line.startswith("  .venv/bin/python")
+                )
+                self.assertEqual(
+                    shlex.split(command),
+                    [".venv/bin/python", "scripts/process.py", source, "--name", name],
+                )
                 self.assertNotIn("--tts-only", message)
                 self.assertNotIn("--force-refetch", message)
                 if not fetch_only:
@@ -579,17 +678,21 @@ class RebuildPlanTests(unittest.TestCase):
                     self.assertIn("已有成果保留", message)
 
     def test_fetch_only_and_disabled_auto_content_skip_planning(self):
-        for options in (EpisodeOptions(fetch_only=True),
-                        EpisodeOptions(auto_content=False)):
+        for options in (EpisodeOptions(fetch_only=True), EpisodeOptions(auto_content=False)):
             with self.subTest(options=options), tempfile.TemporaryDirectory() as td:
                 folder = Path(td)
                 # A broken downstream file must not affect source-only work.
                 (folder / "summary_map.json").write_text("{", encoding="utf-8")
-                with mock.patch("scripts.process.fetch_transcript", return_value=True), \
-                        mock.patch("scripts.process.build_rebuild_plan") as plan, \
-                        mock.patch("scripts.process.run_content_pipeline") as run:
-                    self.assertTrue(pipeline_process._process_impl(
-                        "source.txt", "Episode", folder, None, options))
+                with (
+                    mock.patch("scripts.process.fetch_transcript", return_value=True),
+                    mock.patch("scripts.process.build_rebuild_plan") as plan,
+                    mock.patch("scripts.process.run_content_pipeline") as run,
+                ):
+                    self.assertTrue(
+                        pipeline_process._process_impl(
+                            "source.txt", "Episode", folder, None, options
+                        )
+                    )
                 plan.assert_not_called()
                 run.assert_not_called()
 
@@ -599,41 +702,50 @@ class CanonicalEntityTests(unittest.TestCase):
         transcript = {"segments": [{"id": "S0001", "text": "Edward Lameh"}]}
         payload = {
             "schema_version": 1,
-            "entities": [{
-                "entity_id": "EN0001",
-                "canonical_name": "Edward Lemay",
-                "observed_names": ["Edward Lameh", "Edward LeMay"],
-                "public_aliases": [],
-                "entity_type": "person",
-                "source_urls": ["https://example.com/edward-lemay"],
-                "segment_ids": ["S0001"],
-                "confidence": "high",
-                "rationale": "Official faculty profile confirms the canonical spelling.",
-            }],
+            "entities": [
+                {
+                    "entity_id": "EN0001",
+                    "canonical_name": "Edward Lemay",
+                    "observed_names": ["Edward Lameh", "Edward LeMay"],
+                    "public_aliases": [],
+                    "entity_type": "person",
+                    "source_urls": ["https://example.com/edward-lemay"],
+                    "segment_ids": ["S0001"],
+                    "confidence": "high",
+                    "rationale": "Official faculty profile confirms the canonical spelling.",
+                }
+            ],
         }
         self.assertEqual(validate_canonical_entities(payload, transcript), [])
-        errors = public_entity_alias_errors(
-            payload, "Interview with Edward LeMay")
+        errors = public_entity_alias_errors(payload, "Interview with Edward LeMay")
         self.assertTrue(any("Edward LeMay" in error for error in errors))
-        self.assertEqual(
-            public_entity_alias_errors(payload, "Interview with Edward Lemay"), [])
+        self.assertEqual(public_entity_alias_errors(payload, "Interview with Edward Lemay"), [])
+
     def test_descriptive_observed_names_may_overlap_across_entities(self):
         transcript = {"segments": [{"id": "S0001", "text": "Stanford review MIT study"}]}
         payload = {
             "schema_version": 1,
             "entities": [
                 {
-                    "entity_id": "EN0001", "canonical_name": "Stanford University",
-                    "observed_names": ["Stanford review"], "public_aliases": [],
-                    "entity_type": "institution", "source_urls": ["https://stanford.edu"],
-                    "segment_ids": ["S0001"], "confidence": "high",
+                    "entity_id": "EN0001",
+                    "canonical_name": "Stanford University",
+                    "observed_names": ["Stanford review"],
+                    "public_aliases": [],
+                    "entity_type": "institution",
+                    "source_urls": ["https://stanford.edu"],
+                    "segment_ids": ["S0001"],
+                    "confidence": "high",
                     "rationale": "Institution named in the source context.",
                 },
                 {
-                    "entity_id": "EN0002", "canonical_name": "A 2026 Review",
-                    "observed_names": ["Stanford review"], "public_aliases": [],
-                    "entity_type": "title", "source_urls": ["https://example.com/review"],
-                    "segment_ids": ["S0001"], "confidence": "high",
+                    "entity_id": "EN0002",
+                    "canonical_name": "A 2026 Review",
+                    "observed_names": ["Stanford review"],
+                    "public_aliases": [],
+                    "entity_type": "title",
+                    "source_urls": ["https://example.com/review"],
+                    "segment_ids": ["S0001"],
+                    "confidence": "high",
                     "rationale": "Review title identified from the source context.",
                 },
             ],
@@ -643,60 +755,67 @@ class CanonicalEntityTests(unittest.TestCase):
     def test_technical_terms_do_not_force_english_canonical_spelling(self):
         payload = {
             "schema_version": 1,
-            "entities": [{
-                "entity_id": "EN0001",
-                "canonical_name": "artificial intelligence",
-                "observed_names": ["AI", "AI 模型", "人工智能"],
-                "public_aliases": ["AI", "人工智能"],
-                "entity_type": "technical_term",
-            }],
+            "entities": [
+                {
+                    "entity_id": "EN0001",
+                    "canonical_name": "artificial intelligence",
+                    "observed_names": ["AI", "AI 模型", "人工智能"],
+                    "public_aliases": ["AI", "人工智能"],
+                    "entity_type": "technical_term",
+                }
+            ],
         }
-        self.assertEqual(public_entity_alias_errors(
-            payload, "AI 模型正在改变企业软件。"), [])
+        self.assertEqual(public_entity_alias_errors(payload, "AI 模型正在改变企业软件。"), [])
 
     def test_localized_institution_name_does_not_require_alias_listing(self):
         payload = {
             "schema_version": 1,
-            "entities": [{
-                "entity_id": "EN0001",
-                "canonical_name": "Social Security",
-                "observed_names": ["社会保障"],
-                "public_aliases": ["美国社会保障制度"],
-                "entity_type": "institution",
-            }],
+            "entities": [
+                {
+                    "entity_id": "EN0001",
+                    "canonical_name": "Social Security",
+                    "observed_names": ["社会保障"],
+                    "public_aliases": ["美国社会保障制度"],
+                    "entity_type": "institution",
+                }
+            ],
         }
-        self.assertEqual(public_entity_alias_errors(
-            payload, "社会保障是美国的公共制度。"), [])
+        self.assertEqual(public_entity_alias_errors(payload, "社会保障是美国的公共制度。"), [])
 
     def test_observed_parenthetical_containing_canonical_is_not_a_leak(self):
         payload = {
             "schema_version": 1,
-            "entities": [{
-                "entity_id": "EN0001",
-                "canonical_name": "heterodoxy",
-                "observed_names": ["异端思想（heterodoxy）"],
-                "public_aliases": ["heterodoxy", "异端思想"],
-                "entity_type": "technical_term",
-            }],
+            "entities": [
+                {
+                    "entity_id": "EN0001",
+                    "canonical_name": "heterodoxy",
+                    "observed_names": ["异端思想（heterodoxy）"],
+                    "public_aliases": ["heterodoxy", "异端思想"],
+                    "entity_type": "technical_term",
+                }
+            ],
         }
-        self.assertEqual(public_entity_alias_errors(
-            payload, "这被称为异端思想（heterodoxy）。"), [])
+        self.assertEqual(
+            public_entity_alias_errors(payload, "这被称为异端思想（heterodoxy）。"), []
+        )
 
     def test_short_observed_name_inside_canonical_name_is_not_a_leak(self):
         transcript = {"segments": [{"id": "S0001", "text": "Neal Gabler"}]}
         payload = {
             "schema_version": 1,
-            "entities": [{
-                "entity_id": "EN0001",
-                "canonical_name": "Neal Gabler",
-                "observed_names": ["Neal", "Neal Gabler"],
-                "public_aliases": [],
-                "entity_type": "person",
-                "source_urls": ["https://example.com/neal-gabler"],
-                "segment_ids": ["S0001"],
-                "confidence": "high",
-                "rationale": "Official profile confirms the complete canonical name.",
-            }],
+            "entities": [
+                {
+                    "entity_id": "EN0001",
+                    "canonical_name": "Neal Gabler",
+                    "observed_names": ["Neal", "Neal Gabler"],
+                    "public_aliases": [],
+                    "entity_type": "person",
+                    "source_urls": ["https://example.com/neal-gabler"],
+                    "segment_ids": ["S0001"],
+                    "confidence": "high",
+                    "rationale": "Official profile confirms the complete canonical name.",
+                }
+            ],
         }
         self.assertEqual(validate_canonical_entities(payload, transcript), [])
         self.assertEqual(public_entity_alias_errors(payload, "Neal Gabler wrote it."), [])
@@ -706,45 +825,57 @@ class CanonicalEntityTests(unittest.TestCase):
         transcript = {"segments": [{"id": "S0001", "text": "Walt Disney"}]}
         payload = {
             "schema_version": 1,
-            "entities": [{
-                "entity_id": "EN0001",
-                "canonical_name": "Walt Disney",
-                "observed_names": ["Walt Disney"],
-                "public_aliases": ["华特·迪士尼"],
-                "entity_type": "person",
-                "source_urls": ["https://example.com/walt-disney"],
-                "segment_ids": ["S0001"],
-                "confidence": "high",
-                "rationale": "Official profile supports the localized public name.",
-            }],
+            "entities": [
+                {
+                    "entity_id": "EN0001",
+                    "canonical_name": "Walt Disney",
+                    "observed_names": ["Walt Disney"],
+                    "public_aliases": ["华特·迪士尼"],
+                    "entity_type": "person",
+                    "source_urls": ["https://example.com/walt-disney"],
+                    "segment_ids": ["S0001"],
+                    "confidence": "high",
+                    "rationale": "Official profile supports the localized public name.",
+                }
+            ],
         }
         self.assertEqual(validate_canonical_entities(payload, transcript), [])
-        self.assertEqual(
-            public_entity_alias_errors(payload, "华特·迪士尼创办了公司。"), [])
+        self.assertEqual(public_entity_alias_errors(payload, "华特·迪士尼创办了公司。"), [])
 
 
 class DetailItemCoverageTests(unittest.TestCase):
     def test_low_priority_detail_may_be_mapped_when_notes_use_it(self):
-        content_map = normalize_detail_items({
-            "units": [
-                {
-                    "id": "U0001", "status": "included", "importance": "high",
-                    "claims": ["required"], "numbers": ["required number"],
-                    "examples": [],
-                },
-                {
-                    "id": "U0002", "status": "condensed", "importance": "low",
-                    "claims": ["optional"], "numbers": ["optional number"],
-                    "examples": [],
-                },
-            ],
-        })
+        content_map = normalize_detail_items(
+            {
+                "units": [
+                    {
+                        "id": "U0001",
+                        "status": "included",
+                        "importance": "high",
+                        "claims": ["required"],
+                        "numbers": ["required number"],
+                        "examples": [],
+                    },
+                    {
+                        "id": "U0002",
+                        "status": "condensed",
+                        "importance": "low",
+                        "claims": ["optional"],
+                        "numbers": ["optional number"],
+                        "examples": [],
+                    },
+                ],
+            }
+        )
         summary = {
             "schema_version": 2,
-            "chapters": [{
-                "title": "chapter", "unit_ids": ["U0001"],
-                "claim_ids": ["U0001-C01"],
-            }],
+            "chapters": [
+                {
+                    "title": "chapter",
+                    "unit_ids": ["U0001"],
+                    "claim_ids": ["U0001-C01"],
+                }
+            ],
             "notes_claim_ids": ["U0001-C01", "U0002-C01"],
             "notes_number_ids": ["U0001-N01", "U0002-N01"],
             "notes_example_ids": [],
@@ -752,24 +883,33 @@ class DetailItemCoverageTests(unittest.TestCase):
         self.assertTrue(coverage_report(content_map, summary)["passed"])
 
     def test_number_and_example_ids_are_stable_and_required_in_notes(self):
-        content_map = normalize_detail_items({
-            "units": [{
-                "id": "U0001", "status": "included", "importance": "high",
-                "claims": ["claim"],
-                "numbers": ["2009", "70%"],
-                "examples": ["example"],
-            }],
-        })
+        content_map = normalize_detail_items(
+            {
+                "units": [
+                    {
+                        "id": "U0001",
+                        "status": "included",
+                        "importance": "high",
+                        "claims": ["claim"],
+                        "numbers": ["2009", "70%"],
+                        "examples": ["example"],
+                    }
+                ],
+            }
+        )
         self.assertEqual(
             unit_detail_ids(content_map, "number"),
             ["U0001-N01", "U0001-N02"],
         )
         summary = {
             "schema_version": 2,
-            "chapters": [{
-                "title": "chapter", "unit_ids": ["U0001"],
-                "claim_ids": ["U0001-C01"],
-            }],
+            "chapters": [
+                {
+                    "title": "chapter",
+                    "unit_ids": ["U0001"],
+                    "claim_ids": ["U0001-C01"],
+                }
+            ],
             "notes_claim_ids": ["U0001-C01"],
             "notes_number_ids": ["U0001-N01", "U0001-N02"],
             "notes_example_ids": ["U0001-E01"],
@@ -817,116 +957,130 @@ class SourceRelevanceTests(unittest.TestCase):
             return False
 
         def stream(self, method, url, **kwargs):
-            self.requests.append({
-                "method": method,
-                "url": url,
-                **kwargs,
-            })
+            self.requests.append(
+                {
+                    "method": method,
+                    "url": url,
+                    **kwargs,
+                }
+            )
             return self.responses.pop(0)
 
     def test_private_and_resolved_private_source_urls_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "非公网地址"):
-            source_relevance._validate_public_source_url(
-                "http://127.0.0.1/private")
-        private_resolution = [(
-            source_relevance.socket.AF_INET,
-            source_relevance.socket.SOCK_STREAM,
-            6,
-            "",
-            ("10.0.0.8", 443),
-        )]
+            source_relevance._validate_public_source_url("http://127.0.0.1/private")
+        private_resolution = [
+            (
+                source_relevance.socket.AF_INET,
+                source_relevance.socket.SOCK_STREAM,
+                6,
+                "",
+                ("10.0.0.8", 443),
+            )
+        ]
         with mock.patch.object(
-                source_relevance.socket, "getaddrinfo",
-                return_value=private_resolution):
+            source_relevance.socket, "getaddrinfo", return_value=private_resolution
+        ):
             with self.assertRaisesRegex(ValueError, "非公网地址"):
-                source_relevance._validate_public_source_url(
-                    "https://internal.example/private")
+                source_relevance._validate_public_source_url("https://internal.example/private")
 
     def test_public_redirect_to_private_address_is_rejected(self):
-        client = self._FakeClient([
-            self._FakeResponse(
-                302,
-                "http://93.184.216.34/start",
-                headers={"location": "http://127.0.0.1/secret"},
-            ),
-        ])
-        with mock.patch.object(
-                source_relevance.httpx, "Client", return_value=client):
+        client = self._FakeClient(
+            [
+                self._FakeResponse(
+                    302,
+                    "http://93.184.216.34/start",
+                    headers={"location": "http://127.0.0.1/secret"},
+                ),
+            ]
+        )
+        with mock.patch.object(source_relevance.httpx, "Client", return_value=client):
             with self.assertRaisesRegex(ValueError, "非公网地址"):
-                source_relevance._fetch_source(
-                    "http://93.184.216.34/start")
+                source_relevance._fetch_source("http://93.184.216.34/start")
         self.assertEqual(
             client.requests[0]["url"],
             "http://93.184.216.34:80/start",
         )
 
     def test_hostname_connection_is_pinned_to_validated_address(self):
-        client = self._FakeClient([
-            self._FakeResponse(
-                200,
-                "https://93.184.216.34:443/article",
-                headers={"content-type": "text/plain"},
-                chunks=[b"public source"],
+        client = self._FakeClient(
+            [
+                self._FakeResponse(
+                    200,
+                    "https://93.184.216.34:443/article",
+                    headers={"content-type": "text/plain"},
+                    chunks=[b"public source"],
+                ),
+            ]
+        )
+        public_resolution = [
+            (
+                source_relevance.socket.AF_INET,
+                source_relevance.socket.SOCK_STREAM,
+                6,
+                "",
+                ("93.184.216.34", 443),
+            )
+        ]
+        with (
+            mock.patch.object(
+                source_relevance.socket, "getaddrinfo", return_value=public_resolution
             ),
-        ])
-        public_resolution = [(
-            source_relevance.socket.AF_INET,
-            source_relevance.socket.SOCK_STREAM,
-            6,
-            "",
-            ("93.184.216.34", 443),
-        )]
-        with mock.patch.object(
-                source_relevance.socket, "getaddrinfo",
-                return_value=public_resolution), mock.patch.object(
-                source_relevance.httpx, "Client", return_value=client) as factory:
-            result = source_relevance._fetch_source(
-                "https://source.example/article")
+            mock.patch.object(source_relevance.httpx, "Client", return_value=client) as factory,
+        ):
+            result = source_relevance._fetch_source("https://source.example/article")
         request = client.requests[0]
         self.assertEqual(request["url"], "https://93.184.216.34:443/article")
         self.assertEqual(request["headers"], {"Host": "source.example"})
-        self.assertEqual(
-            request["extensions"], {"sni_hostname": "source.example"})
+        self.assertEqual(request["extensions"], {"sni_hostname": "source.example"})
         self.assertEqual(result["final_url"], "https://source.example/article")
         self.assertFalse(factory.call_args.kwargs["trust_env"])
 
     def test_source_response_body_is_stream_bounded(self):
-        client = self._FakeClient([
-            self._FakeResponse(
-                200,
-                "http://93.184.216.34/large",
-                headers={"content-type": "text/plain"},
-                chunks=[b"x" * source_relevance.MAX_SOURCE_BYTES, b"y"],
-            ),
-        ])
-        with mock.patch.object(
-                source_relevance.httpx, "Client", return_value=client):
+        client = self._FakeClient(
+            [
+                self._FakeResponse(
+                    200,
+                    "http://93.184.216.34/large",
+                    headers={"content-type": "text/plain"},
+                    chunks=[b"x" * source_relevance.MAX_SOURCE_BYTES, b"y"],
+                ),
+            ]
+        )
+        with mock.patch.object(source_relevance.httpx, "Client", return_value=client):
             with self.assertRaisesRegex(ValueError, "超过"):
-                source_relevance._fetch_source(
-                    "http://93.184.216.34/large")
+                source_relevance._fetch_source("http://93.184.216.34/large")
 
     def test_cache_materializes_title_excerpt_hash_and_references(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
-            (folder / "editorial_corrections.json").write_text(json.dumps({
-                "schema_version": 1,
-                "corrections": [{
-                    "correction_id": "EC0001",
-                    "source_urls": ["https://example.com/study"],
-                }],
-            }), encoding="utf-8")
+            (folder / "editorial_corrections.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "corrections": [
+                            {
+                                "correction_id": "EC0001",
+                                "source_urls": ["https://example.com/study"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             def fetcher(url):
                 return {
-                    "status": "fetched", "http_status": 200,
-                    "final_url": url, "content_type": "text/html",
+                    "status": "fetched",
+                    "http_status": 200,
+                    "final_url": url,
+                    "content_type": "text/html",
                     "title": "Relationship study",
                     "excerpt": "This study examines relationship satisfaction.",
                     "content_sha256": "a" * 64,
                 }
 
-            payload = refresh_source_relevance_cache(
-                folder, fetcher=fetcher)
+            payload = refresh_source_relevance_cache(folder, fetcher=fetcher)
             refs = expected_source_references(folder)
         self.assertEqual(validate_source_relevance_cache(payload, refs), [])
         entry = payload["entries"]["https://example.com/study"]
@@ -935,27 +1089,32 @@ class SourceRelevanceTests(unittest.TestCase):
 
     def test_tracking_parameters_are_removed_from_cache_identity(self):
         self.assertEqual(
-            normalize_source_url(
-                "HTTPS://Example.COM/report.pdf?utm_source=x&cid=abc#page=2"),
+            normalize_source_url("HTTPS://Example.COM/report.pdf?utm_source=x&cid=abc#page=2"),
             "https://example.com/report.pdf",
         )
 
         self.assertEqual(
-            normalize_source_url(
-                "https://example.com/data?source=primary&utm_medium=email"),
+            normalize_source_url("https://example.com/data?source=primary&utm_medium=email"),
             "https://example.com/data?source=primary",
         )
 
     def test_recent_fetch_error_is_reused_until_retry_ttl(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
-            (folder / "editorial_corrections.json").write_text(json.dumps({
-                "schema_version": 1,
-                "corrections": [{
-                    "correction_id": "EC0001",
-                    "source_urls": ["https://example.com/unavailable"],
-                }],
-            }), encoding="utf-8")
+            (folder / "editorial_corrections.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "corrections": [
+                            {
+                                "correction_id": "EC0001",
+                                "source_urls": ["https://example.com/unavailable"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
             attempts = []
 
             def fetcher(url):
@@ -963,11 +1122,9 @@ class SourceRelevanceTests(unittest.TestCase):
                 raise TimeoutError("temporary timeout")
 
             first = refresh_source_relevance_cache(folder, fetcher=fetcher)
-            first_text = (folder / "source_relevance_cache.json").read_text(
-                encoding="utf-8")
+            first_text = (folder / "source_relevance_cache.json").read_text(encoding="utf-8")
             second = refresh_source_relevance_cache(folder, fetcher=fetcher)
-            second_text = (folder / "source_relevance_cache.json").read_text(
-                encoding="utf-8")
+            second_text = (folder / "source_relevance_cache.json").read_text(encoding="utf-8")
         self.assertEqual(len(attempts), 1)
         self.assertEqual(first_text, second_text)
         self.assertEqual(first["entries"], second["entries"])
@@ -981,13 +1138,18 @@ class SourceRelevanceTests(unittest.TestCase):
             "schema_version": 1,
             "entries": {
                 "https://example.com/study": {
-                    "status": "error", "error": "timeout",
-                    "source_ids": ["EC0001"], "content_sha256": "",
-                    "title": "", "excerpt": "",
+                    "status": "error",
+                    "error": "timeout",
+                    "source_ids": ["EC0001"],
+                    "content_sha256": "",
+                    "title": "",
+                    "excerpt": "",
                 },
                 "https://example.com/extra": {
-                    "status": "fetched", "source_ids": [],
-                    "content_sha256": "b" * 64, "title": "extra",
+                    "status": "fetched",
+                    "source_ids": [],
+                    "content_sha256": "b" * 64,
+                    "title": "extra",
                     "excerpt": "extra",
                 },
             },
@@ -1001,31 +1163,35 @@ class EditorialCorrectionTests(unittest.TestCase):
     def test_correction_requires_real_claim_and_source(self):
         payload = {
             "schema_version": 1,
-            "corrections": [{
-                "correction_id": "EC0001",
-                "claim_id": "U0001-C01",
-                "episode_statement": "节目称股份进入信托。",
-                "public_treatment": "公开资料只支持治理股票。",
-                "verdict": "corrected",
-                "source_urls": ["https://example.com/official"],
-                "checked_at": "2026-08-23T00:00:00Z",
-                "risk_domain": "financial",
-            }],
+            "corrections": [
+                {
+                    "correction_id": "EC0001",
+                    "claim_id": "U0001-C01",
+                    "episode_statement": "节目称股份进入信托。",
+                    "public_treatment": "公开资料只支持治理股票。",
+                    "verdict": "corrected",
+                    "source_urls": ["https://example.com/official"],
+                    "checked_at": "2026-08-23T00:00:00Z",
+                    "risk_domain": "financial",
+                }
+            ],
         }
-        self.assertEqual(
-            validate_editorial_corrections(
-                payload, valid_claim_ids={"U0001-C01"}), [])
+        self.assertEqual(validate_editorial_corrections(payload, valid_claim_ids={"U0001-C01"}), [])
         payload["corrections"][0]["source_urls"] = []
-        errors = validate_editorial_corrections(
-            payload, valid_claim_ids={"U0001-C01"})
+        errors = validate_editorial_corrections(payload, valid_claim_ids={"U0001-C01"})
         self.assertTrue(any("公开来源" in error for error in errors))
 
 
 class ReviewMechanicalRetryTests(unittest.TestCase):
     def _workspace(self, folder):
-        (folder / "content_map.json").write_text(json.dumps({
-            "units": [{"id": "U0001", "claims": ["claim"]}],
-        }), encoding="utf-8")
+        (folder / "content_map.json").write_text(
+            json.dumps(
+                {
+                    "units": [{"id": "U0001", "claims": ["claim"]}],
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def test_mechanical_retry_fixes_contract_without_changing_semantics(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1037,21 +1203,30 @@ class ReviewMechanicalRetryTests(unittest.TestCase):
             check = corrected["fact_checks"][0]
             check["verification_mode"] = "safety_cross_check"
             check["source_urls"] = ["https://example.com/legal-safety"]
-            with mock.patch.object(ai_review, "run_json_task", return_value={
-                "payload": corrected,
-                "duration_ms": 1,
-                "retry_count": 0,
-            }) as runner:
+            with mock.patch.object(
+                ai_review,
+                "run_json_task",
+                return_value={
+                    "payload": corrected,
+                    "duration_ms": 1,
+                    "retry_count": 0,
+                },
+            ) as runner:
                 result, audit, wrapper = ai_review._validate_or_retry_review(
-                    folder, first, model="", effort="max")
-        self.assertEqual(audit["retry_count"], 1)
-        self.assertEqual(audit["final_errors"], [])
+                    folder, first, model="", effort="max"
+                )
+        # verification_mode for a sourced high-risk recommendation is now
+        # fixed deterministically, so no model retry (which could drift
+        # frozen fields) is needed.
+        self.assertEqual(audit["retry_count"], 0)
+        self.assertEqual(audit["post_fix_errors"], [])
+        self.assertEqual(len(audit["deterministic_mode_fixes"]), 1)
         self.assertEqual(
             result["fact_checks"][0]["verification_mode"],
             "safety_cross_check",
         )
-        self.assertIsNotNone(wrapper)
-        runner.assert_called_once()
+        self.assertIsNone(wrapper)
+        runner.assert_not_called()
 
     def test_mechanical_retry_cannot_flip_review_verdict(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1061,14 +1236,16 @@ class ReviewMechanicalRetryTests(unittest.TestCase):
             corrected = copy.deepcopy(first)
             corrected["passed"] = False
             corrected["fact_checks"][0]["verification_mode"] = "safety_cross_check"
-            corrected["fact_checks"][0]["source_urls"] = [
-                "https://example.com/legal-safety"]
-            with mock.patch.object(ai_review, "run_json_task", return_value={
-                "payload": corrected,
-            }):
-                with self.assertRaisesRegex(RuntimeError, "语义结论"):
-                    ai_review._validate_or_retry_review(
-                        folder, first, model="", effort="max")
+            corrected["fact_checks"][0]["source_urls"] = ["https://example.com/legal-safety"]
+            with mock.patch.object(
+                ai_review,
+                "run_json_task",
+                return_value={
+                    "payload": corrected,
+                },
+            ):
+                with self.assertRaisesRegex(RuntimeError, "无法机械修复"):
+                    ai_review._validate_or_retry_review(folder, first, model="", effort="max")
 
 
 class TtsDisplaySpokenTests(unittest.TestCase):
@@ -1079,18 +1256,20 @@ class TtsDisplaySpokenTests(unittest.TestCase):
                 "这是足够长的导览文本。\n\n## a16z\n\na16z 投资了 AI。",
                 encoding="utf-8",
             )
-            (folder / "tts_lexicon.json").write_text(json.dumps({
-                "a16z": "A 十六 Z",
-                "AI": "A I",
-            }), encoding="utf-8")
+            (folder / "tts_lexicon.json").write_text(
+                json.dumps(
+                    {
+                        "a16z": "A 十六 Z",
+                        "AI": "A I",
+                    }
+                ),
+                encoding="utf-8",
+            )
             plan = build_tts_plan(folder, "讲书稿.md")
         self.assertTrue(plan)
         self.assertTrue(all(item.get("display_sha256") for item in plan))
         self.assertTrue(all(item.get("spoken_sha256") for item in plan))
-        self.assertTrue(any(
-            item["display_sha256"] != item["spoken_sha256"]
-            for item in plan
-        ))
+        self.assertTrue(any(item["display_sha256"] != item["spoken_sha256"] for item in plan))
 
 
 if __name__ == "__main__":
