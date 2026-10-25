@@ -398,6 +398,13 @@ def deduplicate_summary_units(summary_map):
                           for cid in set(chapter.get("claim_ids", []) or []))
             if uid not in owners or overlap > owners[uid][1]:
                 owners[uid] = (index, overlap)
+    # Do not strand a real prose chapter without evidence. Such a package
+    # needs authored chapter regrouping, not destructive bookkeeping. Leave
+    # duplicate references intact so validation can feed them back to the writer.
+    if any(chapter.get("unit_ids") and not any(
+            owners[uid][0] == index for uid in chapter["unit_ids"])
+            for index, chapter in enumerate(chapters)):
+        return False
     changed = False
     for index, chapter in enumerate(chapters):
         original = list(chapter.get("unit_ids", []) or [])

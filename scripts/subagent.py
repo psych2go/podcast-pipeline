@@ -331,6 +331,7 @@ def _stage_category(task_name):
 
 WRITING_THINKING_TASKS = {
     "content_writing",
+    "content_writing_contract_repair",
     "review_content_revision",
     "repair_low_confidence_claims",
     "content_depth_repair",

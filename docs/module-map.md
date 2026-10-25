@@ -103,6 +103,9 @@ transcript.raw.json + 原始转录.txt
 - `content_map.json` 的语义变化会令事实台账、写作和 review 失效。
 - 纠错稿、实体表或事实台账变化会令写作输入绑定失效。
 - 讲稿、笔记或 summary map 变化会令 AI review 和 quality report 失效。
+- 内容恢复也须在别名、TTS 数字修复后重新最终化并绑定磁盘正文哈希；拒审后的
+  文件变化不代表合同有效，复用仍须完整校验。生成的无效 summary 最多反馈写作者
+  两轮，去重不得清空章节证据，耗尽仍阻断并保留独立审查要求。
 - 最终朗读文本或 TTS 配置变化会令 TTS manifest 和音频缓存失效。
 - 页面、音频或 release provenance 变化必须重新执行远端发布验收。
 
