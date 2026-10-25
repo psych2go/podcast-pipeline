@@ -444,6 +444,9 @@ def refresh_source_relevance_cache(folder, *, fetcher=None, force=False):
     path = folder / CACHE_FILENAME
     if not references:
         if path.exists():
+            existing = _load_json(path, {})
+            if existing.get("schema_version") == SCHEMA_VERSION and existing.get("entries") == {}:
+                return existing
             payload = {
                 "schema_version": SCHEMA_VERSION,
                 "updated_at": datetime.now(UTC).isoformat(),

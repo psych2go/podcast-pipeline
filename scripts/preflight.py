@@ -119,11 +119,11 @@ def quality_gate(
         return True
 
     try:
-        # Preflight is the last repair point before strict validation.  Force
-        # a metadata refresh, then remove citations that remain unconfirmed.
+        # Reuse current source evidence; forcing a network refresh here would
+        # invalidate a valid review on every TTS/HTML retry.
         # The second refresh re-stamps the cache against the reduced reference
         # set before the quality report is built.
-        relevance_cache = refresh_source_relevance_cache(folder, force=True)
+        relevance_cache = refresh_source_relevance_cache(folder)
         citation_repair = repair_unconfirmed_source_citations(
             folder, relevance_cache
         )
@@ -133,7 +133,7 @@ def quality_gate(
                 + ", ".join(citation_repair["removed_urls"]),
                 flush=True,
             )
-            refresh_source_relevance_cache(folder, force=True)
+            refresh_source_relevance_cache(folder)
     except Exception as exc:
         print(
             f"[质量门][警告] 来源相关性缓存刷新/修复失败，将按现有缓存校验: {exc}",

@@ -452,6 +452,30 @@ def enrich_summary_map_evidence(summary_map, notes_text, content_map, briefing_t
     if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION:
         summary_map.setdefault("notes_number_ids", [])
         summary_map.setdefault("notes_example_ids", [])
+        # Recover bookkeeping only when the complete detail is actually in
+        # notes. Equivalent deterministic TTS number spellings are accepted;
+        # a bare matching digit elsewhere is never sufficient.
+        from scripts.validator import normalize_tts_digits
+
+        def comparable(text):
+            return re.sub(r"\s+", "", normalize_tts_digits(str(text))).casefold()
+
+        normalized_notes = comparable(notes_text)
+        for kind, field in (("number", "notes_number_ids"), ("example", "notes_example_ids")):
+            allowed = unit_detail_ids(content_map, kind, purpose="notes")
+            for unit in content_map.get("units", []):
+                item_field = "number_items" if kind == "number" else "example_items"
+                for item in unit.get(item_field, []) or []:
+                    detail_id = f"{unit['id']}-{item['id']}"
+                    text = comparable(item.get("text", ""))
+                    numeric = "零一二三四五六七八九十百千万亿点"
+                    pattern = (f"(?<![{numeric}])" if text[:1] in numeric and text else "")
+                    pattern += re.escape(text)
+                    if text and text[-1] in numeric:
+                        pattern += f"(?![{numeric}])"
+                    if (detail_id in allowed and text and re.search(pattern, normalized_notes)
+                            and detail_id not in summary_map[field]):
+                        summary_map[field].append(detail_id)
     normalize_summary_claim_ids(summary_map)
     if briefing_text is not None:
         chapters = briefing_chapters(briefing_text)

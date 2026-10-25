@@ -283,12 +283,26 @@ def _is_transcription_task(task_name):
     return False
 
 
+def _pi_provider():
+    return (os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
+            or os.environ.get("PI_PROVIDER", "").strip()
+            or "openai-codex")
+
+
+def _pi_model(model):
+    """Apply provider overrides to legacy Codex model strings too."""
+    if not model:
+        return model
+    provider, separator, name = model.partition("/")
+    if not separator:
+        return f"{_pi_provider()}/{model}"
+    if provider == "openai-codex":
+        return f"{_pi_provider()}/{name}"
+    return model
+
+
 def _pi_default_model(task_name=None):
     """Resolve pi provider/model; transcription never forces astra."""
-    provider = (
-        os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
-        or os.environ.get("PI_PROVIDER", "").strip()
-    )
     model = (
         os.environ.get("SUBAGENT_PI_MODEL", "").strip() or os.environ.get("PI_MODEL", "").strip()
     )
@@ -299,21 +313,12 @@ def _pi_default_model(task_name=None):
             or os.environ.get("SUBAGENT_CORRECTION_MODEL", "").strip()
         )
         if transcription:
-            if "/" in transcription:
-                return transcription
-            provider = provider or "openai-codex"
-            return f"{provider}/{transcription}"
-        if provider and model and "/" not in model:
-            return f"{provider}/{model}"
-        return model or None
+            return _pi_model(transcription)
+        return _pi_model(model) or None
     # Non-transcription pi path: default to gpt-6-astra unless explicitly set.
     if not model:
         model = "gpt-6-astra"
-    if not provider:
-        provider = "openai-codex"
-    if provider and model and "/" not in model:
-        return f"{provider}/{model}"
-    return model or None
+    return _pi_model(model) or None
 
 
 def _stage_category(task_name):
@@ -363,7 +368,7 @@ def resolve_stage_strategy(task_name, *, model=None, effort=None, enable_search=
         os.environ.get("SUBAGENT_TRANSCRIPTION_MODEL", "").strip()
         or os.environ.get("SUBAGENT_CORRECTION_MODEL", "").strip()
     )
-    resolved = model or chained or knob or inherited or _pi_default_model(task_name)
+    resolved = _pi_model(model or chained or knob or inherited or _pi_default_model(task_name))
     source = (
         "explicit"
         if model
@@ -721,7 +726,26 @@ def _pi_command(
             cmd.append("--no-tools")
 
     if model and not _has_option(cmd, "--model"):
-        cmd.extend(["--model", model])
+        cmd.extend(["--model", _pi_model(model)])
+    elif _has_option(cmd, "--model"):
+        for index, value in enumerate(cmd):
+            if value == "--model" and index + 1 < len(cmd):
+                cmd[index + 1] = _pi_model(cmd[index + 1])
+            elif value.startswith("--model="):
+                cmd[index] = "--model=" + _pi_model(value.split("=", 1)[1])
+    provider_override = (os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
+                         or os.environ.get("PI_PROVIDER", "").strip())
+    if provider_override:
+        for index, value in enumerate(cmd):
+            if value == "--provider" and index + 1 < len(cmd):
+                if cmd[index + 1] == "openai-codex":
+                    cmd[index + 1] = provider_override
+            elif value == "--provider=openai-codex":
+                cmd[index] = "--provider=" + provider_override
+        if not model and not _has_option(cmd, "--model", "--provider"):
+            # Transcription may deliberately inherit Pi's model; still select
+            # the requested provider instead of inheriting a Codex provider.
+            cmd.extend(["--provider", provider_override])
     if thinking and not _has_option(cmd, "--thinking"):
         cmd.extend(["--thinking", thinking])
 
@@ -1537,7 +1561,7 @@ def _run(
                 runner_env = _runner_environment(tmp, command)
                 is_pi = _is_runner(command, "pi")
                 runner_model = (
-                    _pi_default_model(task_name) if is_pi and not model else model
+                    _pi_model(model or _pi_default_model(task_name)) if is_pi else model
                 ) or ""
                 if is_pi:
                     cmd = _pi_command(

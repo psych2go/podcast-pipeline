@@ -263,8 +263,11 @@ reviewed_files 和审查元数据，后续复审不覆盖它；成功审查不�
 `metrics.runner_failure` 留痕；诊断或快照写入失败也会令该次运行失败。
 不自动重跑历史单集或清理快照，在下次正常处理失败时按该路径查看原因。
 
-复审会根据上次 `reviewed_files` 优先检查变化文件，但最终仍执行完整发布判定，
-分数和 high/critical 阈值不变。AI review v3 要求先把复合 claim 拆为原子
+重试不因审查失败而重写仍有效且哈希匹配的写作产物。当前通过的 review 直接复用，
+当前拒审及合同失败诊断从修复阶段继续；修复完成后按输入哈希写入复审 checkpoint，
+reviewer 暂时失败不会重复执行已完成修订。来源/归因修复只重新检索和复查受影响 unit
+（整 unit 以覆盖删除后的 claim ID 重排），其余 fact_checks 原样保留；复审仍重新执行
+完整发布判定，分数和 high/critical 阈值不变。AI review v3 要求先把复合 claim 拆为原子
 subclaim，并用 `parent_claim_id` / `subclaim_id` 绑定 content_map；每个子主张分别填写：
 
 - `claim_origin`：speaker_firsthand、speaker_reported、external_source、editorial_added、episode_metadata。
@@ -280,7 +283,7 @@ unsupported/contradicted 自动改成忠实归因 verdict。机械修复仅允�
 `claim_type`、`subclaim_id`、`verification_mode`；冻结 verdict、publication_status、
 source_urls、checked_at 和 notes 等语义字段，不联网补来源。无法在这些边界内
 修复的合同不得改写原审查；上述三类异常可进入隔离的来源/稿件修复路径并独立复审，
-其他异常或用尽预算仍阻断。
+外部/编辑部事实缺来源或采用了不合规事实 verdict 也进入该路径；其他异常或用尽预算仍阻断。
 
 `claim_type` 只保留为 v2 兼容派生字段；主持人观点、专家解释、第三方指控和节目
 元数据不能再硬塞进 guest/public 类别。说话人内部数据和亲历事件不强制联网，

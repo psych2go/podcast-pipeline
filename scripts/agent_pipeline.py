@@ -1,5 +1,4 @@
 """Subagent-orchestrated content production for a single episode."""
-import hashlib
 import json
 import os
 import re
@@ -33,9 +32,10 @@ from scripts.content_map import (
 )
 from scripts.content_finalizer import (
     finalize_content_package,
+    repair_summary_structure,
     validate_tts_readiness,
 )
-from scripts.validator import integer_to_chinese
+from scripts.validator import normalize_tts_digits as _repair_tts_digits
 from scripts.episode import (
     quality_metadata,
     sync_episode_state,
@@ -326,17 +326,7 @@ def content_pipeline_needed(folder, force=False):
     ]
     if any(not path.exists() for path in required):
         return True
-    # A current rejected review is actionable input for content recovery: the
-    # next public-entry run must regenerate prose before requesting another
-    # independent review, rather than reusing the rejected package forever.
-    review_path = folder / "ai_review.json"
-    if review_path.exists():
-        try:
-            review = load_json(review_path)
-        except (OSError, ValueError, TypeError):
-            return True
-        if review.get("passed") is False:
-            return True
+    # Review failures belong to review recovery, not wholesale writing.
     if not _accepted_transcript_status(
             quality_metadata(folder).get("transcript_status")):
         return True
@@ -413,6 +403,20 @@ def _writing_artifacts_are_current(folder, *, require_bound_inputs=False):
         if not _writing_inputs_are_current(folder, summary_map):
             return False
         map_errors, _warnings = validate_content_map(content_map, transcript)
+        # Mapping defects need deterministic enrichment, not another writer.
+        # Never use this path to bless modified/stale prose hashes.
+        from scripts.content_map import briefing_chapters
+        bodies = briefing_chapters(briefing_text)
+        hashes_current = (
+            summary_map.get("notes_sha256") == body_sha256(notes_text)
+            and all(chapter.get("body_sha256") == body_sha256(bodies.get(chapter.get("title"), ""))
+                    for chapter in summary_map.get("chapters", []))
+        )
+        if hashes_current:
+            briefing_text, summary_map = repair_summary_structure(
+                briefing_text, summary_map, content_map)
+            summary_map = enrich_summary_map_evidence(
+                summary_map, notes_text, content_map, briefing_text)
         summary_errors = validate_summary_map(
             summary_map, briefing_text, content_map, notes_text)
         ledger_path = folder / PREWRITE_FACT_CHECKS_FILENAME
@@ -700,27 +704,6 @@ def _tts_lexicon_change_errors(briefing, existing, updated):
         if re.search(r"\d|[+/]", value):
             errors.append(f"TTS 词典读音仍含难读数字或符号: {key!r}")
     return errors
-
-
-_CHINESE_DIGITS = "零一二三四五六七八九"
-
-
-def _chinese_tts_number(match):
-    value = match if isinstance(match, str) else match.group(0)
-    if value.endswith("%"):
-        return "百分之" + _chinese_tts_number(value[:-1])
-    if "." in value:
-        whole, fraction = value.split(".", 1)
-        return integer_to_chinese(int(whole)) + "点" + "".join(
-            _CHINESE_DIGITS[int(digit)] for digit in fraction)
-    # Four-digit years are conventionally read digit by digit in Chinese.
-    if len(value) == 4 and 1000 <= int(value) <= 2999:
-        return "".join(_CHINESE_DIGITS[int(digit)] for digit in value)
-    return integer_to_chinese(int(value))
-
-
-def _repair_tts_digits(briefing):
-    return re.sub(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?%?", _chinese_tts_number, briefing)
 
 
 def _ensure_tts_lexicon_ready(folder, briefing_path):
@@ -1086,28 +1069,11 @@ JSON，不修改文件。""",
             if briefing_path.exists() else "",
         ) if entities_path.exists() else ["canonical_entities.json 缺失"]
         review_path = folder / "ai_review.json"
-        review_content_changed = False
-        review_rejected = False
-        if review_path.exists():
-            try:
-                previous_review = load_json(review_path)
-            except (OSError, ValueError, TypeError):
-                previous_review = {}
-            expected_files = previous_review.get("reviewed_files", {})
-            review_rejected = previous_review.get("passed") is False
-            if review_rejected and isinstance(expected_files, dict):
-                for path in (notes_path, briefing_path, summary_path):
-                    if path.exists():
-                        actual = hashlib.sha256(path.read_bytes()).hexdigest()
-                        if expected_files.get(path.name) != actual:
-                            review_content_changed = True
-                            break
         writing_ready = (
             not force
             and not alias_errors
-            # A changed hash is not evidence of a valid repair. In particular,
-            # deterministic summary rewrites must not bypass coverage checks.
-            and (not review_rejected or review_content_changed)
+            # Resume independently of review status; the review stage owns
+            # targeted semantic repairs and still enforces all thresholds.
             and _writing_artifacts_are_current(
                 folder,
                 require_bound_inputs=not (

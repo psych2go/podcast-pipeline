@@ -205,7 +205,7 @@ class ResumeFinalizationTests(unittest.TestCase):
                 writer = stack.enter_context(patch.object(
                     pipeline, "run_edit_task", side_effect=write))
                 self.assertTrue(pipeline.run_content_pipeline(folder, "Synthetic"))
-                self.assertEqual(writer.call_count, int(defect != "valid_change"))
+                self.assertEqual(writer.call_count, int(defect == "notes_hash"))
                 self.assert_finalized(folder)
                 # Content recovery never changes the verdict; independent
                 # review remains mandatory with its original stale hashes.
@@ -264,12 +264,16 @@ class ResumeFinalizationTests(unittest.TestCase):
                 else:
                     self.assertTrue(validate_summary_map(read_json(folder, "summary_map.json")))
 
-    def test_missing_detail_is_not_mechanically_filled_on_exhaustion(self):
+    def test_missing_detail_absent_from_prose_is_not_filled_on_exhaustion(self):
         with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
             folder = Path(td)
             package(folder)
             summary = read_json(folder, "summary_map.json")
             summary["notes_number_ids"] = []
+            notes = folder / "中文完整笔记.md"
+            notes.write_text("节目讨论比例，但没有保留具体数字。", encoding="utf-8")
+            from scripts.content_map import body_sha256
+            summary["notes_sha256"] = body_sha256(notes.read_text())
             atomic_write_json(folder / "summary_map.json", summary)
             self.upstream(stack)
             writer = stack.enter_context(patch.object(pipeline, "run_edit_task"))

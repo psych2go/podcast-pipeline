@@ -81,7 +81,8 @@ class ModelDefaultTests(unittest.TestCase):
                 enable_search=False, model="openai-codex/gpt-6-astra",
                 thinking="low")
             self.assertEqual(cmd[cmd.index("--thinking") + 1], "low")
-            self.assertEqual(cmd[cmd.index("--model") + 1], "openai-codex/gpt-6-astra")
+            self.assertEqual(cmd[cmd.index("--model") + 1],
+                             f"{subagent._pi_provider()}/gpt-6-astra")
 
 
 class PtyWrapTests(unittest.TestCase):
