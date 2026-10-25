@@ -50,6 +50,9 @@
 - 写作复用在上游阶段完成后验证，而不是按“是否重新生成过上游文件”判断。
   修复后的复用必须具有当前版本的 `writing_inputs` 绑定且全部校验通过；
   缺少绑定的历史稿在修复路径上仍重写，`--force-refetch` 仍强制重建。
+  被拒审稿件的文件变化不能绕过上述校验；未变化的拒审稿仍须重写。
+  复用路径也必须在实体别名、TTS 数字等修复完成后重新最终化，从磁盘重读
+  笔记和讲稿，再刷新 summary 正文哈希、转录基准及写作输入绑定。
 - 后台叙述检查只机械拦截明确的本稿编辑决策，不无条件封禁“审查过程”等
   正常领域词。独立 AI 终审负责结合语境区分节目内容与流水线后台叙述。
   抓取后继续处理和内容编排返回失败的提示均给出 `process.py` 恢复命令，
@@ -340,7 +343,22 @@ AI 不检查 HTML、MP3、R2 或 Pages；这些机械状态由确定性流程负
 
 机械归一化只派生 `claim_type`，不改 verdict。受限机械重试只允许修改
 `claim_type`、`subclaim_id`、`verification_mode`，冻结事实结论、发布状态、
-来源 URL、核查日期和 notes，不允许联网补证据。合同仍不满足则阻断。
+来源 URL、核查日期和 notes，不允许在原审查中联网补证据或翻转 verdict。
+`review_repair.py` 对高风险建议缺安全来源、指控缺原始文件 URL、一手信息归因
+verdict 不合规这三类合同异常调用 `review_contract_repair.py`：在隔离工作区用
+只读 subagent 检索，主流程取回公开页面并复现引文；有效线索写入已有的
+`editorial_corrections.json`，不视为已核实结论。找不到来源则最小化软化、明确
+节目真实说话人归因，或删除不能安全保留的主张；无安全来源的建议不能只加归因。
+删除时同步 claim/number/example、summary、预写作台账及逐 claim evidence 的 ID，
+原始转录、segment 和 unit 证据保留用于来源问责。校验失败不提交暂存修复。
+修复与普通审查共用默认最多两轮预算，每轮修复后必须重新独立审查；耗尽仍阻断，
+不能复用旧的 passed=true。summary 重复 unit 映射按 claim 重叠最多的章节保留，
+平局取首章，并迁移其依赖 ID，不删来源证据；最终质量门仍检查覆盖与章节有效性。
+若去重会使任一章节失去全部 unit，则保留原映射交给写作者重组，不静默清空。
+内容生成阶段的 summary 合同校验失败最多反馈给写作者两次，只允许修改笔记、
+讲稿及 summary；每轮重新最终化、绑定哈希并使用原验证器校验，耗尽仍阻断。
+缺少数字或例子映射不能靠机械填充 ID 放行，正文须实际覆盖，后续独立审查仍必需。
+`deterministic_evidence_enrichment` 的 `writing_contract_repair_rounds` 记录成功恢复的轮数。
 合同失败的首次原始输出、修复输出（若有）、校验错误、输入哈希和调用指标
 写到本地 `ai_review_contract_failures/<stage-id>.json`，并由
 `run_report.metrics.contract_failure_snapshot` 链接。该诊断标记

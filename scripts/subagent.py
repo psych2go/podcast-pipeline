@@ -329,10 +329,21 @@ def _stage_category(task_name):
     return "other"
 
 
+WRITING_THINKING_TASKS = {
+    "content_writing",
+    "content_writing_contract_repair",
+    "review_content_revision",
+    "repair_low_confidence_claims",
+    "content_depth_repair",
+}
+
+
 def _thinking_strategy(task_name):
     category = _stage_category(task_name)
     scoped = f"SUBAGENT_{category.upper()}_THINKING"
     keys = [scoped] if category in {"review", "claim", "fact_check"} else []
+    if str(task_name or "").lower() in WRITING_THINKING_TASKS:
+        keys = ["SUBAGENT_PI_THINKING_WRITING", *keys]
     for key in [*keys, "SUBAGENT_PI_THINKING", "SUBAGENT_THINKING"]:
         value = os.environ.get(key, "").strip().lower()
         if value:

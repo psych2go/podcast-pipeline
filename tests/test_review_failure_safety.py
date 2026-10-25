@@ -101,6 +101,40 @@ class ReviewFailureSafetyTests(unittest.TestCase):
                 ai_review._validate_or_retry_review(Path(td), original, model="test", effort="low")
             runner.assert_not_called()
 
+    def test_contract_repair_renumbers_and_downgrades_reported_fact(self):
+        original = review()
+        first = copy.deepcopy(original["fact_checks"][0])
+        first.update(
+            claim="节目转述 DARPA 计划",
+            parent_claim_id="U0001-C01",
+            subclaim_id="U0001-C01-F02",
+            claim_origin="speaker_reported",
+            assertion_type="fact",
+            verification_mode="transcript_attribution",
+            verdict="supported",
+            publication_status="attributed_or_qualified",
+        )
+        second = copy.deepcopy(first)
+        second.update(claim="节目转述参与公司数量", subclaim_id="U0001-C01-F04")
+        original["fact_checks"] = [first, second]
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            (folder / "content_map.json").write_text(json.dumps({
+                "units": [{"id": "U0001", "claims": ["a"]}],
+            }), encoding="utf-8")
+            with mock.patch.object(ai_review, "run_json_task") as runner:
+                out, audit, _ = ai_review._validate_or_retry_review(
+                    folder, original, model="test", effort="low"
+                )
+        runner.assert_not_called()
+        items = out["fact_checks"]
+        self.assertEqual(
+            [item["subclaim_id"] for item in items],
+            ["U0001-C01-F01", "U0001-C01-F02"],
+        )
+        self.assertEqual(items[0]["verdict"], "uncertain")
+        self.assertEqual(audit["deterministic_mode_fixes"][0]["field"], "subclaim_id")
+
     def test_firsthand_wrong_mode_fixed_in_code_without_verdict_change(self):
         original = review()
         item = original["fact_checks"][0]

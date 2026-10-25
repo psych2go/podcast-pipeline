@@ -6,7 +6,7 @@ import re
 from contextlib import nullcontext
 from pathlib import Path
 
-from scripts.atomic_io import atomic_write_json
+from scripts.atomic_io import atomic_write_bytes, atomic_write_json
 from scripts.canonical_entities import (
     GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
     SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
@@ -15,6 +15,7 @@ from scripts.canonical_entities import (
     validate_canonical_entities,
 )
 from scripts.claim_evidence import refine_claim_evidence
+from scripts.sections import chapter_sections
 from scripts.content_map import (
     body_sha256,
     enrich_content_map_evidence,
@@ -79,6 +80,86 @@ def _env_positive_int(name, default):
     if value < 1:
         raise ValueError(f"{name} 必须 >= 1，当前值: {value}")
     return value
+
+
+def _chapter_depths(text):
+    """Use the same chapter parser as the strict depth gate."""
+    return [
+        (section.title, len(re.findall(r"[一-鿿]", section.body)))
+        for section in chapter_sections(text)
+    ]
+
+
+def _depth_score(text):
+    sizes = [size for _title, size in _chapter_depths(text)]
+    if not sizes:
+        return (0.0, 0)
+    return (sum(sizes) / len(sizes), min(sizes))
+
+
+def build_depth_repair_request(folder, targets):
+    """Build a writable briefing expansion request with read-only inputs."""
+    folder = Path(folder)
+    briefing_path = folder / "讲书稿.md"
+    return {
+        "prompt": f"""只扩写最薄的章节（优先：{', '.join(targets)}），使每章达到深度门槛。必须基于已有
+证据和 summary_map 的主张补充具体因果链、反例或限定条件；禁止套话、重复、
+审查过程语言和无证据的新事实。只修改讲书稿.md，保留所有章节标题和证据对应关系。""",
+        "allowed_files": [briefing_path],
+        "input_files": [
+            folder / "summary_map.json",
+            folder / "content_map.json",
+            folder / "中文完整笔记.md",
+        ],
+        "required_files": [briefing_path],
+    }
+
+
+def _finalize_with_depth_repair(folder):
+    """Finalize content, retaining only monotonic bounded depth expansions."""
+    folder = Path(folder)
+    max_expansions = max(0, int(os.environ.get("CONTENT_DEPTH_REPAIR_MAX_ROUNDS", "4")))
+    briefing_path = folder / "讲书稿.md"
+    best_text = briefing_path.read_bytes()
+    best_decoded = best_text.decode("utf-8")
+    best_score = _depth_score(best_decoded)
+    best_titles = [title for title, _size in _chapter_depths(best_decoded)]
+    for attempt in range(max_expansions + 1):
+        try:
+            return finalize_content_package(folder)
+        except Exception as exc:
+            if ("章节深度未通过" not in str(exc)
+                    or attempt >= max_expansions):
+                raise
+            before = briefing_path.read_bytes()
+            before_text = before.decode("utf-8")
+            chapters = _chapter_depths(before_text)
+            request = build_depth_repair_request(folder, [
+                title for title, _size in sorted(chapters, key=lambda item: item[1])[:2]
+            ])
+            run_edit_task(
+                folder,
+                request["prompt"],
+                task_name="content_depth_repair",
+                allowed_files=request["allowed_files"],
+                input_files=request["input_files"],
+                required_files=request["required_files"],
+            )
+            candidate = briefing_path.read_bytes()
+            candidate_text = candidate.decode("utf-8")
+            candidate_titles = [title for title, _size in _chapter_depths(candidate_text)]
+            candidate_score = _depth_score(candidate_text)
+            # Never accept a retry that makes the package thinner or changes
+            # chapter boundaries; the next retry then targets the same deficit.
+            if (
+                    candidate_titles != best_titles
+                    or candidate_score <= best_score):
+                atomic_write_bytes(briefing_path, best_text)
+            else:
+                best_text = candidate
+                best_score = candidate_score
+                best_titles = candidate_titles
+    raise RuntimeError("章节深度修复循环意外结束")
 
 
 def _transcript_basis(folder):
@@ -1006,14 +1087,15 @@ JSON，不修改文件。""",
         ) if entities_path.exists() else ["canonical_entities.json 缺失"]
         review_path = folder / "ai_review.json"
         review_content_changed = False
+        review_rejected = False
         if review_path.exists():
             try:
                 previous_review = load_json(review_path)
             except (OSError, ValueError, TypeError):
                 previous_review = {}
             expected_files = previous_review.get("reviewed_files", {})
-            if previous_review.get("passed") is False and isinstance(
-                    expected_files, dict):
+            review_rejected = previous_review.get("passed") is False
+            if review_rejected and isinstance(expected_files, dict):
                 for path in (notes_path, briefing_path, summary_path):
                     if path.exists():
                         actual = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -1023,13 +1105,13 @@ JSON，不修改文件。""",
         writing_ready = (
             not force
             and not alias_errors
-            and (
-                review_content_changed
-                or _writing_artifacts_are_current(
-                    folder,
-                    require_bound_inputs=not (
-                        content_map_ready and entities_ready and ledger_ready),
-                )
+            # A changed hash is not evidence of a valid repair. In particular,
+            # deterministic summary rewrites must not bypass coverage checks.
+            and (not review_rejected or review_content_changed)
+            and _writing_artifacts_are_current(
+                folder,
+                require_bound_inputs=not (
+                    content_map_ready and entities_ready and ledger_ready),
             )
         )
         if writing_ready:
@@ -1085,50 +1167,69 @@ JSON，不修改文件。""",
     with _stage(run_report, "deterministic_evidence_enrichment") as stage:
         transcript = load_json(raw_path)
         content_map = load_json(content_map_path)
-        summary_path = folder / "summary_map.json"
-        notes_text = (folder / "中文完整笔记.md").read_text(encoding="utf-8")
-        finalized = finalize_content_package(folder)
-        briefing_text = finalized["briefing"]
-        summary_map = finalized["summary_map"]
-        normalization_changes = finalized["normalization_changes"]
-        alias_repairs = repair_public_entity_aliases(
-            load_json(entities_path), notes_path, folder / "讲书稿.md")
-        if alias_repairs:
+        if not writing_ready:
+            content_map, transcript = enrich_content_map_evidence(
+                content_map, transcript)
+            save_json(content_map_path, content_map)
+        # Generated mappings can violate the same contract that disallows
+        # reuse (missing details, duplicate units, empty chapters). Give the
+        # writer bounded feedback, never manufacture coverage IDs or relax the
+        # validator. Every attempt goes through all finalizers and later review.
+        max_repairs = 2
+        for repair_round in range(max_repairs + 1):
+            finalized = _finalize_with_depth_repair(folder)
+            normalization_changes = finalized["normalization_changes"]
+            alias_repairs = repair_public_entity_aliases(
+                load_json(entities_path), notes_path, briefing_path)
+            tts_readiness = _ensure_tts_lexicon_ready(folder, briefing_path)
+            # Both alias and digit repairs mutate review inputs. Finalize AFTER
+            # them, even on prose reuse, then bind the actual on-disk artifacts.
             finalized = finalize_content_package(folder)
             briefing_text = finalized["briefing"]
             summary_map = finalized["summary_map"]
             normalization_changes = merge_alias_repair_changes(
-                finalized["normalization_changes"], alias_repairs)
-        tts_readiness = _ensure_tts_lexicon_ready(
-            folder, folder / "讲书稿.md")
-        if (not writing_ready) or review_content_changed:
-            content_map, transcript = enrich_content_map_evidence(
-                content_map, transcript)
+                list(dict.fromkeys(normalization_changes
+                                   + finalized["normalization_changes"])),
+                alias_repairs)
+            notes_text = notes_path.read_text(encoding="utf-8")
             summary_map = enrich_summary_map_evidence(
-                summary_map,
-                notes_text,
-                content_map,
-                briefing_text,
-            )
+                summary_map, notes_text, content_map, briefing_text)
             summary_map["transcript_basis"] = _transcript_basis(folder)
-            save_json(content_map_path, content_map)
             summary_map["writing_inputs_version"] = WRITING_INPUTS_VERSION
             summary_map["writing_inputs"] = _writing_input_hashes(folder)
             save_json(summary_path, summary_map)
-        errors, warnings = validate_content_map(content_map, transcript)
-        summary_errors = validate_summary_map(
-            summary_map,
-            briefing_text,
-            content_map,
-            notes_text,
-        )
-        entity_alias_errors = public_entity_alias_errors(
-            load_json(entities_path), notes_text, briefing_text)
-        if errors or summary_errors or entity_alias_errors:
-            all_errors = errors + summary_errors + entity_alias_errors
-            if stage is not None:
-                stage.fail("; ".join(all_errors[:10]))
-            return False
+            errors, warnings = validate_content_map(content_map, transcript)
+            if errors:
+                if stage is not None:
+                    stage.fail("; ".join(errors[:10]))
+                return False
+            summary_errors = validate_summary_map(
+                summary_map, briefing_text, content_map, notes_text)
+            entity_alias_errors = public_entity_alias_errors(
+                load_json(entities_path), notes_text, briefing_text)
+            all_errors = summary_errors + entity_alias_errors
+            if not all_errors:
+                break
+            if repair_round == max_repairs:
+                if stage is not None:
+                    stage.fail("; ".join(all_errors[:10]))
+                return False
+            run_edit_task(
+                folder,
+                _writing_prompt() + "\n\n## 确定性合同修复\n"
+                + json.dumps(all_errors, ensure_ascii=False)
+                + "\n按证据修复正文及映射。缺数字或例子先补正文，不得仅填 ID。"
+                "每章必须有非空 unit_ids/claim_ids；同一 unit 不得跨章重复，"
+                "必要时重组章节，保留实质内容及深度，不得删除来源台账。",
+                task_name="content_writing_contract_repair",
+                allowed_files=[notes_path, briefing_path, summary_path],
+                input_files=[path for path in (
+                    raw_path, transcript_path, correction_path, content_map_path,
+                    entities_path, ledger_path, review_path,
+                ) if path.exists()],
+                required_files=[notes_path, briefing_path, summary_path],
+            )
+            writing_ready = False
         if stage is not None:
             stage.metrics.update({
                 "unit_count": len(content_map.get("units", [])),
@@ -1137,6 +1238,7 @@ JSON，不修改文件。""",
                 "tts_lexicon_entries": tts_readiness["entries"],
                 "tts_lexicon_repaired": tts_readiness["repaired"],
                 "semantic_prose_reused": writing_ready,
+                "writing_contract_repair_rounds": repair_round,
             })
 
     sync_episode_state(folder)

@@ -239,8 +239,12 @@ re-review`。自动修复只允许 summary map 最终化、确定性 TTS 词典�
 claim evidence，以及带官方/一手来源、最小精确字符串和受限文件清单的实体名称替换。
 精确实体替换不得修改 `原始转录.txt`、`transcript.raw.json`、`source_excerpt`、
 segment/evidence 哈希或 claim ID；完成后必须刷新正文、summary、预写作台账绑定并独立复审。
-事实结论、医疗、数字、归因、范围和因果关系仍一律阻断。修复记录写入
-`review_repair.json`，绝不直接把 `passed` 改为 true。
+事实结论、医疗、数字、归因、范围和因果关系不得靠机械改 verdict 放行。
+高风险建议缺安全来源、指控缺来源文件 URL、一手信息归因 verdict 不合规时，
+`review_contract_repair.py` 在同一轮数上限内先用 subagent 检索公开来源并取回复现引文；
+无来源则软化/明确节目人物归因或删除主张及依赖映射，保留原始转录和 unit 证据。
+高风险建议不能仅加归因规避安全核查；所有语义修复必须再经独立审查。
+修复记录写入 `review_repair.json`，绝不直接把 `passed` 改为 true。
 
 审查返回未通过时，`review_episode()` 另存完整结果到
 `ai_review_failures/<stage-id>.json`，并在 `run_report.json` 对应 ai_review 阶段的
@@ -275,7 +279,8 @@ AI 审查修复后的合同校验与最终质量门统一调用
 unsupported/contradicted 自动改成忠实归因 verdict。机械修复仅允许
 `claim_type`、`subclaim_id`、`verification_mode`；冻结 verdict、publication_status、
 source_urls、checked_at 和 notes 等语义字段，不联网补来源。无法在这些边界内
-修复的合同继续阻断，需要通过统一入口重新独立审查。
+修复的合同不得改写原审查；上述三类异常可进入隔离的来源/稿件修复路径并独立复审，
+其他异常或用尽预算仍阻断。
 
 `claim_type` 只保留为 v2 兼容派生字段；主持人观点、专家解释、第三方指控和节目
 元数据不能再硬塞进 guest/public 类别。说话人内部数据和亲历事件不强制联网，

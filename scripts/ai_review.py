@@ -561,6 +561,8 @@ def _prompt(folder, scope=None):
 
 必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt、tts_lexicon.json、editorial_corrections.json、canonical_entities.json、source_relevance_cache.json 和 editorial_fact_checks.json。editorial_corrections.json 和 editorial_fact_checks.json 只记录外部校正，不得把其中事实伪装成 transcript evidence；canonical_entities.json 是写稿前的规范名称台账，允许写稿后的外部校正新增已正确拼写的实体；缺少条目本身只能作为库存完善建议，只有公开稿实际名称错误、主体错配或重要歧义时才能令 entity_accuracy 失败。source_relevance_cache.json 是非权威的抓取与相关性线索：通用索引、标题未出现实体名或暂时抓取失败本身不得单独形成 high/critical 或阻断发布；只有公开稿实际采用的事实缺少 fact_checks/editorial ledger 中的直接可靠来源，或来源与主张语义冲突时，才能令 factuality/publish 失败。预写作台账不是权威结论，必须独立复核其来源。
 
+editorial_corrections.json 中 purpose 为 safety_cross_check/source_document/firsthand_attribution 的条目是合同修复检索线索，必须重新打开、独立核对；不得继承其 verdict、分数或 passed。只有真实来源与当前原子主张及安全核查范围一致时，才能把 URL 写入本轮 fact_checks.source_urls。已删除的公开主张不再作为发布内容审查，但仍需核对剩余内容覆盖；一手信息必须独立检查真实说话人归因并使用符合归因规则的 verdict，不可因找到网页就标为无归因事实。
+
 审查目标：无需人工复核也能直接发布。请执行：
 1. 逐章检查全部章节和对应时间片，检查脑补、漏点、人物归属和逻辑链；不得用抽样代替最终发布判定。
    返回前必须形成穷尽式 issue inventory：实体、转录、事实、数字、归因、覆盖和 TTS 全部完成，禁止发现第一个 high 问题后停止。
@@ -752,16 +754,65 @@ def _expected_verification_mode(item):
 
 
 def _deterministic_mode_fixes(review):
-    """Fix only mechanical check-type fields whose value the contract fixes
-    uniquely (verification_mode, derived claim_type).
+    """Repair fields whose valid value is mechanically determined by the contract.
 
-    Semantic fields (verdict, sources, notes, roles, scores...) are never
-    touched, so this can never raise a score or change a conclusion.
+    Subclaim numbering is pipeline-owned.  A reported-speech fact with an
+    objective verdict is conservatively downgraded to an uncertain,
+    attributed review flag rather than published as an independently
+    established fact.
     """
     fixed = []
+    next_numbers = {}
     for index, item in enumerate(review.get("fact_checks", []) or []):
         if not isinstance(item, dict):
             continue
+        parent = item.get("parent_claim_id")
+        if parent:
+            next_numbers[parent] = next_numbers.get(parent, 0) + 1
+            expected_subclaim = f"{parent}-F{next_numbers[parent]:02d}"
+            if item.get("subclaim_id") != expected_subclaim:
+                fixed.append(
+                    {
+                        "index": index,
+                        "claim": item.get("claim"),
+                        "field": "subclaim_id",
+                        "from": item.get("subclaim_id"),
+                        "to": expected_subclaim,
+                    }
+                )
+                item["subclaim_id"] = expected_subclaim
+        if (
+                item.get("claim_origin") == "speaker_reported"
+                and item.get("assertion_type") == "fact"
+                and item.get("publication_status") != "excluded"
+                and item.get("verdict") not in {
+                    "accurately_reported", "qualified", "uncertain",
+                }
+        ):
+            old_verdict = item.get("verdict")
+            item["verdict"] = "uncertain"
+            fixed.append(
+                {
+                    "index": index,
+                    "claim": item.get("claim"),
+                    "field": "verdict",
+                    "from": old_verdict,
+                    "to": "uncertain",
+                    "reason": "reported_speech_contract_downgrade",
+                }
+            )
+            if item.get("publication_status") == "used_as_fact":
+                fixed.append(
+                    {
+                        "index": index,
+                        "claim": item.get("claim"),
+                        "field": "publication_status",
+                        "from": "used_as_fact",
+                        "to": "attributed_or_qualified",
+                        "reason": "reported_speech_contract_downgrade",
+                    }
+                )
+                item["publication_status"] = "attributed_or_qualified"
         mode = _expected_verification_mode(item)
         if mode and item.get("verification_mode") != mode:
             fixed.append(
@@ -880,7 +931,8 @@ def _validate_or_retry_review(workspace, review, *, model, effort):
             if not errors:
                 return review, audit, None
         # Contract repair is deliberately deterministic: never ask the model to
-        # rewrite verdicts, scores, evidence, entities, or URLs.
+        # rewrite scores, evidence, entities, or URLs.  Reported-speech
+        # downgrades are conservative publication flags, not new fact claims.
         audit["retry_count"] = 0
         audit["deterministic_only"] = True
         raise RuntimeError("AI review 合同错误无法机械修复: " + "; ".join(errors[:10]))

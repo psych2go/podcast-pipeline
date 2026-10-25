@@ -95,6 +95,7 @@ STAGES = (
         owners=(
             "ai_review.py",
             "review_repair.py",
+            "review_contract_repair.py",
             "quality_report.py",
             "preflight.py",
         ),

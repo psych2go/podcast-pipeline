@@ -48,7 +48,7 @@ ASR completeness 默认保持 `report_only`（警告，不阻断），`enforce` 
 | `content_map.py`、`claim_evidence.py` | source accountability 和逐 claim 证据 | 不负责外部事实纠正 |
 | `prewrite_fact_checks.py` | 写作前原子事实核查和断点恢复 | 外部纠正保留在事实台账中 |
 | `content_finalizer.py` | 讲稿、summary map、章节和 TTS 词典最终化 | AI review 前唯一允许的确定性写回阶段 |
-| `ai_review.py`、`review_repair.py` | AI 终审和受限修复 | 修复后必须重新独立审查；机械修复冻结语义字段，合同失败诊断只留本地 `ai_review_contract_failures/` |
+| `ai_review.py`、`review_repair.py`、`review_contract_repair.py` | AI 终审和受限修复 | 机械修复冻结语义字段；指定来源/归因合同失败进入有界检索与稿件修复，必须重新独立审查；诊断只留本地 `ai_review_contract_failures/` |
 | `quality_report.py`、`preflight.py` | 确定性质量门 | 结构、哈希、证据和新鲜度是主要约束；v3 fact-check 合同复用 `claim_taxonomy.validate_review_fact_checks()`，与 AI 审查修复校验共用单一规则 |
 | `tts.py`、`html_gen.py`、`sections.py` | 音频与阅读页 | TTS 和 HTML 共用章节解析 seam |
 | `catalog.py`、`catalog_*` | 发布事务 facade 与实现 | 已按 core/site/health/triage/publish 拆分；`catalog_triage.py` 只读诊断阻断原因 |
@@ -71,7 +71,7 @@ ASR completeness 默认保持 `report_only`（警告，不阻断），`enforce` 
 | 6 | `prewrite-fact-checks` | `prewrite_fact_checks.py` | source claims、实体、纠错稿 | `editorial_fact_checks.json`、批次和进度文件 |
 | 7 | `content-writing` | `agent_pipeline.py` | content map、实体、事实台账 | `中文完整笔记.md`、`讲书稿.md`、`summary_map.json` |
 | 8 | `content-finalization` | `content_finalizer.py` | 笔记、讲稿、summary map | 最终讲稿、最终 summary map、`tts_lexicon.json` |
-| 9 | `review-and-quality` | `ai_review.py`、`review_repair.py`、`quality_report.py` | 全部内容和证据产物 | `ai_review.json`、`review_repair.json`、`quality_report.json`；审查拒绝时另存 `ai_review_failures/<stage-id>.json`；合同失败另存非权威 `ai_review_contract_failures/<stage-id>.json` |
+| 9 | `review-and-quality` | `ai_review.py`、`review_repair.py`、`review_contract_repair.py`、`quality_report.py` | 全部内容和证据产物 | `ai_review.json`、`review_repair.json`、`quality_report.json`；审查拒绝时另存 `ai_review_failures/<stage-id>.json`；合同失败另存非权威 `ai_review_contract_failures/<stage-id>.json` |
 | 10 | `tts` | `tts.py` | 通过的质量报告和最终讲稿 | 章节音频、最终 MP3、`tts_manifest.json` |
 | 11 | `release-preparation` | `process.py`、`release.py` | 最终 MP3、讲稿、Git provenance | `release.json` 和内容哈希音频 key |
 | 12 | `reader-page` | `html_gen.py`、`episode.py` | 最终讲稿、episode、release | 使用 release 音频 key 的单集 HTML |
@@ -103,6 +103,9 @@ transcript.raw.json + 原始转录.txt
 - `content_map.json` 的语义变化会令事实台账、写作和 review 失效。
 - 纠错稿、实体表或事实台账变化会令写作输入绑定失效。
 - 讲稿、笔记或 summary map 变化会令 AI review 和 quality report 失效。
+- 内容恢复也须在别名、TTS 数字修复后重新最终化并绑定磁盘正文哈希；拒审后的
+  文件变化不代表合同有效，复用仍须完整校验。生成的无效 summary 最多反馈写作者
+  两轮，去重不得清空章节证据，耗尽仍阻断并保留独立审查要求。
 - 最终朗读文本或 TTS 配置变化会令 TTS manifest 和音频缓存失效。
 - 页面、音频或 release provenance 变化必须重新执行远端发布验收。
 

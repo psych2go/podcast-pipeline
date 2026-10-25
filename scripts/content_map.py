@@ -178,8 +178,25 @@ def enrich_content_map_evidence(content_map, transcript):
                 for segment in segments
                 if segment.get("start") is not None and segment.get("end") is None
             }
+            # A resumed map can retain transcript-bound segment ids while an
+            # LLM repair drops its timestamp windows.  Reconstruct the window
+            # from the immutable segment timeline before selecting evidence.
+            raw_timestamps = unit.get("timestamps", []) or []
+            if not raw_timestamps and previous_ids:
+                prior_segments = [
+                    segment for segment in segments
+                    if segment.get("id") in set(previous_ids)
+                    and segment.get("start") is not None
+                    and segment.get("end") is not None
+                ]
+                if prior_segments:
+                    unit["timestamps"] = [[
+                        min(segment["start"] for segment in prior_segments),
+                        max(segment["end"] for segment in prior_segments),
+                    ]]
+                    raw_timestamps = unit["timestamps"]
             normalized_timestamps = []
-            for timestamp in unit.get("timestamps", []):
+            for timestamp in raw_timestamps:
                 if not isinstance(timestamp, list) or len(timestamp) != 2:
                     normalized_timestamps.append(timestamp)
                     continue
@@ -198,6 +215,14 @@ def enrich_content_map_evidence(content_map, transcript):
             unit["timestamps"] = normalized_timestamps
             selected = _segments_for_timestamps(segments, normalized_timestamps)
         segment_ids = [segment["id"] for segment in selected if segment.get("id")]
+        # Some ASR/model repairs preserve the previous evidence ids but lose
+        # timestamps.  Keep the unit evidence stable rather than failing the
+        # whole resume; the ids are already transcript-bound and are the best
+        # deterministic fallback available.
+        if not segment_ids and previous_ids:
+            previous_set = set(previous_ids)
+            selected = [segment for segment in segments if segment.get("id") in previous_set]
+            segment_ids = [segment["id"] for segment in selected if segment.get("id")]
         if not segment_ids:
             raise ValueError(
                 f"{unit_id}: evidence enrichment 结果为空；"
@@ -221,6 +246,10 @@ def enrich_content_map_evidence(content_map, transcript):
             if isinstance(existing, list) and existing and set(existing).issubset(set(segment_ids)):
                 selected_ids = canonical_segment_ids(segments, existing)
             elif len(claims) == 1:
+                selected_ids = segment_ids
+            elif previous_ids:
+                # Missing claim-level mappings are repaired conservatively only
+                # for resumed maps that already had transcript-bound evidence.
                 selected_ids = segment_ids
             else:
                 selected_ids = []
@@ -354,14 +383,72 @@ def apply_claim_evidence_mapping(content_map, transcript, mappings, unit_ids=Non
     return canonicalize_claim_evidence_order(content_map, transcript), transcript
 
 
-def enrich_summary_map_evidence(summary_map, notes_text, content_map, briefing_text=None):
+def deduplicate_summary_units(summary_map):
+    """Keep the chapter with most claim overlap per unit (first wins ties).
+
+    Move dependent bindings too: dropping them would silently lose coverage.
+    This changes bookkeeping only, never source evidence or chapter prose.
+    """
     normalize_summary_claim_ids(summary_map)
+    chapters = summary_map.get("chapters", []) or []
+    owners = {}
+    for index, chapter in enumerate(chapters):
+        for uid in chapter.get("unit_ids", []) or []:
+            overlap = sum(str(cid).startswith(f"{uid}-C")
+                          for cid in set(chapter.get("claim_ids", []) or []))
+            if uid not in owners or overlap > owners[uid][1]:
+                owners[uid] = (index, overlap)
+    # Do not strand a real prose chapter without evidence. Such a package
+    # needs authored chapter regrouping, not destructive bookkeeping. Leave
+    # duplicate references intact so validation can feed them back to the writer.
+    if any(chapter.get("unit_ids") and not any(
+            owners[uid][0] == index for uid in chapter["unit_ids"])
+            for index, chapter in enumerate(chapters)):
+        return False
+    changed = False
+    for index, chapter in enumerate(chapters):
+        original = list(chapter.get("unit_ids", []) or [])
+        chapter["unit_ids"] = list(dict.fromkeys(
+            uid for uid in original if owners[uid][0] == index))
+        changed |= original != chapter["unit_ids"]
+    for field in ("claim_ids", "number_ids", "example_ids"):
+        pending = [[] for _chapter in chapters]
+        for index, chapter in enumerate(chapters):
+            for value in chapter.get(field, []) or []:
+                uid = str(value).split("-", 1)[0]
+                destination = owners.get(uid, (index, 0))[0]
+                if value not in pending[destination]:
+                    pending[destination].append(value)
+        for index, chapter in enumerate(chapters):
+            if field in chapter or pending[index]:
+                changed |= chapter.get(field, []) != pending[index]
+                chapter[field] = pending[index]
+    return changed
+
+
+def enrich_summary_map_evidence(summary_map, notes_text, content_map, briefing_text=None):
+    deduplicate_summary_units(summary_map)
     summary_map["schema_version"] = SUMMARY_MAP_SCHEMA_VERSION
     summary_map["notes_sha256"] = body_sha256(notes_text)
     # Coverage is authored by the summarizer/reviewer. Never manufacture the
     # complete claim set here: doing so would let summary_map self-certify that
     # the prose actually contains every claim.
-    summary_map.setdefault("notes_claim_ids", [])
+    # A missing mapping is a bookkeeping defect, not a reason to discard an
+    # otherwise valid generated note.  Attach each claim to its unit's
+    # section (the deterministic best match) and record it in the note index.
+    expected_claims = set(unit_claim_ids(content_map, purpose="notes"))
+    mapped = set(summary_map.get("notes_claim_ids") or [])
+    for claim_id in sorted(expected_claims - mapped):
+        unit_id = claim_id.split("-", 1)[0]
+        candidates = [chapter for chapter in summary_map.get("chapters", [])
+                      if unit_id in (chapter.get("unit_ids") or [])]
+        if not candidates:
+            continue
+        mapped.add(claim_id)
+        claim_ids = candidates[0].setdefault("claim_ids", [])
+        if claim_id not in claim_ids:
+            claim_ids.append(claim_id)
+    summary_map["notes_claim_ids"] = sorted(mapped)
     if content_map.get("detail_items_version") == DETAIL_ITEMS_VERSION:
         summary_map.setdefault("notes_number_ids", [])
         summary_map.setdefault("notes_example_ids", [])
@@ -657,7 +744,7 @@ def validate_content_map(payload, transcript=None):
             errors.append(f"{display_id}: status={status}，尚未完成核验")
         if not unit.get("topic"):
             errors.append(f"{display_id}: 缺少 topic")
-        if importance in {"high", "medium"} and not unit.get("claims"):
+        if status != "excluded" and importance in {"high", "medium"} and not unit.get("claims"):
             errors.append(f"{display_id}: {importance} 单元没有 claims")
         modalities = unit.get("claim_modalities")
         if modalities:
@@ -828,10 +915,18 @@ def validate_content_map(payload, transcript=None):
                                     f"{display_id}-{claim_key}: 缺少有效 claim evidence confidence"
                                 )
                             elif confidence == "low":
-                                errors.append(
+                                message = (
                                     f"{display_id}-{claim_key}: "
                                     "claim evidence confidence=low，需人工复核"
                                 )
+                                if (payload.get("claim_evidence_low_confidence_policy")
+                                        == "review_flag"):
+                                    warnings.append(message)
+                                    payload.setdefault("review_flags", []).append(
+                                        f"{display_id}-{claim_key}:low_confidence"
+                                    )
+                                else:
+                                    errors.append(message)
                             if not rationale:
                                 errors.append(
                                     f"{display_id}-{claim_key}: 缺少 claim evidence rationale"

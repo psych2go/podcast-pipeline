@@ -4,6 +4,11 @@ import os
 from pathlib import Path
 
 from scripts.atomic_io import atomic_write_json
+from scripts.source_relevance import (
+    refresh_source_relevance_cache,
+    repair_unconfirmed_source_citations,
+)
+
 from scripts.quality_errors import (
     AI_REVIEW_FAILED,
     AI_REVIEW_FACT_CHECK,
@@ -19,13 +24,38 @@ from scripts.quality_errors import (
 )
 
 
+def build_quality_report(*args, **kwargs):
+    """Resolve the report builder lazily so callers can patch its module."""
+    from scripts.quality_report import build_quality_report as builder
+
+    return builder(*args, **kwargs)
+
+
 def _review_recovery_decision(report):
     details = report.get("error_details")
-    if not quality_error_alignment(report):
+    # Older resumed runs may have a report produced before structured error
+    # details were added.  Do not let that bookkeeping defect suppress the
+    # recovery that the report explicitly requests.
+    aligned = quality_error_alignment(report)
+    details_present = isinstance(details, list)
+    details = details if details_present else []
+    if details_present and not aligned:
         return False, False
     codes = [item.get("code") for item in details if isinstance(item, dict) and item.get("code")]
+    if not details_present and not codes:
+        messages = [str(message) for message in report.get("errors", [])]
+        if any("ai_review.json" in message for message in messages):
+            codes = [AI_REVIEW_MISSING]
+        if any("内容审查状态未通过: pending" in message for message in messages):
+            codes.append("content_review_status")
+    if not codes:
+        return False, False
     review_missing_or_stale = any(code in {AI_REVIEW_MISSING, AI_REVIEW_STALE} for code in codes)
-    stale = AI_REVIEW_STALE in codes
+    # A persisted failed review is actionable on resume too: the bounded
+    # review→pi revision→independent re-review loop must not require a stale
+    # hash to start repairing the rejected prose.
+    failed_review = AI_REVIEW_FAILED in codes and AI_REVIEW_MISSING not in codes
+    stale = AI_REVIEW_STALE in codes or failed_review
     stale_review_codes = AUTO_REVIEW_CODES | {
         AI_REVIEW_FAILED,
         AI_REVIEW_SECTION,
@@ -37,7 +67,9 @@ def _review_recovery_decision(report):
     }
     allowed_codes = stale_review_codes if stale else AUTO_REVIEW_CODES
     can_auto_review = (
-        review_missing_or_stale and bool(codes) and all(code in allowed_codes for code in codes)
+        (review_missing_or_stale or failed_review)
+        and bool(codes)
+        and all(code in allowed_codes for code in codes)
     )
     return review_missing_or_stale, can_auto_review
 
@@ -86,17 +118,27 @@ def quality_gate(
         )
         return True
 
-    from scripts.source_relevance import refresh_source_relevance_cache
-
     try:
-        refresh_source_relevance_cache(folder)
+        # Preflight is the last repair point before strict validation.  Force
+        # a metadata refresh, then remove citations that remain unconfirmed.
+        # The second refresh re-stamps the cache against the reduced reference
+        # set before the quality report is built.
+        relevance_cache = refresh_source_relevance_cache(folder, force=True)
+        citation_repair = repair_unconfirmed_source_citations(
+            folder, relevance_cache
+        )
+        if citation_repair.get("removed_urls"):
+            print(
+                "[质量门] 已移除刷新后仍无法确认的外部引用: "
+                + ", ".join(citation_repair["removed_urls"]),
+                flush=True,
+            )
+            refresh_source_relevance_cache(folder, force=True)
     except Exception as exc:
         print(
-            f"[质量门][警告] 来源相关性缓存刷新失败，将按现有缓存校验: {exc}",
+            f"[质量门][警告] 来源相关性缓存刷新/修复失败，将按现有缓存校验: {exc}",
             flush=True,
         )
-
-    from scripts.quality_report import build_quality_report
 
     report = build_quality_report(folder, strict=True)
     out = folder / "quality_report.json"
