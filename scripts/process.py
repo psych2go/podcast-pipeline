@@ -1117,5 +1117,15 @@ def main():
     return 0 if ok else 1
 
 
+def _main_with_auth_exit():
+    from scripts.subagent import AUTH_FAIL_EXIT_CODE, AUTH_FAIL_MARKER, PiAuthError
+
+    try:
+        return main()
+    except PiAuthError as exc:
+        print(f"[{AUTH_FAIL_MARKER}] {exc}", flush=True)
+        return AUTH_FAIL_EXIT_CODE
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_main_with_auth_exit())
