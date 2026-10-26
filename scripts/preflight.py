@@ -12,6 +12,7 @@ from scripts.source_relevance import (
 from scripts.quality_errors import (
     AI_REVIEW_FAILED,
     AI_REVIEW_FACT_CHECK,
+    AI_REVIEW_INCOMPLETE,
     AI_REVIEW_ISSUE_EVIDENCE,
     AI_REVIEW_MISSING,
     AI_REVIEW_SCORE,
@@ -58,6 +59,7 @@ def _review_recovery_decision(report):
     stale = AI_REVIEW_STALE in codes or failed_review
     stale_review_codes = AUTO_REVIEW_CODES | {
         AI_REVIEW_FAILED,
+        AI_REVIEW_INCOMPLETE,
         AI_REVIEW_SECTION,
         AI_REVIEW_SCORE,
         AI_REVIEW_SEVERE_ISSUE,

@@ -160,9 +160,18 @@ def repair_public_entity_aliases(payload, *paths):
         canonical = str(item.get("canonical_name", "")).strip()
         if not canonical:
             continue
+        allowed_aliases = {
+            str(value).strip().casefold()
+            for value in item.get("public_aliases", []) or []
+            if str(value).strip()
+        }
         for observed in item.get("observed_names", []) or []:
             observed = str(observed).strip()
             if not observed or observed.casefold() == canonical.casefold():
+                continue
+            # An observed spelling that is also an approved public alias is
+            # already valid prose; rewriting it produces "X（简称 X）" loops.
+            if observed.casefold() in allowed_aliases:
                 continue
             pattern = re.compile(
                 rf"(?<![A-Za-z0-9]){re.escape(observed)}(?![A-Za-z0-9])",
@@ -180,9 +189,14 @@ def repair_public_entity_aliases(payload, *paths):
                 (match.start(), match.end())
                 for match in re.finditer(re.escape(canonical), text, re.IGNORECASE)
             ]
-            def replace(match, canonical=canonical, canonical_spans=canonical_spans):
+            url_spans = [
+                (match.start(), match.end())
+                for match in re.finditer(r"https?://[^\s)）>\]]+", text)
+            ]
+            def replace(match, canonical=canonical, canonical_spans=canonical_spans,
+                        url_spans=url_spans):
                 if any(start <= match.start() and match.end() <= end
-                       for start, end in canonical_spans):
+                       for start, end in [*canonical_spans, *url_spans]):
                     return match.group(0)
                 return canonical
             text = pattern.sub(replace, text)

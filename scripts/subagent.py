@@ -2014,11 +2014,17 @@ def _copy_into_staging(source, destination):
     shutil.copy2(source, destination)
 
 
+_HOST_BRIDGE_REL = ".runlogs/host-bridge"
+
+
 def _validate_staging_files(staging, expected_files):
     expected = {path.as_posix() for path in expected_files}
     unexpected = []
     for path in staging.rglob("*"):
         relative = path.relative_to(staging).as_posix()
+        if relative == ".runlogs" or relative.startswith(_HOST_BRIDGE_REL + "/") or relative == _HOST_BRIDGE_REL:
+            # Host-bridge request/response files are runner plumbing, not outputs.
+            continue
         if path.is_symlink():
             unexpected.append(relative)
         elif path.is_file():
