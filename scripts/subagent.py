@@ -1741,7 +1741,8 @@ def _run(
                     else:
                         total_duration_ms += round((time.monotonic() - started) * 1000)
                         if is_pi and _is_auth_failure(result.stdout, result.stderr) and (
-                            result.returncode != 0 or not _extract_pi_response(result.stdout).strip()
+                            result.returncode != 0
+                            or not _extract_pi_response(result.stdout).strip()
                         ):
                             failure_kind, http_status = "authentication", 401
                             print(
@@ -2022,7 +2023,11 @@ def _validate_staging_files(staging, expected_files):
     unexpected = []
     for path in staging.rglob("*"):
         relative = path.relative_to(staging).as_posix()
-        if relative == ".runlogs" or relative.startswith(_HOST_BRIDGE_REL + "/") or relative == _HOST_BRIDGE_REL:
+        if (
+            relative == ".runlogs"
+            or relative == _HOST_BRIDGE_REL
+            or relative.startswith(_HOST_BRIDGE_REL + "/")
+        ):
             # Host-bridge request/response files are runner plumbing, not outputs.
             continue
         if path.is_symlink():

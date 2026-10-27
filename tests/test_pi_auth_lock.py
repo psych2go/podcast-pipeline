@@ -70,9 +70,11 @@ def test_expiring_token_probes_once(auth_env):
 
 def test_probe_auth_failure_raises(auth_env):
     write_expiry(auth_env, 0)
-    bad = lambda cmd: types.SimpleNamespace(
-        stdout="", stderr="OAuth refresh failed: invalid_grant", returncode=1
-    )
+    def bad(cmd):
+        return types.SimpleNamespace(
+            stdout="", stderr="OAuth refresh failed: invalid_grant", returncode=1
+        )
+
     with pytest.raises(PiAuthError):
         _pi_auth_refresh_under_lock(["pi"], runner=bad)
 
@@ -99,7 +101,9 @@ def test_concurrent_refresh_is_serialized(auth_env):
 
     results = []
     threads = [
-        threading.Thread(target=lambda: results.append(_pi_auth_refresh_under_lock(["pi"], runner=slow)))
+        threading.Thread(
+            target=lambda: results.append(_pi_auth_refresh_under_lock(["pi"], runner=slow))
+        )
         for _ in range(4)
     ]
     for t in threads:
