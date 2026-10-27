@@ -40,15 +40,64 @@ def contract_targets(diagnostic):
                 and (item.get("verification_mode") != "safety_cross_check"
                      or not item.get("source_urls"))):
             kind = "safety_cross_check"
-        elif assertion == "allegation" and not item.get("source_urls"):
+        elif assertion == "allegation" and (
+                not item.get("source_urls") or item.get("publication_status") == "used_as_fact"
+                or item.get("verdict") not in {
+                    "accurately_reported", "qualified", "unsupported",
+                    "contradicted", "uncertain"}):
             kind = "source_document"
         elif (item.get("claim_origin") == "speaker_firsthand"
               and assertion not in SPECIALIZED
               and (item.get("verdict") not in {"faithfully_attributed", "qualified"}
+                   or item.get("verification_mode") != "transcript_attribution"
                    or item.get("publication_status") == "used_as_fact")):
             kind = "firsthand_attribution"
+        elif (item.get("claim_origin") == "speaker_reported" and assertion == "fact"
+              and (item.get("verdict") not in {
+                       "accurately_reported", "qualified", "uncertain"}
+                   or item.get("publication_status") == "used_as_fact")):
+            kind = "firsthand_attribution"
+        elif (assertion in {"opinion", "prediction", "inference"}
+              and item.get("publication_status") == "used_as_fact"):
+            kind = "firsthand_attribution"
+        elif (item.get("claim_origin") in {"external_source", "editorial_added"}
+              and assertion == "fact" and item.get("publication_status") == "used_as_fact"
+              and (not item.get("source_urls")
+                   or item.get("verdict") not in {"supported", "qualified"})):
+            kind = "public_source"
         if kind:
             targets.append({**copy.deepcopy(item), "repair_reason": kind})
+    return targets
+
+
+def failed_review_targets(review):
+    """Source/attribution findings in an otherwise well-formed failed review."""
+    targets = contract_targets({"original_output": review})
+    issues = [i for i in review.get("issues", []) or [] if isinstance(i, dict)
+              and i.get("severity") in {"critical", "high"}]
+    semantic = [i for i in issues if re.search(
+        r"factual|attribut|safety|allegation", str(i.get("category", "")), re.I)]
+    if not semantic:
+        return targets
+    ids = set(re.findall(r"U\d+-C\d+", json.dumps(semantic, ensure_ascii=False)))
+    known = {t.get("subclaim_id") for t in targets}
+    for item in review.get("fact_checks", []) or []:
+        if (not isinstance(item, dict) or item.get("publication_status") == "excluded"
+                or item.get("subclaim_id") in known
+                or (ids and item.get("parent_claim_id") not in ids)):
+            continue
+        assertion = item.get("assertion_type")
+        if assertion == "recommendation" and item.get("risk_domain") != "general":
+            reason = "safety_cross_check"
+        elif assertion == "allegation":
+            reason = "source_document"
+        elif item.get("claim_origin") in {"speaker_firsthand", "speaker_reported"}:
+            reason = "firsthand_attribution"
+        elif assertion == "fact":
+            reason = "public_source"
+        else:
+            continue
+        targets.append({**copy.deepcopy(item), "repair_reason": reason})
     return targets
 
 
@@ -58,7 +107,8 @@ SOURCE_SCHEMA = {
             "type": "object", "properties": {
                 "parent_claim_id": {"type": "string"},
                 "purpose": {"type": "string", "enum": [
-                    "safety_cross_check", "source_document", "firsthand_attribution"]},
+                    "safety_cross_check", "source_document", "firsthand_attribution",
+                    "public_source"]},
                 "url": {"type": "string"}, "quote": {"type": "string"},
                 "explanation": {"type": "string"},
             },
@@ -86,6 +136,7 @@ def lookup_sources(workspace, targets, *, model="", effort="max"):
 safety_cross_check 必须找可靠机构的医疗/法律/金融/代码安全指导，解释适用范围，不能把通用指导
 当作节目中精确数字的证明；source_document 必须是原始文件、法院/监管/公司公告或直接报道，
 只证明指控被提出，不证明指控成立。一手信息优先公开原始声明，不能借外部数字改写嘉宾原话。
+public_source 必须为直接支持该客观事实的公开材料；找不到时不要改 verdict，后续软化或删除。
 拒绝猜测 URL、搜索结果页、首页和不相关材料。purpose 必须对应 repair_reason。
 {json.dumps(targets, ensure_ascii=False)}"""
     result = run_json_task(
@@ -220,7 +271,7 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
     from scripts.review_repair import _refresh_semantic_bindings
 
     folder = Path(folder)
-    targets = contract_targets(diagnostic)
+    targets = diagnostic.get("repair_targets") or contract_targets(diagnostic)
     if not targets:
         raise ValueError("没有可自动修复的合同阻断项")
     names = set(REVIEW_FILES + OPTIONAL_REVIEW_FILES)
@@ -336,4 +387,5 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
                     (folder / name).unlink()
             raise
     return {"action": "repair_review_contract_content", "target_count": len(targets),
-            "sources": sources, "rejected_sources": rejected, "removed_claims": removed}
+            "sources": sources, "rejected_sources": rejected, "removed_claims": removed,
+            "affected_units": sorted({t["parent_claim_id"].split("-", 1)[0] for t in targets})}

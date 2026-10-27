@@ -147,6 +147,27 @@ def _four_digit_chinese(value):
     return text
 
 
+_CHINESE_DIGITS = "零一二三四五六七八九"
+
+
+def _chinese_tts_number(match):
+    value = match if isinstance(match, str) else match.group(0)
+    if value.endswith("%"):
+        return "百分之" + _chinese_tts_number(value[:-1])
+    if "." in value:
+        whole, fraction = value.split(".", 1)
+        return integer_to_chinese(int(whole)) + "点" + "".join(
+            _CHINESE_DIGITS[int(digit)] for digit in fraction)
+    if len(value) == 4 and 1000 <= int(value) <= 2999:
+        return "".join(_CHINESE_DIGITS[int(digit)] for digit in value)
+    return integer_to_chinese(int(value))
+
+
+def normalize_tts_digits(text):
+    """Shared exact number spelling for TTS and evidence-detail matching."""
+    return re.sub(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?%?", _chinese_tts_number, text)
+
+
 def integer_to_chinese(value):
     """Convert a non-negative integer without changing its magnitude."""
     value = int(value)

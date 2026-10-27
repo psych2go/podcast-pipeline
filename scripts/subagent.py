@@ -54,6 +54,95 @@ class SubagentError(RuntimeError):
         self.failure_metrics = metrics or {}
 
 
+class PiAuthError(SubagentError):
+    """pi login is dead (refresh token consumed / logged out). Never retry."""
+
+
+AUTH_FAIL_MARKER = "SUBAGENT_AUTH_FAIL"
+AUTH_FAIL_EXIT_CODE = 77
+_AUTH_PATTERNS = (
+    re.compile(r"OAuth refresh failed", re.I),
+    re.compile(r"invalid_grant", re.I),
+    re.compile(r"refresh token has already been used", re.I),
+    re.compile(r"Use /login", re.I),
+    re.compile(r"\bnot logged in\b", re.I),
+    re.compile(r"(?:HTTP|status|last status:?)[ :]*401\b|\b401 Unauthorized", re.I),
+)
+
+
+def _is_auth_failure(*streams):
+    """True when runner output shows a dead login (never quota/empty_output)."""
+    text = "\n".join(s or "" for s in streams)
+    return any(p.search(text) for p in _AUTH_PATTERNS)
+
+
+def _pi_auth_path():
+    raw = os.environ.get("SUBAGENT_PI_AUTH_FILE", "").strip()
+    return Path(raw).expanduser() if raw else Path.home() / ".pi/agent/auth.json"
+
+
+def _pi_token_expires_ms(path, provider):
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        entry = data.get(provider) or {}
+        return int(entry.get("expires")) if entry.get("expires") is not None else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _pi_auth_refresh_under_lock(command, *, env=None, now_ms=None, runner=None):
+    """Serialize pi token refresh across parallel pipelines.
+
+    Takes an exclusive flock on SUBAGENT_PI_AUTH_LOCK (default
+    ~/.pi/agent/.auth.lock). If the provider's access token expires within
+    SUBAGENT_PI_REFRESH_MARGIN_S (default 600s), one cheap pi probe runs while
+    holding the lock so exactly one process spends the single-use refresh
+    token; the others block, then read the fresh token. Disable with
+    SUBAGENT_PI_AUTH_LOCK=off. Raises PiAuthError if the probe shows a dead login.
+    """
+    raw_lock = os.environ.get("SUBAGENT_PI_AUTH_LOCK", "").strip()
+    if raw_lock.lower() in {"0", "off", "false", "no"}:
+        return "disabled"
+    import fcntl
+
+    auth = _pi_auth_path()
+    lock = Path(raw_lock).expanduser() if raw_lock else auth.parent / ".auth.lock"
+    provider = _pi_provider()
+    margin = float(os.environ.get("SUBAGENT_PI_REFRESH_MARGIN_S", "600") or 600)
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(lock, "a")
+    except OSError:
+        return "no_lock"
+    with handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            expires = _pi_token_expires_ms(auth, provider)
+            now = now_ms if now_ms is not None else time.time() * 1000
+            if expires is not None and expires - now > margin * 1000:
+                return "fresh"
+            probe = [command[0], "--provider", provider]
+            model = os.environ.get("SUBAGENT_PI_MODEL", "").strip()
+            if model:
+                probe += ["--model", model]
+            probe += ["--no-session", "-p", "Reply with exactly: OK"]
+            run = runner or (
+                lambda c: subprocess.run(
+                    c, capture_output=True, text=True, timeout=120, env=env
+                )
+            )
+            try:
+                result = run(probe)
+            except (OSError, subprocess.TimeoutExpired):
+                return "probe_error"
+            if _is_auth_failure(result.stdout, result.stderr):
+                print(f"[subagent] {AUTH_FAIL_MARKER}: pi login invalid (probe)", flush=True)
+                raise PiAuthError("pi 登录失效（OAuth refresh 失败），需要重新 /login")
+            return "refreshed"
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def _runner_failure(stderr, stdout):
     """Recognize error records only; never echo prompts, URLs or credentials."""
     for line in reversed(((stdout or "") + "\n" + (stderr or "")).splitlines()):
@@ -218,6 +307,8 @@ def _model_candidates(task_name, model):
 
 
 def _model_fallback_allowed(exc):
+    if isinstance(exc, PiAuthError):
+        return False
     failure_kind = (getattr(exc, "failure_metrics", None) or {}).get("failure_kind")
     return failure_kind in {
         "model_not_found",
@@ -283,12 +374,26 @@ def _is_transcription_task(task_name):
     return False
 
 
+def _pi_provider():
+    return (os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
+            or os.environ.get("PI_PROVIDER", "").strip()
+            or "openai-codex")
+
+
+def _pi_model(model):
+    """Apply provider overrides to legacy Codex model strings too."""
+    if not model:
+        return model
+    provider, separator, name = model.partition("/")
+    if not separator:
+        return f"{_pi_provider()}/{model}"
+    if provider == "openai-codex":
+        return f"{_pi_provider()}/{name}"
+    return model
+
+
 def _pi_default_model(task_name=None):
     """Resolve pi provider/model; transcription never forces astra."""
-    provider = (
-        os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
-        or os.environ.get("PI_PROVIDER", "").strip()
-    )
     model = (
         os.environ.get("SUBAGENT_PI_MODEL", "").strip() or os.environ.get("PI_MODEL", "").strip()
     )
@@ -299,21 +404,12 @@ def _pi_default_model(task_name=None):
             or os.environ.get("SUBAGENT_CORRECTION_MODEL", "").strip()
         )
         if transcription:
-            if "/" in transcription:
-                return transcription
-            provider = provider or "openai-codex"
-            return f"{provider}/{transcription}"
-        if provider and model and "/" not in model:
-            return f"{provider}/{model}"
-        return model or None
+            return _pi_model(transcription)
+        return _pi_model(model) or None
     # Non-transcription pi path: default to gpt-6-astra unless explicitly set.
     if not model:
         model = "gpt-6-astra"
-    if not provider:
-        provider = "openai-codex"
-    if provider and model and "/" not in model:
-        return f"{provider}/{model}"
-    return model or None
+    return _pi_model(model) or None
 
 
 def _stage_category(task_name):
@@ -363,7 +459,7 @@ def resolve_stage_strategy(task_name, *, model=None, effort=None, enable_search=
         os.environ.get("SUBAGENT_TRANSCRIPTION_MODEL", "").strip()
         or os.environ.get("SUBAGENT_CORRECTION_MODEL", "").strip()
     )
-    resolved = model or chained or knob or inherited or _pi_default_model(task_name)
+    resolved = _pi_model(model or chained or knob or inherited or _pi_default_model(task_name))
     source = (
         "explicit"
         if model
@@ -721,7 +817,26 @@ def _pi_command(
             cmd.append("--no-tools")
 
     if model and not _has_option(cmd, "--model"):
-        cmd.extend(["--model", model])
+        cmd.extend(["--model", _pi_model(model)])
+    elif _has_option(cmd, "--model"):
+        for index, value in enumerate(cmd):
+            if value == "--model" and index + 1 < len(cmd):
+                cmd[index + 1] = _pi_model(cmd[index + 1])
+            elif value.startswith("--model="):
+                cmd[index] = "--model=" + _pi_model(value.split("=", 1)[1])
+    provider_override = (os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
+                         or os.environ.get("PI_PROVIDER", "").strip())
+    if provider_override:
+        for index, value in enumerate(cmd):
+            if value == "--provider" and index + 1 < len(cmd):
+                if cmd[index + 1] == "openai-codex":
+                    cmd[index + 1] = provider_override
+            elif value == "--provider=openai-codex":
+                cmd[index] = "--provider=" + provider_override
+        if not model and not _has_option(cmd, "--model", "--provider"):
+            # Transcription may deliberately inherit Pi's model; still select
+            # the requested provider instead of inheriting a Codex provider.
+            cmd.extend(["--provider", provider_override])
     if thinking and not _has_option(cmd, "--thinking"):
         cmd.extend(["--thinking", thinking])
 
@@ -1537,7 +1652,7 @@ def _run(
                 runner_env = _runner_environment(tmp, command)
                 is_pi = _is_runner(command, "pi")
                 runner_model = (
-                    _pi_default_model(task_name) if is_pi and not model else model
+                    _pi_model(model or _pi_default_model(task_name)) if is_pi else model
                 ) or ""
                 if is_pi:
                     cmd = _pi_command(
@@ -1603,6 +1718,8 @@ def _run(
                         raise SubagentError(
                             f"{task_name} stage call budget exhausted", metrics=failure_metrics()
                         )
+                    if is_pi:
+                        _pi_auth_refresh_under_lock(command, env=runner_env)
                     started = time.monotonic()
                     attempts += 1
                     try:
@@ -1623,6 +1740,19 @@ def _run(
                         last_detail = f"timeout after {timeout}s"
                     else:
                         total_duration_ms += round((time.monotonic() - started) * 1000)
+                        if is_pi and _is_auth_failure(result.stdout, result.stderr) and (
+                            result.returncode != 0
+                            or not _extract_pi_response(result.stdout).strip()
+                        ):
+                            failure_kind, http_status = "authentication", 401
+                            print(
+                                f"[subagent] {AUTH_FAIL_MARKER}: {task_name} pi login invalid",
+                                flush=True,
+                            )
+                            raise PiAuthError(
+                                f"{task_name} pi 登录失效（OAuth refresh 失败），需要重新 /login",
+                                metrics=failure_metrics(),
+                            )
                         if result.returncode == 0:
                             response = (
                                 _extract_pi_response(result.stdout)
@@ -1885,11 +2015,21 @@ def _copy_into_staging(source, destination):
     shutil.copy2(source, destination)
 
 
+_HOST_BRIDGE_REL = ".runlogs/host-bridge"
+
+
 def _validate_staging_files(staging, expected_files):
     expected = {path.as_posix() for path in expected_files}
     unexpected = []
     for path in staging.rglob("*"):
         relative = path.relative_to(staging).as_posix()
+        if (
+            relative == ".runlogs"
+            or relative == _HOST_BRIDGE_REL
+            or relative.startswith(_HOST_BRIDGE_REL + "/")
+        ):
+            # Host-bridge request/response files are runner plumbing, not outputs.
+            continue
         if path.is_symlink():
             unexpected.append(relative)
         elif path.is_file():

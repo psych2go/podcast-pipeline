@@ -315,6 +315,7 @@ def _issue_text(issue):
 
 def _repair_summary(folder):
     result = finalize_content_package(folder)
+    _refresh_semantic_bindings(Path(folder), [])
     return {
         "action": "finalize_content_package",
         "normalization_changes": result.get("normalization_changes", []),
@@ -344,6 +345,7 @@ def _repair_evidence(folder, issues):
     if not unit_ids:
         raise RuntimeError("evidence_integrity issue 未明确指出 unit ID，禁止猜测重做范围")
     metrics = refine_claim_evidence(folder, unit_ids=unit_ids)
+    _refresh_semantic_bindings(Path(folder), [])
     return {
         "action": "refine_claim_evidence",
         "unit_ids": unit_ids,
@@ -462,16 +464,71 @@ def review_and_repair(
         from scripts import ai_review
         reviewer = ai_review.review_episode
     from scripts.ai_review import ReviewContractError
-    from scripts.review_contract_repair import repair_contract_failure
+    from scripts.review_contract_repair import repair_contract_failure, failed_review_targets
+    from scripts.ai_review import reviewed_hashes
 
     history = []
     review = None
+    repair_scope = None
+    pending_review = False
+    cached_review = None
+    current_hashes = reviewed_hashes(folder)
+    review_path = folder / "ai_review.json"
+    if review_path.exists():
+        try:
+            candidate = load_json(review_path)
+            if candidate.get("reviewed_files") and candidate["reviewed_files"] == current_hashes:
+                if candidate.get("passed"):
+                    return candidate
+                cached_review = candidate
+        except (OSError, ValueError, TypeError):
+            pass
+    cached_contract = None
+    if current_hashes:
+        for path in sorted((folder / "ai_review_contract_failures").glob("*.json"),
+                           key=lambda p: p.stat().st_mtime_ns, reverse=True):
+            try:
+                if (review_path.exists()
+                        and path.stat().st_mtime_ns < review_path.stat().st_mtime_ns):
+                    break
+                data = load_json(path)
+                if data.get("reviewed_files") == current_hashes:
+                    cached_contract = ReviewContractError(
+                        data.get("error", "review contract"), data)
+                    cached_contract.diagnostic_path = path.relative_to(folder).as_posix()
+                    break
+            except (OSError, ValueError, TypeError):
+                continue
+    checkpoint = folder / "review_repair.json"
+    if checkpoint.exists():
+        try:
+            pending = load_json(checkpoint).get("pending_re_review", {})
+            if pending.get("reviewed_files") == current_hashes:
+                pending_review = True
+                repair_scope = pending.get("repair_scope")
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def checkpoint_re_review(scope):
+        atomic_write_json(checkpoint, {
+            "schema_version": 1, "passed": False, "max_rounds": max_rounds,
+            "history": history,
+            "pending_re_review": {"reviewed_files": reviewed_hashes(folder), "repair_scope": scope},
+        })
     for round_index in range(max_rounds + 1):
         review_kwargs = {"model": model, "effort": effort}
         if run_report is not None:
             review_kwargs["run_report"] = run_report
+        if repair_scope:
+            review_kwargs["repair_scope"] = repair_scope
         try:
-            review = reviewer(folder, **review_kwargs)
+            if round_index == 0 and cached_contract is not None and not pending_review:
+                raise cached_contract
+            if round_index == 0 and cached_review is not None and not pending_review:
+                review = cached_review
+            else:
+                review = reviewer(folder, **review_kwargs)
+            repair_scope = None
         except ReviewContractError as exc:
             # A contract diagnostic is NOT a failed authoritative review. It
             # must never enter the normal safe-issue path or become a pass.
@@ -484,8 +541,12 @@ def review_and_repair(
             try:
                 if round_index >= max_rounds:
                     raise RuntimeError("来源/归因合同自动修复已达到轮数上限")
-                entry["repair_actions"].append(repair_contract_failure(
-                    folder, exc.diagnostic, model=model, effort=effort))
+                action = repair_contract_failure(folder, exc.diagnostic, model=model, effort=effort)
+                entry["repair_actions"].append(action)
+                if action.get("affected_units"):
+                    repair_scope = {"affected_units": action["affected_units"],
+                                    "previous_review": exc.diagnostic.get("original_output", {})}
+                checkpoint_re_review(repair_scope)
             except Exception as repair_exc:
                 entry["repair_blockers"] = [str(repair_exc)]
                 atomic_write_json(folder / "review_repair.json", {
@@ -512,12 +573,21 @@ def review_and_repair(
         if round_index >= max_rounds:
             break
         try:
-            actions, blockers = repair_safe_issues(folder, review)
+            targets = failed_review_targets(review)
+            if targets:
+                action = repair_contract_failure(folder, {"original_output": review,
+                    "repair_targets": targets}, model=model, effort=effort)
+                actions, blockers = [action], []
+                repair_scope = {"affected_units": action["affected_units"],
+                                "previous_review": review}
+            else:
+                actions, blockers = repair_safe_issues(folder, review)
         except Exception as exc:
             actions, blockers = [], [str(exc)]
         history[-1]["repair_actions"] = actions
         history[-1]["repair_blockers"] = blockers
         if not blockers and actions:
+            checkpoint_re_review(repair_scope)
             continue
         # Safe deterministic repairs cannot address factuality, attribution,
         # or other prose findings.  Give pi one bounded, review-scoped revision
@@ -529,6 +599,7 @@ def review_and_repair(
             history[-1].setdefault("repair_blockers", []).append(str(exc))
             break
         history[-1].setdefault("repair_actions", []).append(revision)
+        checkpoint_re_review(None)
 
     payload = {
         "schema_version": 1,

@@ -39,7 +39,7 @@ class StageStrategyTests(unittest.TestCase):
         with patch.dict(os.environ, {'SUBAGENT_MODEL': 'inherited'}, clear=True):
             self.assertEqual(resolve_stage_strategy('ai_review')['model_source'], 'inherit')
             self.assertEqual(resolve_stage_strategy(
-                'ai_review', model='explicit')['resolved_model'], 'explicit')
+                'ai_review', model='explicit')['resolved_model'], 'openai-codex/explicit')
 
     def test_print_has_no_secrets(self):
         with patch.dict(os.environ, {

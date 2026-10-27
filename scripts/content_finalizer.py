@@ -253,6 +253,76 @@ def synchronize_summary_chapters(briefing_text, summary_map):
     return result
 
 
+def repair_summary_structure(briefing_text, summary_map, content_map=None):
+    """Merge contiguous duplicate/empty chapters without discarding any prose.
+
+    A unit cannot be divided across chapters under the summary contract. Merge
+    the entire intervening span rather than moving its claims away from prose.
+    Missing unit IDs can be recovered from explicitly authored claim IDs.
+    """
+    result = synchronize_summary_chapters(briefing_text, summary_map)
+    preamble, blocks = _chapter_blocks(briefing_text)
+    chapters = result["chapters"]
+    for chapter in chapters:
+        units = chapter.setdefault("unit_ids", [])
+        for cid in chapter.get("claim_ids", []) or []:
+            uid = str(cid).split("-C", 1)[0]
+            if re.fullmatch(r"U\d+", uid) and uid not in units:
+                units.append(uid)
+        if content_map is not None and not chapter.get("claim_ids"):
+            chapter["claim_ids"] = [
+                f"{unit['id']}-C{i:02d}"
+                for unit in content_map.get("units", [])
+                if unit.get("id") in units and unit.get("status") != "excluded"
+                for i, _ in enumerate(unit.get("claims", []), 1)
+            ]
+    if not any(chapter.get("unit_ids") for chapter in chapters):
+        # No evidence anchor at all: merging cannot repair this package.
+        return briefing_text, result
+    groups = [[index] for index in range(len(chapters))]
+    while len(groups) > 1:
+        owner = {}
+        span = None
+        for index, group in enumerate(groups):
+            units = {uid for j in group for uid in chapters[j].get("unit_ids", [])}
+            if not units or (content_map is not None and not any(
+                    chapters[j].get("claim_ids") for j in group)):
+                span = (max(0, index - 1), max(1, index))
+                break
+            for uid in sorted(units):
+                if uid in owner:
+                    span = (owner[uid], index)
+                    break
+                owner[uid] = index
+            if span:
+                break
+        if span is None:
+            break
+        start, stop = span
+        groups[start:stop+1] = [sum(groups[start:stop+1], [])]
+    merged = []
+    output = []
+    for group in groups:
+        mapping = copy.deepcopy(chapters[group[0]])
+        for field in ("unit_ids", "claim_ids", "number_ids", "example_ids"):
+            if any(field in chapters[j] for j in group):
+                mapping[field] = list(dict.fromkeys(
+                    value for j in group for value in chapters[j].get(field, []) or []))
+        merged.append(mapping)
+        output.append(f"## {mapping['title']}\n\n" + "\n\n".join(
+            blocks[j]["body"] for j in group))
+    result["chapters"] = merged
+    text = "\n\n".join(([preamble] if preamble else []) + output).strip() + "\n"
+    try:
+        text, result, _split = rebalance_long_chapters(text, result)
+    except ContentFinalizationError:
+        # A single indivisible unit may be too long to merge safely. Preserve
+        # the authored package for bounded writer feedback, never lower depth
+        # limits or discard content to make bookkeeping pass.
+        return briefing_text, synchronize_summary_chapters(briefing_text, summary_map)
+    return text, result
+
+
 def finalize_content_artifacts(briefing_text, summary_map):
     """Canonicalize briefing text and keep summary bindings synchronized."""
     aligned = synchronize_summary_chapters(briefing_text, summary_map)
@@ -390,6 +460,10 @@ def finalize_content_package(folder):
     import json
     briefing = briefing_path.read_text(encoding="utf-8")
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    content_path = folder / "content_map.json"
+    content = (json.loads(content_path.read_text(encoding="utf-8"))
+               if content_path.exists() else None)
+    briefing, summary = repair_summary_structure(briefing, summary, content)
     briefing, summary, changes = finalize_content_artifacts(
         briefing, summary)
     audit_issues = audit_narration_issues(briefing)

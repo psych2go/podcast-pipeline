@@ -11,6 +11,7 @@ import copy
 import uuid
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -561,7 +562,7 @@ def _prompt(folder, scope=None):
 
 必须读取：episode.json、来源.md、transcript.raw.json、原始转录.txt、content_map.json、中文完整笔记.md、讲书稿.md、summary_map.json；如果存在，还必须读取 转录_纠错.txt、tts_lexicon.json、editorial_corrections.json、canonical_entities.json、source_relevance_cache.json 和 editorial_fact_checks.json。editorial_corrections.json 和 editorial_fact_checks.json 只记录外部校正，不得把其中事实伪装成 transcript evidence；canonical_entities.json 是写稿前的规范名称台账，允许写稿后的外部校正新增已正确拼写的实体；缺少条目本身只能作为库存完善建议，只有公开稿实际名称错误、主体错配或重要歧义时才能令 entity_accuracy 失败。source_relevance_cache.json 是非权威的抓取与相关性线索：通用索引、标题未出现实体名或暂时抓取失败本身不得单独形成 high/critical 或阻断发布；只有公开稿实际采用的事实缺少 fact_checks/editorial ledger 中的直接可靠来源，或来源与主张语义冲突时，才能令 factuality/publish 失败。预写作台账不是权威结论，必须独立复核其来源。
 
-editorial_corrections.json 中 purpose 为 safety_cross_check/source_document/firsthand_attribution 的条目是合同修复检索线索，必须重新打开、独立核对；不得继承其 verdict、分数或 passed。只有真实来源与当前原子主张及安全核查范围一致时，才能把 URL 写入本轮 fact_checks.source_urls。已删除的公开主张不再作为发布内容审查，但仍需核对剩余内容覆盖；一手信息必须独立检查真实说话人归因并使用符合归因规则的 verdict，不可因找到网页就标为无归因事实。
+editorial_corrections.json 中 purpose 为 safety_cross_check/source_document/firsthand_attribution/public_source 的条目是合同修复检索线索，必须重新打开、独立核对；不得继承其 verdict、分数或 passed。只有真实来源与当前原子主张及安全核查范围一致时，才能把 URL 写入本轮 fact_checks.source_urls。已删除的公开主张不再作为发布内容审查，但仍需核对剩余内容覆盖；一手信息必须独立检查真实说话人归因并使用符合归因规则的 verdict，不可因找到网页就标为无归因事实。
 
 审查目标：无需人工复核也能直接发布。请执行：
 1. 逐章检查全部章节和对应时间片，检查脑补、漏点、人物归属和逻辑链；不得用抽样代替最终发布判定。
@@ -1431,8 +1432,46 @@ def _chunk_final_instruction():
     )
 
 
+def _targeted_review_prompt(scope):
+    return f"""\n本轮是修复后的独立局部复审。只重新检索、核查受影响 unit 的原子主张：
+{json.dumps(scope['affected_units'], ensure_ascii=False)}。
+此前其他 unit 的 fact_checks 由主流程保留，不要重新生成，不要重复联网核查。
+必须独立核对目标稿件、真实来源及归因，不继承目标 verdict；已删主张不要重新引入。
+未受影响且必须纳入整体判定的既有核查（不含目标项，不是目标修复的证明）：
+{json.dumps([item for item in scope['previous_review'].get('fact_checks', []) or []
+             if str(item.get('parent_claim_id', '')).split('-', 1)[0]
+             not in set(scope['affected_units'])], ensure_ascii=False)}
+所有评分、分项和 passed 必须重新做完整发布判定，阈值不变；若发现目标外的新问题，
+写入 issues 并阻断，不能通过局部范围忽略。只在 fact_checks 返回目标 unit 的当前全部子主张。
+此前 issues（目标外的问题未获本轮修复，不能静默消失）：
+{json.dumps(scope['previous_review'].get('issues', []), ensure_ascii=False)}
+"""
+
+
+def _merge_targeted_checks(review, scope):
+    # No semantic fields of surviving checks are rewritten. Target entire units
+    # because deletion can reindex the remaining claim/subclaim IDs within one.
+    units = set(scope["affected_units"])
+    incoming = review.get("fact_checks", []) or []
+    if any(str(item.get("parent_claim_id", "")).split("-", 1)[0] not in units
+           for item in incoming):
+        raise RuntimeError("局部复审返回了范围外 fact_check")
+    retained = [item for item in scope["previous_review"].get("fact_checks", []) or []
+                if str(item.get("parent_claim_id", "")).split("-", 1)[0] not in units]
+    review["fact_checks"] = retained + incoming
+    for issue in scope["previous_review"].get("issues", []) or []:
+        issue_units = set(re.findall(r"\bU\d+\b", json.dumps(issue, ensure_ascii=False)))
+        if (issue.get("severity") in {"critical", "high"} and issue_units
+                and issue_units.isdisjoint(units)):
+            if issue not in review.setdefault("issues", []):
+                review["issues"].append(issue)
+            review["passed"] = False
+    return review
+
+
 def run_ai_review(
-    folder, output=None, model=None, effort="max", *, persist=True, diagnostic_id=None
+    folder, output=None, model=None, effort="max", *, persist=True, diagnostic_id=None,
+    repair_scope=None,
 ):
     folder = Path(folder).resolve()
     missing = [name for name in REVIEW_FILES if not (folder / name).exists()]
@@ -1463,7 +1502,7 @@ def run_ai_review(
             try:
                 chunk_audits = (
                     run_chunked_audits(workspace, model=model, effort=effort)
-                    if _chunk_enabled()
+                    if _chunk_enabled() and not repair_scope
                     else None
                 )
             finally:
@@ -1476,6 +1515,7 @@ def run_ai_review(
             result = run_json_task(
                 workspace,
                 _prompt(workspace, scope)
+                + (_targeted_review_prompt(repair_scope) if repair_scope else "")
                 + (_chunk_final_instruction() if chunk_audits else "")
                 + (
                     f"\n本次审查 effort 要求：{effort}。只返回符合 schema 的 JSON，不修改任何文件。"
@@ -1488,6 +1528,8 @@ def run_ai_review(
                 effort=effort,
             )
             review = result["payload"]
+            if repair_scope:
+                review = _merge_targeted_checks(review, repair_scope)
             try:
                 review, mechanical_audit, retry_result = _validate_or_retry_review(
                     workspace, review, model=model, effort=effort
@@ -1578,7 +1620,7 @@ def update_source_status(folder, passed):
     return apply_update(folder, payload, source_text)
 
 
-def review_episode(folder, output=None, model="", effort="max", run_report=None):
+def review_episode(folder, output=None, model="", effort="max", run_report=None, repair_scope=None):
     """完成审查、更新来源状态，并以更新后的文件哈希写入最终审查记录。"""
     folder = Path(folder)
     output = Path(output) if output else folder / "ai_review.json"
@@ -1595,7 +1637,8 @@ def review_episode(folder, output=None, model="", effort="max", run_report=None)
         with report.stage("ai_review") as stage:
             try:
                 review = run_ai_review(
-                    folder, output, model, effort, persist=False, diagnostic_id=stage.payload["id"]
+                    folder, output, model, effort, persist=False, diagnostic_id=stage.payload["id"],
+                    **({"repair_scope": repair_scope} if repair_scope else {}),
                 )
             except ReviewContractError as exc:
                 stage.metrics["contract_failure_snapshot"] = exc.diagnostic_path
