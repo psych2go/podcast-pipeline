@@ -153,9 +153,10 @@ public_source 必须为直接支持该客观事实的公开材料；找不到时
             # The shared fetcher rejects private hosts, checks TLS, pins public
             # addresses and bounds redirects/bytes. A model-supplied URL alone
             # is never evidence. Require a quote in the fetched public text.
-            fetched = _fetch_source(source["url"])
+            fetched = _fetch_source(source["url"], include_full_text=True)
             quote = re.sub(r"\s+", " ", source["quote"]).strip()
-            text = re.sub(r"\s+", " ", fetched.get("excerpt", "")).strip()
+            text = re.sub(r"\s+", " ", fetched.get("full_text")
+                          or fetched.get("excerpt", "")).strip()
             if len(quote) < 20 or quote.casefold() not in text.casefold():
                 raise ValueError("公开页面摘录不能复现检索引文")
             accepted.append({**source, "content_sha256": fetched["content_sha256"]})

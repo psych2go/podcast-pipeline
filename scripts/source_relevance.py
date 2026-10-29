@@ -302,7 +302,7 @@ def _read_limited_body(response):
     return bytes(body)
 
 
-def _fetch_source(url):
+def _fetch_source(url, *, include_full_text=False):
     current_url = str(url)
     for redirect_count in range(MAX_REDIRECTS + 1):
         current_url, parts, addresses = _resolve_public_source_url(current_url)
@@ -333,18 +333,19 @@ def _fetch_source(url):
     else:  # pragma: no cover - loop is bounded by explicit redirect handling
         raise ValueError("source URL 重定向次数过多")
     title = ""
-    excerpt = ""
+    full_text = ""
     if "html" in content_type.casefold() or body.lstrip().startswith(b"<"):
         parser = _ReadableHTML()
         parser.feed(body.decode(encoding, errors="replace"))
         title = " ".join(parser.title).strip()
-        excerpt = " ".join(parser.text).strip()[:MAX_EXCERPT_CHARS]
+        full_text = " ".join(parser.text).strip()
     else:
         title = Path(urlparse(final_url).path).name or final_url
         if "text" in content_type.casefold() or "json" in content_type.casefold():
-            excerpt = body.decode(encoding, errors="replace")
-            excerpt = re.sub(r"\s+", " ", excerpt).strip()[:MAX_EXCERPT_CHARS]
-    return {
+            full_text = body.decode(encoding, errors="replace")
+            full_text = re.sub(r"\s+", " ", full_text).strip()
+    excerpt = full_text[:MAX_EXCERPT_CHARS]
+    result = {
         "status": "fetched",
         "http_status": status_code,
         "final_url": final_url,
@@ -353,6 +354,11 @@ def _fetch_source(url):
         "excerpt": excerpt,
         "content_sha256": hashlib.sha256(body).hexdigest(),
     }
+    if include_full_text:
+        # Quote verification needs the whole readable page; caches keep only
+        # the bounded excerpt.
+        result["full_text"] = full_text
+    return result
 
 
 def _recent_error(entry, now=None):
