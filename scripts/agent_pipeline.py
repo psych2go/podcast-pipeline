@@ -261,6 +261,160 @@ def _ensure_content_map(folder, title, force=False):
     return path
 
 
+
+CONTENT_MAP_TASK = """读取 transcript.raw.json、原始转录.txt，
+以及存在时的 转录_纠错.txt。
+整理 content_map.json：
+- 保留 schema_version、evidence_mode 和 source_accountability_version=1；
+- 将相邻转录片段合并为有完整语义的 unit；
+- 补充 topic、claims、reasoning、examples、numbers、terms；
+- 标记 importance 和 status；完成后的 status 只能是 included、condensed、excluded，
+  禁止使用 expanded、selected、skipped 等自定义值；
+- 保留并正确填写 evidence.segment_ids；
+- timestamp evidence 必须使用真实时间，text_anchor evidence 不得伪造时间；
+- high/medium unit 必须有 claims；每条 claim 必须在 claim_modalities 中按顺序标记 actual_event、conditional、prediction、opinion、recommendation 或 general_claim；
+- 条件句不得升级成已发生事件，预测和观点不得升级成客观事实；
+- transcript.raw.json 的每个非空 segment 必须至少进入一个 unit；
+- 广告、纯寒暄、节目操作信息等真实语音必须保留证据，可标记 status=excluded；
+- 每个 unit 的 evidence.segment_ids 都必须至少包含一个真实源 segment；不得创建无源 segment 的 unit；
+- excluded 单元的 claims 必须是空数组，并填写 exclusion_type 和具体 notes；
+- excluded 必须填写 exclusion_type（advertisement/housekeeping/banter/non_speech/duplicate/technical_noise/other）和具体 notes；
+- 有上下文价值但无需展开的内容使用 condensed，不要静默遗漏；
+- 无法判断的内容使用 unresolved 并停止，不得猜测排除；
+- 不要写 claim_evidence，后续由独立 subagent 生成；
+- content_map 只能记录转录实际说法：即使知道外部资料不同，也只能在 claims 中保留明确说话人归因，
+  不得把网页纠正、编辑判断或核查结论合并进由 Sxxxx 片段锚定的 claim；
+- 外部纠正由后续 editorial_fact_checks.json 单独承载；
+- 只修改 content_map.json，不修改其他文件。"""
+
+
+def _content_map_window_chars():
+    return _env_positive_int("CONTENT_MAP_WINDOW_CHARS", 30000)
+
+
+def _content_map_chunk_threshold():
+    return _env_positive_int("CONTENT_MAP_CHUNK_CHARS", 60000)
+
+
+def content_map_windows(segments, window_chars):
+    """Split non-empty segments into contiguous windows of about window_chars."""
+    windows = []
+    current = []
+    size = 0
+    for segment in segments:
+        text = (segment.get("text") or "").strip()
+        if not text:
+            continue
+        if current and size + len(text) > window_chars:
+            windows.append(current)
+            current, size = [], 0
+        current.append(segment)
+        size += len(text)
+    if current:
+        windows.append(current)
+    return windows
+
+
+def merge_content_map_windows(header, window_units):
+    """Concatenate window units in order and renumber ids U0001..."""
+    merged = []
+    for units in window_units:
+        for unit in units:
+            unit = dict(unit)
+            unit["id"] = f"U{len(merged) + 1:04d}"
+            unit["claim_evidence"] = {}
+            for key in ("claim_evidence_sha256", "claim_evidence_notes",
+                        "claim_evidence_roles"):
+                unit.pop(key, None)
+            merged.append(unit)
+    payload = dict(header)
+    payload["units"] = merged
+    return payload
+
+
+def _run_content_map_window(index, window, raw, title, task):
+    import tempfile
+    with tempfile.TemporaryDirectory(
+            prefix=f"podcast-content-map-window-{index:03d}-") as tmp:
+        tmp = Path(tmp)
+        sub_raw = dict(raw)
+        sub_raw["segments"] = window
+        save_json(tmp / "transcript.raw.json", sub_raw)
+        (tmp / "原始转录.txt").write_text(
+            "\n\n".join(
+                f"[{segment.get('id')}] {(segment.get('text') or '').strip()}"
+                for segment in window),
+            encoding="utf-8")
+        init_content_map(
+            tmp / "transcript.raw.json", tmp / "content_map.json", title=title)
+        first, last = window[0].get("id"), window[-1].get("id")
+        window_task = task + (
+            f"\n\n本次只处理完整转录中的一个连续窗口：{first} 至 {last}"
+            f"（第 {index} 个窗口）。只为这些 segment 建 unit；可以用 write 工具"
+            "一次性重写整个 content_map.json，把相邻片段合并成按话题划分的 unit，"
+            "不要保留逐 segment 的 pending 骨架。")
+        last_error = None
+        for _attempt in range(2):
+            run_edit_task(
+                tmp,
+                window_task,
+                task_name=f"content_map_{index:03d}",
+                allowed_files=[tmp / "content_map.json"],
+                input_files=[tmp / "transcript.raw.json", tmp / "原始转录.txt"],
+                required_files=[tmp / "content_map.json"],
+            )
+            payload = load_json(tmp / "content_map.json")
+            try:
+                _validate_content_map_stage_statuses(payload)
+                return payload.get("units", [])
+            except RuntimeError as exc:
+                last_error = exc
+                init_content_map(
+                    tmp / "transcript.raw.json", tmp / "content_map.json",
+                    title=title)
+        raise RuntimeError(f"content_map 第 {index} 个窗口失败: {last_error}")
+
+
+def run_content_map_task(folder, *, title, map_inputs):
+    """Run the content-map subagent, windowing long transcripts.
+
+    Edit-only agents cannot reliably restructure a several-hundred-unit
+    skeleton in one pass; they either stop or collapse everything into one
+    catch-all unit.  Long transcripts are therefore mapped window by window
+    and merged deterministically.
+    """
+    folder = Path(folder)
+    content_map_path = folder / "content_map.json"
+    raw_path = folder / "transcript.raw.json"
+    raw = load_json(raw_path)
+    segments = raw.get("segments", []) or []
+    total = sum(len((segment.get("text") or "").strip()) for segment in segments)
+    if total <= _content_map_chunk_threshold():
+        run_edit_task(
+            folder,
+            CONTENT_MAP_TASK,
+            task_name="content_map",
+            allowed_files=[content_map_path],
+            input_files=map_inputs,
+            required_files=[content_map_path],
+        )
+        return
+    from concurrent.futures import ThreadPoolExecutor
+    windows = content_map_windows(segments, _content_map_window_chars())
+    print(f"[内容] 长转录 {total} 字符，按 {len(windows)} 个窗口生成 content_map")
+    concurrency = _env_positive_int("CONTENT_MAP_CONCURRENCY", 3)
+    with ThreadPoolExecutor(max_workers=max(1, min(concurrency, len(windows)))) as pool:
+        futures = [
+            pool.submit(_run_content_map_window, index, window, raw, title,
+                        CONTENT_MAP_TASK)
+            for index, window in enumerate(windows, start=1)
+        ]
+        window_units = [future.result() for future in futures]
+    header = load_json(content_map_path) if content_map_path.exists() else {}
+    header = {key: value for key, value in header.items() if key != "units"}
+    save_json(content_map_path, merge_content_map_windows(header, window_units))
+
+
 def _validate_content_map_stage_statuses(payload):
     errors = []
     for index, unit in enumerate(payload.get("units", [])):
@@ -891,36 +1045,10 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                     raw_path, transcript_path, correction_path, source_path)
                 if path.exists()
             ]
-            run_edit_task(
+            run_content_map_task(
                 folder,
-                """读取 transcript.raw.json、原始转录.txt，
-以及存在时的 转录_纠错.txt。
-整理 content_map.json：
-- 保留 schema_version、evidence_mode 和 source_accountability_version=1；
-- 将相邻转录片段合并为有完整语义的 unit；
-- 补充 topic、claims、reasoning、examples、numbers、terms；
-- 标记 importance 和 status；完成后的 status 只能是 included、condensed、excluded，
-  禁止使用 expanded、selected、skipped 等自定义值；
-- 保留并正确填写 evidence.segment_ids；
-- timestamp evidence 必须使用真实时间，text_anchor evidence 不得伪造时间；
-- high/medium unit 必须有 claims；每条 claim 必须在 claim_modalities 中按顺序标记 actual_event、conditional、prediction、opinion、recommendation 或 general_claim；
-- 条件句不得升级成已发生事件，预测和观点不得升级成客观事实；
-- transcript.raw.json 的每个非空 segment 必须至少进入一个 unit；
-- 广告、纯寒暄、节目操作信息等真实语音必须保留证据，可标记 status=excluded；
-- 每个 unit 的 evidence.segment_ids 都必须至少包含一个真实源 segment；不得创建无源 segment 的 unit；
-- excluded 单元的 claims 必须是空数组，并填写 exclusion_type 和具体 notes；
-- excluded 必须填写 exclusion_type（advertisement/housekeeping/banter/non_speech/duplicate/technical_noise/other）和具体 notes；
-- 有上下文价值但无需展开的内容使用 condensed，不要静默遗漏；
-- 无法判断的内容使用 unresolved 并停止，不得猜测排除；
-- 不要写 claim_evidence，后续由独立 subagent 生成；
-- content_map 只能记录转录实际说法：即使知道外部资料不同，也只能在 claims 中保留明确说话人归因，
-  不得把网页纠正、编辑判断或核查结论合并进由 Sxxxx 片段锚定的 claim；
-- 外部纠正由后续 editorial_fact_checks.json 单独承载；
-- 只修改 content_map.json，不修改其他文件。""",
-                task_name="content_map",
-                allowed_files=[content_map_path],
-                input_files=map_inputs,
-                required_files=[content_map_path],
+                title=title,
+                map_inputs=map_inputs,
             )
             payload = load_json(content_map_path)
             repair_source_segment_gaps(payload, load_json(raw_path))
