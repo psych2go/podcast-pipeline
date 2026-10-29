@@ -449,6 +449,32 @@ def validate_tts_readiness(text, lexicon=None):
     return issues
 
 
+_NOTES_PROVENANCE_RE = re.compile(
+    r"^\s*(?:转录依据|依据说明|资料依据)[:：]")
+
+
+def strip_notes_provenance_preface(text):
+    """Drop writer-added provenance paragraphs before the first chapter.
+
+    Writers sometimes open 中文完整笔记.md with a line such as
+    "转录依据：原始转录.txt ... content_map.json ..."; that is internal
+    bookkeeping, not public prose, and it only ever appears before the first
+    "## " heading. Removing it deterministically avoids a hard finalize
+    failure without touching any chapter content.
+    """
+    lines = (text or "").splitlines(keepends=True)
+    out = []
+    before_first_heading = True
+    for line in lines:
+        if line.startswith("## "):
+            before_first_heading = False
+        if before_first_heading and _NOTES_PROVENANCE_RE.match(line):
+            continue
+        out.append(line)
+    cleaned = "".join(out)
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
 def finalize_content_package(folder):
     """Finalize generated content files before evidence enrichment/review."""
     folder = Path(folder)
@@ -473,8 +499,12 @@ def finalize_content_package(folder):
             + "; ".join(audit_issues[:5]))
     notes_path = folder / "中文完整笔记.md"
     if notes_path.exists():
-        notes_audit_issues = audit_narration_issues(
-            notes_path.read_text(encoding="utf-8"))
+        notes_text = notes_path.read_text(encoding="utf-8")
+        cleaned_notes = strip_notes_provenance_preface(notes_text)
+        if cleaned_notes != notes_text:
+            notes_path.write_text(cleaned_notes, encoding="utf-8")
+            notes_text = cleaned_notes
+        notes_audit_issues = audit_narration_issues(notes_text)
         if notes_audit_issues:
             raise ContentFinalizationError(
                 "完整笔记包含面向内部的审查过程语言: "

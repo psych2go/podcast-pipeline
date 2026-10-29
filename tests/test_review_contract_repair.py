@@ -240,6 +240,40 @@ class ContractRecoveryTests(unittest.TestCase):
             self.assertEqual(ledger["issue_inventory"], [])
             self.assertEqual(ledger["summary"]["claim_count"], 1)
 
+    def test_softening_can_drop_target_unit_numbers_without_removing_claims(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            package(folder)
+            content = json.loads((folder / "content_map.json").read_text())
+            unit = content["units"][0]
+            unit.update(numbers=["900 mg", "remaining number"],
+                        number_items=[{"id": "N01", "text": "900 mg"},
+                                      {"id": "N02", "text": "remaining number"}])
+            atomic_write_json(folder / "content_map.json", content)
+            summary = json.loads((folder / "summary_map.json").read_text())
+            summary["notes_number_ids"] = ["U0001-N01", "U0001-N02"]
+            summary["chapters"][0]["number_ids"] = ["U0001-N01", "U0001-N02"]
+            atomic_write_json(folder / "summary_map.json", summary)
+            removed = repair.remove_claims(folder, set(), ["U0001-N01"])
+            unit = json.loads((folder / "content_map.json").read_text())["units"][0]
+            summary = json.loads((folder / "summary_map.json").read_text())
+            self.assertEqual(removed, [])
+            self.assertEqual(unit["claims"], ["嘉宾建议自动部署补丁", "其他讨论"])
+            self.assertEqual(unit["numbers"], ["remaining number"])
+            self.assertEqual(summary["notes_number_ids"], ["U0001-N01"])
+            self.assertEqual(summary["chapters"][0]["claim_ids"], ["U0001-C01", "U0001-C02"])
+
+    def test_plan_may_not_drop_numbers_outside_target_units(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            package(folder)
+            plan = attribution_plan()
+            plan["remove_number_ids"] = ["U0002-N01"]
+            with patch.object(repair, "lookup_sources", return_value=([], [])), \
+                    patch.object(repair, "run_json_task", return_value={"payload": plan}):
+                with self.assertRaisesRegex(ValueError, "非目标数字"):
+                    repair.repair_contract_failure(folder, diagnostic())
+
     def test_unsourced_claim_can_be_removed_transactionally_before_re_review(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)

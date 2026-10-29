@@ -202,7 +202,9 @@ def remove_claims(workspace, claim_ids, number_ids=(), example_ids=()):
         uid = unit["id"]
         old_claims = unit.get("claims", [])
         keep = [i for i in range(len(old_claims)) if f"{uid}-C{i+1:02d}" not in claim_ids]
-        if len(keep) == len(old_claims):
+        drops_items = any(str(value).split("-", 1)[0] == uid
+                          for value in (*number_ids, *example_ids))
+        if len(keep) == len(old_claims) and not drops_items:
             continue
         for i, claim in enumerate(old_claims):
             old = f"{uid}-C{i+1:02d}"
@@ -314,9 +316,12 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
         removed_ids = set(plan.get("remove_claim_ids", []))
         if not removed_ids <= allowed_ids:
             raise ValueError("合同修复不得删除非目标 claim")
-        removed_units = {cid.split("-", 1)[0] for cid in removed_ids}
+        # Softening a targeted high-risk claim often means dropping its exact
+        # doses/figures while keeping the attributed claim, so numbers and
+        # examples may be removed from any *target* unit, never elsewhere.
+        target_units = {cid.split("-", 1)[0] for cid in allowed_ids}
         for field in ("remove_number_ids", "remove_example_ids"):
-            if any(value.split("-", 1)[0] not in removed_units for value in plan.get(field, [])):
+            if any(value.split("-", 1)[0] not in target_units for value in plan.get(field, [])):
                 raise ValueError("合同修复不得删除非目标数字或例子")
         changed = False
         edits = {name: [] for name in PROSE_FILES}
@@ -344,7 +349,9 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
             raise ValueError("合同修复没有改变稿件或补充真实来源")
         _attach_sources(workspace, sources)
         removed = remove_claims(workspace, removed_ids, plan.get("remove_number_ids", []),
-                                plan.get("remove_example_ids", [])) if removed_ids else []
+                                plan.get("remove_example_ids", [])) if (
+            removed_ids or plan.get("remove_number_ids") or plan.get("remove_example_ids")
+        ) else []
         _refresh_semantic_bindings(workspace, [])
         content = load_json(workspace / "content_map.json")
         transcript = load_json(workspace / "transcript.raw.json")
