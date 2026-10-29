@@ -24,3 +24,20 @@ class NotesProvenancePrefaceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NotesProvenanceSectionTest(unittest.TestCase):
+    def test_drops_leading_evidence_basis_section(self):
+        text = (
+            "# 中文完整笔记\n\n## 证据基础\n\n"
+            "本笔记依据原始转录.txt，内容按 content_map.json 的 included 单元整理。\n\n"
+            "## 领导力的多种路径\n\n正文。\n"
+        )
+        cleaned = strip_notes_provenance_preface(text)
+        self.assertNotIn("证据基础", cleaned)
+        self.assertIn("## 领导力的多种路径\n\n正文。", cleaned)
+        self.assertEqual(audit_narration_issues(cleaned), [])
+
+    def test_keeps_evidence_section_with_public_prose(self):
+        text = "# 笔记\n\n## 证据基础\n\n这是一段公开内容。\n\n## 章\n正文\n"
+        self.assertEqual(strip_notes_provenance_preface(text), text)

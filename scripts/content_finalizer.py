@@ -451,26 +451,47 @@ def validate_tts_readiness(text, lexicon=None):
 
 _NOTES_PROVENANCE_RE = re.compile(
     r"^\s*(?:转录依据|依据说明|资料依据)[:：]")
+_INTERNAL_FILE_RE = re.compile(
+    r"content_map\.json|summary_map\.json|原始转录\.txt|转录_纠错\.txt|来源\.md")
+_NOTES_PROVENANCE_HEADING_RE = re.compile(
+    r"^##\s*(?:证据基础|转录依据|资料依据|依据说明|来源说明|证据说明)\s*$")
 
 
 def strip_notes_provenance_preface(text):
-    """Drop writer-added provenance paragraphs before the first chapter.
+    """Drop writer-added provenance bookkeeping before the first real chapter.
 
-    Writers sometimes open 中文完整笔记.md with a line such as
-    "转录依据：原始转录.txt ... content_map.json ..."; that is internal
-    bookkeeping, not public prose, and it only ever appears before the first
-    "## " heading. Removing it deterministically avoids a hard finalize
-    failure without touching any chapter content.
+    Writers sometimes open 中文完整笔记.md with a line or a "## 证据基础"
+    section such as "本笔记依据原始转录.txt ... content_map.json ..."; that is
+    internal bookkeeping, not public prose. Only content before the first
+    real chapter is touched: preface lines are dropped when they match the
+    provenance prefix or cite internal pipeline files, and a provenance-titled
+    section is dropped only when every body line is flagged by that audit.
     """
     lines = (text or "").splitlines(keepends=True)
     out = []
-    before_first_heading = True
-    for line in lines:
-        if line.startswith("## "):
-            before_first_heading = False
-        if before_first_heading and _NOTES_PROVENANCE_RE.match(line):
+    index = 0
+    in_preface = True
+    while index < len(lines):
+        line = lines[index]
+        if in_preface and _NOTES_PROVENANCE_HEADING_RE.match(line.strip()):
+            stop = index + 1
+            while stop < len(lines) and not lines[stop].startswith("## "):
+                stop += 1
+            body = [item for item in lines[index + 1:stop] if item.strip()]
+            if body and all(audit_narration_issues(item) for item in body):
+                index = stop
+                continue
+            in_preface = False
+        elif line.startswith("## "):
+            in_preface = False
+        elif (in_preface and line.strip()
+              and any(item.startswith("## ") for item in lines[index + 1:])
+              and (_NOTES_PROVENANCE_RE.match(line)
+                   or _INTERNAL_FILE_RE.search(line))):
+            index += 1
             continue
         out.append(line)
+        index += 1
     cleaned = "".join(out)
     return re.sub(r"\n{3,}", "\n\n", cleaned)
 
