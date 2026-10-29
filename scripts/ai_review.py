@@ -740,6 +740,10 @@ _SPECIALIZED_ASSERTIONS = {
 def _expected_verification_mode(item):
     """Return the single contract-mandated verification_mode, or None when the
     contract allows several values (then the model's choice is kept)."""
+    if item.get("claim_origin") == "episode_metadata":
+        # claim_taxonomy requires transcript_only for every episode_metadata
+        # check; nothing semantic depends on the old value.
+        return "transcript_only"
     if item.get("publication_status") == "excluded":
         return None
     assertion = item.get("assertion_type")
