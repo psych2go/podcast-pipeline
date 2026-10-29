@@ -61,6 +61,44 @@ def _http_url(value):
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def prune_unknown_entity_segments(payload, transcript):
+    """Drop hallucinated segment IDs from a generated entity ledger.
+
+    Models occasionally cite line numbers or out-of-range IDs (e.g. S2415 in
+    a 378-segment transcript). Unknown IDs are removed; an entity left with no
+    segments is re-anchored only to transcript segments that literally contain
+    one of its observed_names. Entities that cannot be anchored keep an empty
+    list so validation still fails closed. Returns the number of IDs dropped.
+    """
+    if not isinstance(payload, dict) or not isinstance(transcript, dict):
+        return 0
+    segments = [
+        segment for segment in transcript.get("segments", []) or []
+        if isinstance(segment, dict) and segment.get("id")
+    ]
+    known = {segment["id"] for segment in segments}
+    dropped = 0
+    for item in payload.get("entities", []) or []:
+        if not isinstance(item, dict) or not isinstance(item.get("segment_ids"), list):
+            continue
+        original = item["segment_ids"]
+        kept = [sid for sid in original if sid in known]
+        dropped += len(original) - len(kept)
+        if not kept and original:
+            names = [
+                str(name).strip().casefold()
+                for name in item.get("observed_names") or []
+                if len(str(name).strip()) >= 2
+            ]
+            kept = [
+                segment["id"] for segment in segments
+                if any(name in str(segment.get("text", "")).casefold()
+                       for name in names)
+            ][:12]
+        item["segment_ids"] = list(dict.fromkeys(kept))
+    return dropped
+
+
 def validate_canonical_entities(payload, transcript=None):
     errors = []
     if not isinstance(payload, dict):

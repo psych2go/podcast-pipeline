@@ -9,6 +9,7 @@ from scripts.atomic_io import atomic_write_bytes, atomic_write_json
 from scripts.canonical_entities import (
     GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
     SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
+    prune_unknown_entity_segments,
     public_entity_alias_errors,
     repair_public_entity_aliases,
     validate_canonical_entities,
@@ -1148,6 +1149,7 @@ JSON，不修改文件。""",
                 ),
                 "entities": generated.get("entities"),
             }
+            pruned_segments = prune_unknown_entity_segments(entities, raw)
             entity_errors = validate_canonical_entities(entities, raw)
             if entity_errors:
                 if stage is not None:
@@ -1162,6 +1164,7 @@ JSON，不修改文件。""",
                 stage.metrics.update({
                     "entity_count": len(entities.get("entities", [])),
                     "structured_output": True,
+                    "pruned_unknown_segment_ids": pruned_segments,
                 })
 
     with _stage(run_report, "subagent_prewrite_fact_checks") as stage:
