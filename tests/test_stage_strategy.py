@@ -12,7 +12,7 @@ class StageStrategyTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             strategy = resolve_stage_strategy('ai_review', effort='max')
         self.assertEqual(strategy['thinking'], 'low')
-        self.assertIn('astra', strategy['resolved_model'])
+        self.assertIn('gpt-6.1-sol', strategy['resolved_model'])
         self.assertEqual(strategy['prompt_effort'], 'max')
         self.assertEqual(strategy['thinking_source'], 'default:low')
 

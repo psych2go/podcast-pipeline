@@ -36,7 +36,7 @@ class RunnerSelectionTests(unittest.TestCase):
 
 
 class ModelDefaultTests(unittest.TestCase):
-    def test_non_transcription_defaults_to_astra_low(self):
+    def test_non_transcription_defaults_to_sol_low(self):
         with patch.dict(os.environ, {
                 "SUBAGENT_PI_PROVIDER": "", "SUBAGENT_PI_MODEL": "",
                 "PI_PROVIDER": "", "PI_MODEL": "",
@@ -45,13 +45,34 @@ class ModelDefaultTests(unittest.TestCase):
                 "SUBAGENT_CORRECTION_MODEL": ""}, clear=False):
             self.assertEqual(
                 subagent._pi_default_model("ai_review"),
-                "openai-codex/gpt-6-astra")
+                "openai-codex/gpt-6.1-sol")
             self.assertEqual(subagent._pi_thinking_level("ai_review"), "low")
             self.assertEqual(
                 subagent._pi_default_model("content_writing"),
-                "openai-codex/gpt-6-astra")
+                "openai-codex/gpt-6.1-sol")
 
-    def test_transcription_does_not_force_astra(self):
+    def test_default_provider_is_openai_codex_for_sol(self):
+        with patch.dict(os.environ, {
+                "SUBAGENT_PI_PROVIDER": "", "PI_PROVIDER": ""}, clear=False):
+            self.assertEqual(subagent._pi_provider(), "openai-codex")
+            self.assertEqual(subagent.DEFAULT_PI_MODEL, "gpt-6.1-sol")
+            self.assertEqual(subagent._pi_model("gpt-6.1-sol"),
+                             "openai-codex/gpt-6.1-sol")
+
+    def test_writing_stages_use_writing_thinking_override(self):
+        with patch.dict(os.environ, {
+                "SUBAGENT_PI_THINKING": "low",
+                "SUBAGENT_PI_THINKING_WRITING": "high",
+                "SUBAGENT_THINKING": ""}, clear=False):
+            for task in ("content_writing", "review_content_revision",
+                         "content_writing_contract_repair"):
+                self.assertEqual(subagent._pi_thinking_level(task), "high")
+            self.assertEqual(subagent._pi_thinking_level("ai_review"), "low")
+            self.assertEqual(
+                subagent._pi_thinking_level("prewrite_fact_checks_001_1"),
+                "low")
+
+    def test_transcription_does_not_force_default_model(self):
         with patch.dict(os.environ, {
                 "SUBAGENT_PI_PROVIDER": "", "SUBAGENT_PI_MODEL": "",
                 "PI_PROVIDER": "", "PI_MODEL": "",

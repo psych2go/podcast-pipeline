@@ -36,7 +36,7 @@ class ProviderOverrideTests(unittest.TestCase):
                              "openai/correction")
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(subagent._pi_model("test"), "openai-codex/test")
-            self.assertEqual(subagent._pi_default_model(), "openai-codex/gpt-6-astra")
+            self.assertEqual(subagent._pi_default_model(), "openai-codex/gpt-6.1-sol")
             self.assertIsNone(subagent._pi_default_model("transcript_correction"))
 
     def test_probe_and_preconfigured_command_model_options_obey_provider(self):

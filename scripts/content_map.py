@@ -674,6 +674,43 @@ def repair_source_segment_gaps(payload, transcript):
     return payload
 
 
+DEGENERATE_MIN_TRANSCRIPT_CHARS = 20000
+DEGENERATE_MAX_UNIT_SHARE = 0.8
+
+
+def degenerate_content_map_errors(payload, transcript):
+    """Reject maps that technically cover every segment but carry no content.
+
+    A long transcript collapsed into one catch-all unit, or a map without a
+    single claim, passes segment accountability yet gives the writer nothing to
+    verify.  Short transcripts are exempt.
+    """
+    lengths = {
+        segment.get("id"): len((segment.get("text") or "").strip())
+        for segment in (transcript or {}).get("segments", []) or []
+        if segment.get("id")
+    }
+    total = sum(lengths.values())
+    if total < DEGENERATE_MIN_TRANSCRIPT_CHARS:
+        return []
+    errors = []
+    claim_count = 0
+    for unit in payload.get("units", []) or []:
+        if not isinstance(unit, dict) or unit.get("status") == "excluded":
+            continue
+        claim_count += len(unit.get("claims") or [])
+        segment_ids = set((unit.get("evidence") or {}).get("segment_ids") or [])
+        covered = sum(lengths.get(segment_id, 0) for segment_id in segment_ids)
+        if covered > DEGENERATE_MAX_UNIT_SHARE * total:
+            errors.append(
+                f"{unit.get('id')}: 单个单元覆盖转录 {covered}/{total} 字符，"
+                "必须按话题拆分为多个有 claims 的单元"
+            )
+    if claim_count == 0:
+        errors.append("content map 没有任何 claim：长转录必须整理出可核验的主张")
+    return errors
+
+
 def validate_content_map(payload, transcript=None):
     """校验内容台账是否已经完成人工/LLM 整理。"""
     errors = []
@@ -971,6 +1008,9 @@ def validate_content_map(payload, transcript=None):
                         f"{display_id}: 至少两条 claim 全量复用整个单元证据，"
                         "必须收窄到 claim 级最小片段"
                     )
+
+    if transcript is not None:
+        errors.extend(degenerate_content_map_errors(payload, transcript))
 
     if transcript is not None and payload.get("source_accountability_version", 0) >= 1:
         accountability = source_segment_accountability(payload, transcript)

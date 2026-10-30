@@ -455,6 +455,32 @@ def repair_safe_issues(folder, review):
     return actions, []
 
 
+
+def _contract_failure_still_reproduces(folder, diagnostic):
+    """A cached contract failure is only replayed if current code still rejects it.
+
+    Deterministic contract fixes evolve; replaying a snapshot whose errors are
+    now mechanically fixable would block forever on a stale diagnostic. When it
+    no longer reproduces, the caller runs a fresh independent review instead.
+    """
+    import copy as _copy
+    from scripts.ai_review import (
+        _content_map_claim_ids, _deterministic_mode_fixes,
+        normalize_review_fact_checks, validate_review_fact_checks,
+    )
+    review = _copy.deepcopy(diagnostic.get("original_output"))
+    if not isinstance(review, dict):
+        return True
+    try:
+        normalize_review_fact_checks(review)
+        claim_ids = _content_map_claim_ids(folder)
+        errors, _warnings = validate_review_fact_checks(review, valid_claim_ids=claim_ids)
+        if errors and _deterministic_mode_fixes(review):
+            errors, _warnings = validate_review_fact_checks(review, valid_claim_ids=claim_ids)
+    except Exception:
+        return True
+    return bool(errors)
+
 def review_and_repair(
         folder, *, max_rounds=2, reviewer=None,
         model="", effort="max", run_report=None):
@@ -492,7 +518,8 @@ def review_and_repair(
                         and path.stat().st_mtime_ns < review_path.stat().st_mtime_ns):
                     break
                 data = load_json(path)
-                if data.get("reviewed_files") == current_hashes:
+                if (data.get("reviewed_files") == current_hashes
+                        and _contract_failure_still_reproduces(folder, data)):
                     cached_contract = ReviewContractError(
                         data.get("error", "review contract"), data)
                     cached_contract.diagnostic_path = path.relative_to(folder).as_posix()

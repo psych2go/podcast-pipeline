@@ -13,10 +13,13 @@ Dual runners (``SUBAGENT_RUNNER=auto|pi|grokbot``):
 - ``auto`` — ``grokbot`` when the Grok Bot / box markers are present, else ``pi``.
 
 Model defaults on the pi path:
-- Non-transcription tasks default to ``openai-codex/gpt-6-astra`` with
-  ``--thinking low`` (override via ``SUBAGENT_PI_MODEL`` / ``SUBAGENT_PI_THINKING``).
+- Non-transcription tasks default to ``openai-codex/gpt-6.1-sol`` with
+  ``--thinking low`` (override via ``SUBAGENT_PI_MODEL`` / ``SUBAGENT_PI_THINKING``;
+  writing/revision stages read ``SUBAGENT_PI_THINKING_WRITING``, e.g. ``high``).
+  Use provider ``openai-codex`` for gpt-6.1-sol: provider ``openai`` returns
+  403 ``subscription_sharing_user_not_eligible`` for ChatGPT-subscription logins.
 - Transcription / correction tasks (``transcript_correction*``) do **not** force
-  astra; use ``SUBAGENT_CORRECTION_MODEL`` / ``SUBAGENT_TRANSCRIPTION_MODEL`` /
+  the default model; use ``SUBAGENT_CORRECTION_MODEL`` / ``SUBAGENT_TRANSCRIPTION_MODEL`` /
   ``SUBAGENT_MODEL`` / pi's own default.
 
 Failover env (no secrets here): ``SUBAGENT_COMMAND``, ``SUBAGENT_FALLBACK_COMMAND``,
@@ -362,7 +365,7 @@ def _grokbot_backend():
 
 
 def _is_transcription_task(task_name):
-    """Transcription/correction stages must not force gpt-6-astra."""
+    """Transcription/correction stages must not force the default pi model."""
     name = str(task_name or "").strip().lower()
     if name == "transcript_correction" or name.startswith("transcript_correction_"):
         return True
@@ -374,10 +377,14 @@ def _is_transcription_task(task_name):
     return False
 
 
+DEFAULT_PI_PROVIDER = "openai-codex"
+DEFAULT_PI_MODEL = "gpt-6.1-sol"
+
+
 def _pi_provider():
     return (os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
             or os.environ.get("PI_PROVIDER", "").strip()
-            or "openai-codex")
+            or DEFAULT_PI_PROVIDER)
 
 
 def _pi_model(model):
@@ -393,7 +400,7 @@ def _pi_model(model):
 
 
 def _pi_default_model(task_name=None):
-    """Resolve pi provider/model; transcription never forces astra."""
+    """Resolve pi provider/model; transcription never forces the default."""
     model = (
         os.environ.get("SUBAGENT_PI_MODEL", "").strip() or os.environ.get("PI_MODEL", "").strip()
     )
@@ -406,9 +413,9 @@ def _pi_default_model(task_name=None):
         if transcription:
             return _pi_model(transcription)
         return _pi_model(model) or None
-    # Non-transcription pi path: default to gpt-6-astra unless explicitly set.
+    # Non-transcription pi path: default to gpt-6.1-sol unless explicitly set.
     if not model:
-        model = "gpt-6-astra"
+        model = DEFAULT_PI_MODEL
     return _pi_model(model) or None
 
 
@@ -1503,7 +1510,7 @@ def _run(
     # Per-task model arguments (e.g. SUBAGENT_REVIEW_MODEL) take precedence;
     # SUBAGENT_MODEL fills the stages that do not select a model themselves.
     # Transcription may also use SUBAGENT_TRANSCRIPTION_MODEL without forcing
-    # the non-transcription gpt-6-astra default.
+    # the non-transcription default pi model.
     if not model and _is_transcription_task(task_name):
         model = (
             os.environ.get("SUBAGENT_TRANSCRIPTION_MODEL", "").strip()

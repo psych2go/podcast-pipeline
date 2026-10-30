@@ -449,6 +449,53 @@ def validate_tts_readiness(text, lexicon=None):
     return issues
 
 
+_NOTES_PROVENANCE_RE = re.compile(
+    r"^\s*(?:转录依据|依据说明|资料依据)[:：]")
+_INTERNAL_FILE_RE = re.compile(
+    r"content_map\.json|summary_map\.json|原始转录\.txt|转录_纠错\.txt|来源\.md")
+_NOTES_PROVENANCE_HEADING_RE = re.compile(
+    r"^##\s*(?:证据基础|转录依据|资料依据|依据说明|来源说明|证据说明)\s*$")
+
+
+def strip_notes_provenance_preface(text):
+    """Drop writer-added provenance bookkeeping before the first real chapter.
+
+    Writers sometimes open 中文完整笔记.md with a line or a "## 证据基础"
+    section such as "本笔记依据原始转录.txt ... content_map.json ..."; that is
+    internal bookkeeping, not public prose. Only content before the first
+    real chapter is touched: preface lines are dropped when they match the
+    provenance prefix or cite internal pipeline files, and a provenance-titled
+    section is dropped only when every body line is flagged by that audit.
+    """
+    lines = (text or "").splitlines(keepends=True)
+    out = []
+    index = 0
+    in_preface = True
+    while index < len(lines):
+        line = lines[index]
+        if in_preface and _NOTES_PROVENANCE_HEADING_RE.match(line.strip()):
+            stop = index + 1
+            while stop < len(lines) and not lines[stop].startswith("## "):
+                stop += 1
+            body = [item for item in lines[index + 1:stop] if item.strip()]
+            if body and all(audit_narration_issues(item) for item in body):
+                index = stop
+                continue
+            in_preface = False
+        elif line.startswith("## "):
+            in_preface = False
+        elif (in_preface and line.strip()
+              and any(item.startswith("## ") for item in lines[index + 1:])
+              and (_NOTES_PROVENANCE_RE.match(line)
+                   or _INTERNAL_FILE_RE.search(line))):
+            index += 1
+            continue
+        out.append(line)
+        index += 1
+    cleaned = "".join(out)
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
 def finalize_content_package(folder):
     """Finalize generated content files before evidence enrichment/review."""
     folder = Path(folder)
@@ -473,8 +520,12 @@ def finalize_content_package(folder):
             + "; ".join(audit_issues[:5]))
     notes_path = folder / "中文完整笔记.md"
     if notes_path.exists():
-        notes_audit_issues = audit_narration_issues(
-            notes_path.read_text(encoding="utf-8"))
+        notes_text = notes_path.read_text(encoding="utf-8")
+        cleaned_notes = strip_notes_provenance_preface(notes_text)
+        if cleaned_notes != notes_text:
+            notes_path.write_text(cleaned_notes, encoding="utf-8")
+            notes_text = cleaned_notes
+        notes_audit_issues = audit_narration_issues(notes_text)
         if notes_audit_issues:
             raise ContentFinalizationError(
                 "完整笔记包含面向内部的审查过程语言: "

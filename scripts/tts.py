@@ -311,6 +311,10 @@ def normalize_for_tts(text):
     # 不可见字符 / nbsp → 普通空格：
     #   零宽 U+200B-200F、行/段分隔 U+2028/2029、BOM/零宽不换行 U+FEFF、不间断空格 U+00A0
     text = re.sub(r"[\u200b-\u200f\u2028\u2029\ufeff\u00a0]", " ", text)
+    # 来源引用（括注里的 URL / 裸 URL / www 域名）只服务于文字稿，朗读时去掉，
+    # 否则 TTS 会念出 "/"、slug 等难读串。
+    text = re.sub(r"[（(][^（）()\n]*(?:https?://|www\.)[^（）()\n]*[）)]", "", text)
+    text = re.sub(r"(?:https?://|www\.)[^\s，。；、）)]+", "", text)
     # 行尾空白
     text = re.sub(r"[ \t]+\n", "\n", text)
     # 3+ 换行折叠

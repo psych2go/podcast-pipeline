@@ -1,6 +1,7 @@
 """Pre-writing fact-check ledger for source-faithful podcast drafting."""
 import hashlib
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, UTC
 from pathlib import Path
@@ -454,6 +455,53 @@ def _batch_pairs(payload):
     ]
 
 
+def _norm_claim_text(text):
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _align_batch_claims(payload, inventory):
+    """Map returned claim records onto the expected inventory.
+
+    Models sometimes reorder records, re-quote ``source_claim`` with small
+    whitespace/punctuation drift, add extras, or skip a few items.  Records
+    are matched by (parent_claim_id, normalized source_claim) first, then by a
+    parent_claim_id that is unique in the batch; the pipeline-owned
+    ``source_claim`` text is restored.  Returns ``(matched, missing)`` where
+    ``matched`` maps inventory index -> record.
+    """
+    records = [
+        item for item in (payload.get("claims", []) or [])
+        if isinstance(item, dict)
+    ]
+    parent_counts = {}
+    for item in inventory:
+        parent_counts[item["parent_claim_id"]] = parent_counts.get(
+            item["parent_claim_id"], 0) + 1
+    by_exact = {}
+    by_parent = {}
+    for record in records:
+        key = (str(record.get("parent_claim_id", "")),
+               _norm_claim_text(record.get("source_claim")))
+        by_exact.setdefault(key, record)
+        by_parent.setdefault(str(record.get("parent_claim_id", "")), record)
+    matched = {}
+    used = set()
+    for index, item in enumerate(inventory):
+        key = (item["parent_claim_id"], _norm_claim_text(item["source_claim"]))
+        record = by_exact.get(key)
+        if record is None and parent_counts[item["parent_claim_id"]] == 1:
+            record = by_parent.get(item["parent_claim_id"])
+        if record is None or id(record) in used:
+            continue
+        used.add(id(record))
+        record = dict(record)
+        record["parent_claim_id"] = item["parent_claim_id"]
+        record["source_claim"] = item["source_claim"]
+        matched[index] = record
+    missing = [i for i in range(len(inventory)) if i not in matched]
+    return matched, missing
+
+
 def _run_fact_check_batch(
         folder, inventory, content_map_sha256, transcript_basis,
         model, effort, batch_index):
@@ -461,15 +509,22 @@ def _run_fact_check_batch(
         (item["parent_claim_id"], item["source_claim"])
         for item in inventory
     ]
-    task = _prompt(
-        folder, inventory, content_map_sha256, transcript_basis)
-    task += (
-        f"\n这是第 {batch_index} 批，只核查本批 {len(inventory)} 条 claim；"
-        "claims 和 summary.claim_count 必须只覆盖本批。"
-        f"\n本次核查 effort={effort}。"
-    )
-    last_error = None
-    for attempt in range(1, 3):
+    matched = {}
+    issues = []
+    retry_events = []
+    duration_ms = 0
+    last_result = None
+    remaining = list(range(len(inventory)))
+    for attempt in range(1, 4):
+        subset = [inventory[i] for i in remaining]
+        task = _prompt(
+            folder, subset, content_map_sha256, transcript_basis)
+        task += (
+            f"\n这是第 {batch_index} 批，只核查本批 {len(subset)} 条 claim；"
+            "claims 和 summary.claim_count 必须只覆盖本批，"
+            "按输入顺序逐条输出，parent_claim_id 和 source_claim 原样复制。"
+            f"\n本次核查 effort={effort}。"
+        )
         result = run_json_task(
             folder,
             task,
@@ -480,11 +535,48 @@ def _run_fact_check_batch(
             model=model or None,
             timeout=1800,
         )
-        if _batch_pairs(result["payload"]) == expected_pairs:
-            return result
-        last_error = RuntimeError(
+        last_result = result
+        payload = result["payload"]
+        duration_ms += result.get("duration_ms") or 0
+        retry_events.extend(result.get("retry_events", []) or [])
+        sub_matched, _sub_missing = _align_batch_claims(payload, subset)
+        subset_parents = set()
+        for sub_index, record in sub_matched.items():
+            matched[remaining[sub_index]] = record
+            subset_parents.add(record["parent_claim_id"])
+        issues.extend(
+            issue for issue in (payload.get("issue_inventory", []) or [])
+            if isinstance(issue, dict)
+            and issue.get("parent_claim_id") in subset_parents)
+        remaining = [i for i in range(len(inventory)) if i not in matched]
+        if not remaining:
+            break
+        print(
+            f"[预写作事实台账] 第 {batch_index} 批第 {attempt} 次缺少 "
+            f"{len(remaining)} 条 claim，仅重试缺失项",
+            flush=True,
+        )
+    if remaining:
+        raise RuntimeError(
             f"预写作事实台账第 {batch_index} 批未完整覆盖输入 claim")
-    raise last_error
+    claims = [matched[i] for i in range(len(inventory))]
+    assert _batch_pairs({"claims": claims}) == expected_pairs
+    merged = dict(last_result)
+    merged["payload"] = {
+        **last_result["payload"],
+        "claims": claims,
+        "issue_inventory": issues,
+        "summary": {
+            "claim_count": len(claims),
+            "checked_subclaim_count": sum(
+                len(item.get("checks", []) or []) for item in claims),
+            "issue_count": len(issues),
+            "exhaustive_inventory_completed": True,
+        },
+    }
+    merged["duration_ms"] = duration_ms
+    merged["retry_events"] = retry_events
+    return merged
 
 
 def run_prewrite_fact_checks(
