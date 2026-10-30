@@ -1457,11 +1457,17 @@ def _merge_targeted_checks(review, scope):
     # because deletion can reindex the remaining claim/subclaim IDs within one.
     units = set(scope["affected_units"])
     incoming = review.get("fact_checks", []) or []
-    if any(str(item.get("parent_claim_id", "")).split("-", 1)[0] not in units
-           for item in incoming):
-        raise RuntimeError("局部复审返回了范围外 fact_check")
     retained = [item for item in scope["previous_review"].get("fact_checks", []) or []
                 if str(item.get("parent_claim_id", "")).split("-", 1)[0] not in units]
+    retained_ids = {item.get("subclaim_id") for item in retained}
+    # Reviewers often echo the retained (out-of-scope) checks they were shown.
+    # Those echoes are dropped so the main flow's preserved checks stay
+    # authoritative; a genuinely new out-of-scope check is still rejected.
+    out_of_scope = [item for item in incoming
+                    if str(item.get("parent_claim_id", "")).split("-", 1)[0] not in units]
+    if any(item.get("subclaim_id") not in retained_ids for item in out_of_scope):
+        raise RuntimeError("局部复审返回了范围外 fact_check")
+    incoming = [item for item in incoming if item not in out_of_scope]
     review["fact_checks"] = retained + incoming
     for issue in scope["previous_review"].get("issues", []) or []:
         issue_units = set(re.findall(r"\bU\d+\b", json.dumps(issue, ensure_ascii=False)))
