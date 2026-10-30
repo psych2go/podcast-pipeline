@@ -144,11 +144,26 @@ public_source 必须为直接支持该客观事实的公开材料；找不到时
         enable_search=True, model=model or None, timeout=600, effort=effort,
     )
     allowed = {(item["parent_claim_id"], item["repair_reason"]) for item in targets}
+    reasons_by_claim = {}
+    for item in targets:
+        reasons_by_claim.setdefault(item["parent_claim_id"], set()).add(
+            item["repair_reason"])
     accepted = []
     rejected = []
     for source in result["payload"].get("sources", [])[:12]:
         try:
-            if (source["parent_claim_id"], source["purpose"]) not in allowed:
+            source = dict(source)
+            key = (source.get("parent_claim_id"), source.get("purpose"))
+            reasons = reasons_by_claim.get(source.get("parent_claim_id"), set())
+            # A verified quote for a targeted claim is still a useful lead when
+            # the model mislabels its purpose (e.g. a study page returned as
+            # public_source for a speaker_reported research claim). Rebind it
+            # to the claim's only target reason; the next independent review
+            # re-checks the source. Untargeted claims stay rejected.
+            if key not in allowed and len(reasons) == 1:
+                source["original_purpose"] = source.get("purpose")
+                source["purpose"] = next(iter(reasons))
+            if (source.get("parent_claim_id"), source.get("purpose")) not in allowed:
                 raise ValueError("来源不属于本轮目标")
             # The shared fetcher rejects private hosts, checks TLS, pins public
             # addresses and bounds redirects/bytes. A model-supplied URL alone
