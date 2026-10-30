@@ -985,6 +985,23 @@ def merge_alias_repair_changes(changes, alias_repairs):
     return merged
 
 
+def _claim_progress_is_current(folder, raw_path):
+    """A stale/failed claim-evidence checkpoint must be resumed, not skipped.
+
+    The quality gate rejects any non-completed progress file, so skipping the
+    stage just because content_map.json validates wastes a full writing run.
+    """
+    from scripts.claim_evidence import validate_progress
+    progress_path = Path(folder) / "claim_evidence_progress.json"
+    if not progress_path.exists():
+        return True
+    try:
+        return not validate_progress(
+            load_json(progress_path), load_json(raw_path))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def run_content_pipeline(folder, title, run_report=None, force=False):
     """Run correction, content mapping, writing, evidence, and hash enrichment."""
     folder = Path(folder).resolve()
@@ -1138,8 +1155,10 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
             if stage is not None:
                 stage.metrics["unit_count"] = len(payload["units"])
 
+    claim_progress_ready = content_map_ready and _claim_progress_is_current(
+        folder, raw_path)
     with _stage(run_report, "subagent_claim_evidence") as stage:
-        if content_map_ready:
+        if claim_progress_ready:
             if stage is not None:
                 stage.metrics.update({
                     "skipped": True,
