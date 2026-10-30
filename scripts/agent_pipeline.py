@@ -116,6 +116,41 @@ def build_depth_repair_request(folder, targets):
     }
 
 
+def build_narration_repair_request(folder, target_name, issues):
+    """Rewrite only lines that leak reviewer/pipeline instructions."""
+    folder = Path(folder)
+    target = folder / target_name
+    listed = "\n".join(f"- {issue}" for issue in issues)
+    return {
+        "prompt": f"""{target_name} 有以下行混入了面向内部的审查/写作指令语言（如“公开稿应……”“这里应保留……”“本稿未核实”）：
+{listed}
+只改写这些行：把指令落实为正文里的自然限定（例如“公开稿应限定为小鼠实验”改为“这一结果仅限小鼠实验”），
+保留原有事实、数字、归因和限定条件，不新增事实，不删除其他内容，不改章节标题。只修改 {target_name}。""",
+        "allowed_files": [target],
+        "input_files": [folder / "content_map.json", folder / "summary_map.json"],
+        "required_files": [target],
+    }
+
+
+def _repair_internal_narration(folder, message):
+    from scripts.content_finalizer import audit_narration_issues
+    folder = Path(folder)
+    target_name = "讲书稿.md" if message.startswith("讲稿") else "中文完整笔记.md"
+    path = folder / target_name
+    issues = audit_narration_issues(path.read_text(encoding="utf-8"))
+    if not issues:
+        return
+    request = build_narration_repair_request(folder, target_name, issues)
+    run_edit_task(
+        folder,
+        request["prompt"],
+        task_name="content_narration_repair",
+        allowed_files=request["allowed_files"],
+        input_files=request["input_files"],
+        required_files=request["required_files"],
+    )
+
+
 def _finalize_with_depth_repair(folder):
     """Finalize content, retaining only monotonic bounded depth expansions."""
     folder = Path(folder)
@@ -125,10 +160,18 @@ def _finalize_with_depth_repair(folder):
     best_decoded = best_text.decode("utf-8")
     best_score = _depth_score(best_decoded)
     best_titles = [title for title, _size in _chapter_depths(best_decoded)]
-    for attempt in range(max_expansions + 1):
+    max_narration_rounds = max(0, int(os.environ.get(
+        "CONTENT_NARRATION_REPAIR_MAX_ROUNDS", "2")))
+    narration_rounds = 0
+    for attempt in range(max_expansions + max_narration_rounds + 1):
         try:
             return finalize_content_package(folder)
         except Exception as exc:
+            if ("包含面向内部的审查过程语言" in str(exc)
+                    and narration_rounds < max_narration_rounds):
+                narration_rounds += 1
+                _repair_internal_narration(folder, str(exc))
+                continue
             if ("章节深度未通过" not in str(exc)
                     or attempt >= max_expansions):
                 raise
