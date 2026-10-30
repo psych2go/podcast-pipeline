@@ -30,3 +30,16 @@ class AliasRepairProtectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AliasErrorProtectionTests(unittest.TestCase):
+    def test_first_name_inside_other_full_name_is_not_a_leak(self):
+        from scripts.canonical_entities import public_entity_alias_errors
+        payload = {"entities": [
+            {"canonical_name": "David Goggins", "observed_names": ["Goggins"],
+             "public_aliases": [], "entity_type": "person"},
+            {"canonical_name": "David protein bars", "observed_names": ["David"],
+             "public_aliases": [], "entity_type": "product"},
+        ]}
+        self.assertEqual(public_entity_alias_errors(payload, "David Goggins 式激励"), [])
+        self.assertTrue(public_entity_alias_errors(payload, "广告里的 David 很好吃"))

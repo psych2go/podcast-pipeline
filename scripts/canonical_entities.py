@@ -278,6 +278,23 @@ def public_entity_alias_errors(payload, *texts):
             value = str(observed_name).strip().casefold()
             if value:
                 observed_counts[value] = observed_counts.get(value, 0) + 1
+    # Spans of every entity's canonical name / public aliases. A short
+    # observed variant of one entity ("David") inside another entity's full
+    # name ("David Goggins") is not a leak.
+    other_entity_spans = []
+    for entity in payload.get("entities", []) or []:
+        if not isinstance(entity, dict):
+            continue
+        for name in [entity.get("canonical_name", ""), *(entity.get("public_aliases") or [])]:
+            name = str(name).strip()
+            if not name:
+                continue
+            name_pattern = (
+                rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])"
+                if name[0].isascii() and name[-1].isascii() else re.escape(name))
+            other_entity_spans.extend(
+                (match.start(), match.end())
+                for match in re.finditer(name_pattern, joined, re.IGNORECASE))
     for item in payload.get("entities", []) or []:
         if not isinstance(item, dict):
             continue
@@ -349,7 +366,10 @@ def public_entity_alias_errors(payload, *texts):
             leaked = any(
                 not any(
                     start <= match.start() and match.end() <= end
-                    for start, end in allowed_spans
+                    and (end - start) > (match.end() - match.start())
+                    or (start <= match.start() and match.end() <= end
+                        and (start, end) in allowed_spans)
+                    for start, end in [*allowed_spans, *other_entity_spans]
                 )
                 for match in pattern.finditer(joined)
             )
