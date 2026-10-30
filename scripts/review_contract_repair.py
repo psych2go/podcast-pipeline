@@ -343,17 +343,26 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
         edits = {name: [] for name in PROSE_FILES}
         original_prose = {name: (workspace / name).read_text(encoding="utf-8")
                           for name in PROSE_FILES}
+        skipped = []
         for replacement in plan.get("replacements", []):
-            name, old, new = (replacement[k] for k in ("file", "old", "new"))
+            name, old, new = (replacement.get(k, "") for k in ("file", "old", "new"))
             if name not in PROSE_FILES or not old.strip() or old == new:
                 raise ValueError("合同修复必须是受限的精确稿件替换")
             text = original_prose[name]
+            # A provider plan whose ``old`` does not match exactly once (or
+            # overlaps an accepted edit) is dropped, not applied fuzzily. One
+            # bad anchor must not discard the verified sources and the other
+            # exact edits of the same round: every change is still re-checked
+            # by the next independent review, and the round must still change
+            # prose or attach a real source (checked below).
             if text.count(old) != 1:
-                raise ValueError("合同修复的 old 必须唯一匹配")
+                skipped.append({"file": name, "old": old, "reason": "old 未唯一匹配"})
+                continue
             start = text.index(old)
             end = start + len(old)
             if any(start < stop and end > begin for begin, stop, _ in edits[name]):
-                raise ValueError("合同修复不允许重叠替换")
+                skipped.append({"file": name, "old": old, "reason": "重叠替换"})
+                continue
             edits[name].append((start, end, new))
             changed = True
         for name, replacements in edits.items():
@@ -362,6 +371,8 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
                 text = text[:start] + new + text[end:]
             atomic_write_text(workspace / name, text)
         if not changed and not sources:
+            if skipped:
+                raise ValueError("合同修复的 old 必须唯一匹配")
             raise ValueError("合同修复没有改变稿件或补充真实来源")
         _attach_sources(workspace, sources)
         removed = remove_claims(workspace, removed_ids, plan.get("remove_number_ids", []),
@@ -411,4 +422,5 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
             raise
     return {"action": "repair_review_contract_content", "target_count": len(targets),
             "sources": sources, "rejected_sources": rejected, "removed_claims": removed,
+            "skipped_replacements": skipped,
             "affected_units": sorted({t["parent_claim_id"].split("-", 1)[0] for t in targets})}
