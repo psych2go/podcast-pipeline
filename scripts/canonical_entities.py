@@ -187,6 +187,19 @@ def validate_canonical_entities(payload, transcript=None):
     return errors
 
 
+def _inside_longer_proper_name(text, match):
+    """True when a single-word Latin variant is part of a longer Title-Case
+    name (e.g. "David" in "David Cho"), i.e. a different proper name."""
+    word = match.group(0)
+    if not re.fullmatch(r"[A-Z][A-Za-z'-]+", word):
+        return False
+    after = text[match.end():match.end() + 40]
+    before = text[max(0, match.start() - 40):match.start()]
+    return bool(
+        re.match(r" [A-Z][a-z][A-Za-z'-]*", after)
+        or re.search(r"[A-Z][a-z][A-Za-z'-]* $", before))
+
+
 def repair_public_entity_aliases(payload, *paths):
     """Replace unambiguous observed entity variants with canonical names."""
     changes = 0
@@ -251,6 +264,8 @@ def repair_public_entity_aliases(payload, *paths):
                         url_spans=url_spans):
                 if any(start <= match.start() and match.end() <= end
                        for start, end in [*canonical_spans, *url_spans]):
+                    return match.group(0)
+                if _inside_longer_proper_name(match.string, match):
                     return match.group(0)
                 return canonical
             text = pattern.sub(replace, text)
@@ -371,6 +386,7 @@ def public_entity_alias_errors(payload, *texts):
                         and (start, end) in allowed_spans)
                     for start, end in [*allowed_spans, *other_entity_spans]
                 )
+                and not _inside_longer_proper_name(joined, match)
                 for match in pattern.finditer(joined)
             )
             if leaked:

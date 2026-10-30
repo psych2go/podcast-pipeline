@@ -43,3 +43,14 @@ class AliasErrorProtectionTests(unittest.TestCase):
         ]}
         self.assertEqual(public_entity_alias_errors(payload, "David Goggins 式激励"), [])
         self.assertTrue(public_entity_alias_errors(payload, "广告里的 David 很好吃"))
+
+
+class LongerProperNameTests(unittest.TestCase):
+    def test_first_name_of_unlisted_person_is_not_a_leak(self):
+        from scripts.canonical_entities import public_entity_alias_errors
+        payload = {"entities": [
+            {"canonical_name": "David protein bars", "observed_names": ["David"],
+             "public_aliases": [], "entity_type": "product"},
+        ]}
+        self.assertEqual(public_entity_alias_errors(payload, "他以David Cho为例"), [])
+        self.assertTrue(public_entity_alias_errors(payload, "推荐David，很好吃"))
