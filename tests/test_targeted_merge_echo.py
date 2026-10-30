@@ -18,7 +18,7 @@ class TargetedMergeEchoTests(unittest.TestCase):
             "issues": []}}
 
     def test_echoed_retained_check_is_dropped(self):
-        review = {"fact_checks": [fc("U0001-C01", "U0001-C01-F01", "supported"),
+        review = {"fact_checks": [fc("U0001-C01", "U0001-C01-F01"),
                                   fc("U0002-C01", "U0002-C01-F01", "supported")]}
         merged = _merge_targeted_checks(review, self.scope())
         self.assertEqual(len(merged["fact_checks"]), 2)
