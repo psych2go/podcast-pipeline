@@ -546,6 +546,9 @@ def content_pipeline_needed(folder, force=False):
             return True
         if not _writing_inputs_are_current(folder, summary_map):
             return True
+        if not _claim_progress_is_current(
+                folder, folder / "transcript.raw.json"):
+            return True
         errors, _warnings = validate_content_map(content_map, transcript)
         summary_errors = validate_summary_map(
             summary_map, briefing_text, content_map, notes_text)
