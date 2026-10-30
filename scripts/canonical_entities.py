@@ -218,6 +218,17 @@ def repair_public_entity_aliases(payload, *paths):
             replacements.append((pattern, canonical))
     # Longest variants first prevents a short variant from consuming a longer one.
     replacements.sort(key=lambda pair: len(pair[0].pattern), reverse=True)
+    # Every entity's canonical name / public alias is protected, not only the
+    # replacement target's: a bare first name observed for one entity
+    # ("David" -> "David protein bars") must never rewrite another entity's
+    # full name ("David Goggins").
+    protected_names = sorted({
+        str(name).strip()
+        for item in payload.get("entities", []) or []
+        if isinstance(item, dict)
+        for name in [item.get("canonical_name", ""), *(item.get("public_aliases") or [])]
+        if str(name).strip()
+    }, key=len, reverse=True)
     for path in paths:
         path = Path(path)
         text = path.read_text(encoding="utf-8")
@@ -225,7 +236,12 @@ def repair_public_entity_aliases(payload, *paths):
         for pattern, canonical in replacements:
             canonical_spans = [
                 (match.start(), match.end())
-                for match in re.finditer(re.escape(canonical), text, re.IGNORECASE)
+                for name in {canonical, *protected_names}
+                for match in re.finditer(
+                    rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])"
+                    if name[0].isascii() and name[-1].isascii()
+                    else re.escape(name),
+                    text, re.IGNORECASE)
             ]
             url_spans = [
                 (match.start(), match.end())
