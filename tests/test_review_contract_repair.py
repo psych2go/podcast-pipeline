@@ -193,6 +193,33 @@ class ContractRecoveryTests(unittest.TestCase):
                         repair.repair_contract_failure(folder, diagnostic())
                 self.assertEqual(before, {p.name: p.read_bytes() for p in folder.iterdir()})
 
+    def test_unmatched_replacement_is_skipped_but_other_exact_edits_apply(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            package(folder)
+            plan = attribution_plan()
+            plan["replacements"].append({"file": "讲书稿.md", "old": "不存在的句子。",
+                                         "new": "改写。"})
+            with patch.object(repair, "lookup_sources", return_value=([], [])), \
+                    patch.object(repair, "run_json_task", return_value={"payload": plan}), \
+                    patch("scripts.content_finalizer.structure_report", return_value=[]):
+                action = repair.repair_contract_failure(folder, diagnostic())
+            self.assertIn("据节目中嘉宾所说", (folder / "讲书稿.md").read_text())
+            self.assertEqual([s["old"] for s in action["skipped_replacements"]], ["不存在的句子。"])
+
+    def test_only_unmatched_replacements_without_sources_still_fail_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            package(folder)
+            before = {p.name: p.read_bytes() for p in folder.iterdir()}
+            plan = {"replacements": [{"file": "讲书稿.md", "old": "不存在的句子。",
+                                      "new": "改写。"}]}
+            with patch.object(repair, "lookup_sources", return_value=([], [])), \
+                    patch.object(repair, "run_json_task", return_value={"payload": plan}):
+                with self.assertRaisesRegex(ValueError, "唯一匹配"):
+                    repair.repair_contract_failure(folder, diagnostic())
+            self.assertEqual(before, {p.name: p.read_bytes() for p in folder.iterdir()})
+
     def test_lookup_failure_still_attempts_safe_prose_fallback(self):
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)

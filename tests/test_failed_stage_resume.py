@@ -203,8 +203,14 @@ class TargetedReviewTests(unittest.TestCase):
         self.assertEqual(result["fact_checks"], [previous["fact_checks"][1], fresh])
         self.assertEqual(previous, frozen)
         self.assertIn("完整发布判定", ai_review._targeted_review_prompt(scope))
+        # A verbatim echo of a retained check is dropped (retained copy wins);
+        # a changed out-of-scope verdict is still rejected.
+        echoed = ai_review._merge_targeted_checks(
+            {"fact_checks": [copy.deepcopy(previous["fact_checks"][1])]}, scope)
+        self.assertEqual(echoed["fact_checks"], [previous["fact_checks"][1]])
         with self.assertRaises(RuntimeError):
-            ai_review._merge_targeted_checks({"fact_checks": [previous["fact_checks"][1]]}, scope)
+            ai_review._merge_targeted_checks({"fact_checks": [
+                {**previous["fact_checks"][1], "verdict": "contradicted"}]}, scope)
         issue = {"severity": "high", "category": "coverage", "statement": "U0002-C01 missing"}
         scope["previous_review"]["issues"] = [issue]
         result = ai_review._merge_targeted_checks({"passed": True, "fact_checks": [fresh]}, scope)

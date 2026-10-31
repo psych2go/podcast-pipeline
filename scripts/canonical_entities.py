@@ -187,6 +187,19 @@ def validate_canonical_entities(payload, transcript=None):
     return errors
 
 
+def _inside_longer_proper_name(text, match):
+    """True when a single-word Latin variant is part of a longer Title-Case
+    name (e.g. "David" in "David Cho"), i.e. a different proper name."""
+    word = match.group(0)
+    if not re.fullmatch(r"[A-Z][A-Za-z'-]+", word):
+        return False
+    after = text[match.end():match.end() + 40]
+    before = text[max(0, match.start() - 40):match.start()]
+    return bool(
+        re.match(r" [A-Z][a-z][A-Za-z'-]*", after)
+        or re.search(r"[A-Z][a-z][A-Za-z'-]* $", before))
+
+
 def repair_public_entity_aliases(payload, *paths):
     """Replace unambiguous observed entity variants with canonical names."""
     changes = 0
@@ -218,6 +231,17 @@ def repair_public_entity_aliases(payload, *paths):
             replacements.append((pattern, canonical))
     # Longest variants first prevents a short variant from consuming a longer one.
     replacements.sort(key=lambda pair: len(pair[0].pattern), reverse=True)
+    # Every entity's canonical name / public alias is protected, not only the
+    # replacement target's: a bare first name observed for one entity
+    # ("David" -> "David protein bars") must never rewrite another entity's
+    # full name ("David Goggins").
+    protected_names = sorted({
+        str(name).strip()
+        for item in payload.get("entities", []) or []
+        if isinstance(item, dict)
+        for name in [item.get("canonical_name", ""), *(item.get("public_aliases") or [])]
+        if str(name).strip()
+    }, key=len, reverse=True)
     for path in paths:
         path = Path(path)
         text = path.read_text(encoding="utf-8")
@@ -225,7 +249,12 @@ def repair_public_entity_aliases(payload, *paths):
         for pattern, canonical in replacements:
             canonical_spans = [
                 (match.start(), match.end())
-                for match in re.finditer(re.escape(canonical), text, re.IGNORECASE)
+                for name in {canonical, *protected_names}
+                for match in re.finditer(
+                    rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])"
+                    if name[0].isascii() and name[-1].isascii()
+                    else re.escape(name),
+                    text, re.IGNORECASE)
             ]
             url_spans = [
                 (match.start(), match.end())
@@ -235,6 +264,8 @@ def repair_public_entity_aliases(payload, *paths):
                         url_spans=url_spans):
                 if any(start <= match.start() and match.end() <= end
                        for start, end in [*canonical_spans, *url_spans]):
+                    return match.group(0)
+                if _inside_longer_proper_name(match.string, match):
                     return match.group(0)
                 return canonical
             text = pattern.sub(replace, text)
@@ -262,6 +293,23 @@ def public_entity_alias_errors(payload, *texts):
             value = str(observed_name).strip().casefold()
             if value:
                 observed_counts[value] = observed_counts.get(value, 0) + 1
+    # Spans of every entity's canonical name / public aliases. A short
+    # observed variant of one entity ("David") inside another entity's full
+    # name ("David Goggins") is not a leak.
+    other_entity_spans = []
+    for entity in payload.get("entities", []) or []:
+        if not isinstance(entity, dict):
+            continue
+        for name in [entity.get("canonical_name", ""), *(entity.get("public_aliases") or [])]:
+            name = str(name).strip()
+            if not name:
+                continue
+            name_pattern = (
+                rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])"
+                if name[0].isascii() and name[-1].isascii() else re.escape(name))
+            other_entity_spans.extend(
+                (match.start(), match.end())
+                for match in re.finditer(name_pattern, joined, re.IGNORECASE))
     for item in payload.get("entities", []) or []:
         if not isinstance(item, dict):
             continue
@@ -333,8 +381,12 @@ def public_entity_alias_errors(payload, *texts):
             leaked = any(
                 not any(
                     start <= match.start() and match.end() <= end
-                    for start, end in allowed_spans
+                    and (end - start) > (match.end() - match.start())
+                    or (start <= match.start() and match.end() <= end
+                        and (start, end) in allowed_spans)
+                    for start, end in [*allowed_spans, *other_entity_spans]
                 )
+                and not _inside_longer_proper_name(joined, match)
                 for match in pattern.finditer(joined)
             )
             if leaked:

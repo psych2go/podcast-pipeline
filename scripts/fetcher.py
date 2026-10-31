@@ -63,14 +63,32 @@ class _PodscriptsParser(HTMLParser):
         classes = attributes.get("class", "") or ""
         if tag == "br" and self.capture is not None:
             self.capture.append(" ")
-        if tag == "div" and "single-sentence" in classes and self.group is None:
+        class_set = set(classes.split())
+        if (tag == "div" and self.group is None and (
+                "single-sentence" in classes
+                or "psb-ep__paragraph" in class_set)):
             self.group = {"timestamp": None, "texts": []}
             self.group_depth = 1
             return
         if self.group is not None and tag not in self.VOID_TAGS:
             self.group_depth += 1
         if tag == "span" and self.group is not None:
-            if "pod_timestamp_indicator" in classes:
+            # 2026-10 markup: <div class="psb-ep__paragraph"> with
+            # <span class="psb-ep__time" data-seconds=N> and one
+            # <span class="psb-ep__sentence"> per sentence.
+            if "psb-ep__time" in class_set:
+                seconds = attributes.get("data-seconds")
+                if seconds is not None and str(seconds).strip().isdigit():
+                    self.group["timestamp"] = int(str(seconds).strip())
+                    self.capture = []
+                    self.capture_kind = "ignore"
+                else:
+                    self.capture = []
+                    self.capture_kind = "timestamp"
+            elif "psb-ep__sentence" in class_set:
+                self.capture = []
+                self.capture_kind = "text"
+            elif "pod_timestamp_indicator" in classes:
                 self.capture = []
                 self.capture_kind = "timestamp"
             elif "transcript-text" in classes:
