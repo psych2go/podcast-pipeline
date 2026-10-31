@@ -165,7 +165,12 @@ def _chinese_tts_number(match):
 
 def normalize_tts_digits(text):
     """Shared exact number spelling for TTS and evidence-detail matching."""
-    return re.sub(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?%?", _chinese_tts_number, text)
+    # Keep digits that belong to a hyphenated/parenthesized identifier
+    # (GLP-1, COVID-19, 510(k)) intact; those need a tts_lexicon entry instead
+    # of a partial spelling like "GLP-一" that the lexicon can no longer match.
+    return re.sub(
+        r"(?<![A-Za-z0-9])(?<![A-Za-z]-)\d+(?:\.\d+)?%?(?!\.?\d)(?![(（][A-Za-z])",
+        _chinese_tts_number, text)
 
 
 def integer_to_chinese(value):
