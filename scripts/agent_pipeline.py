@@ -546,6 +546,9 @@ def content_pipeline_needed(folder, force=False):
             return True
         if not _writing_inputs_are_current(folder, summary_map):
             return True
+        if not _claim_progress_is_current(
+                folder, folder / "transcript.raw.json"):
+            return True
         errors, _warnings = validate_content_map(content_map, transcript)
         summary_errors = validate_summary_map(
             summary_map, briefing_text, content_map, notes_text)
@@ -904,6 +907,18 @@ def _tts_lexicon_change_errors(briefing, existing, updated):
     return errors
 
 
+def _tts_full_tokens(briefing, issues):
+    """Full hyphen/dot-joined source tokens that contain a flagged fragment."""
+    fragments = set()
+    for issue in issues:
+        fragments.update(re.findall(r"'([^']+)'", str(issue)))
+    tokens = set(re.findall(r"[A-Za-z0-9][A-Za-z0-9.+/-]*[A-Za-z0-9]", briefing))
+    found = sorted(
+        token for token in tokens
+        if any(fragment in token and fragment != token for fragment in fragments))
+    return found[:20]
+
+
 def _ensure_tts_lexicon_ready(folder, briefing_path):
     briefing = briefing_path.read_text(encoding="utf-8")
     repaired_digits = _repair_tts_digits(briefing)
@@ -914,11 +929,23 @@ def _ensure_tts_lexicon_ready(folder, briefing_path):
     if not issues:
         return {"repaired": False, "entries": len(load_tts_lexicon(folder))}
     lexicon_path = folder / "tts_lexicon.json"
-    existing = load_tts_lexicon(folder)
-    run_edit_task(
-        folder,
-        f"""只修复讲书稿的 TTS 读音词典。当前确定性检查问题：
-{json.dumps(issues, ensure_ascii=False)}
+    max_rounds = max(1, int(os.environ.get("TTS_LEXICON_REPAIR_MAX_ROUNDS", "2")))
+    remaining = issues
+    lexicon = load_tts_lexicon(folder)
+    for round_index in range(1, max_rounds + 1):
+        existing = load_tts_lexicon(folder)
+        hint = ""
+        if round_index > 1:
+            hint = (
+                "\n上一轮词典替换后仍有问题（通常是只映射了连字符复合词的一部分，"
+                "例如映射 GPC 后剩下 alpha-G）。请删除这类残片 key，改为映射讲稿中的完整原词，"
+                "例如 \"alpha-GPC\": \"阿尔法 G P C\"。讲稿中相关完整原词："
+                + json.dumps(_tts_full_tokens(briefing, remaining), ensure_ascii=False)
+            )
+        run_edit_task(
+            folder,
+            f"""只修复讲书稿的 TTS 读音词典。当前确定性检查问题：
+{json.dumps(remaining, ensure_ascii=False)}{hint}
 
 读取讲书稿.md，在 tts_lexicon.json 中为确实出现的完整词或完整短语增加精确映射。
 输出必须是 JSON 对象 {{\"原词或短语\": \"自然中文朗读文本\"}}。
@@ -929,22 +956,24 @@ key 最多 48 个字符、最多 6 个空格分词、最多 6 个汉字，并且
 不得使用空 key、不得级联替换，不得修改讲书稿或任何内容事实。
 混合大小写品牌、技术符号应按上下文给出自然读音；拿不准时不要猜。
 只修改 tts_lexicon.json。""",
-        task_name="tts_lexicon_pre_review",
-        allowed_files=[lexicon_path],
-        input_files=[briefing_path],
-        required_files=[lexicon_path],
-    )
-    try:
-        lexicon = load_tts_lexicon(folder)
-    except Exception:
-        atomic_write_json(lexicon_path, existing)
-        raise
-    change_errors = _tts_lexicon_change_errors(
-        briefing, existing, lexicon)
-    if change_errors:
-        atomic_write_json(lexicon_path, existing)
-        raise RuntimeError("; ".join(change_errors))
-    remaining = validate_tts_readiness(briefing, lexicon)
+            task_name="tts_lexicon_pre_review",
+            allowed_files=[lexicon_path],
+            input_files=[briefing_path],
+            required_files=[lexicon_path],
+        )
+        try:
+            lexicon = load_tts_lexicon(folder)
+        except Exception:
+            atomic_write_json(lexicon_path, existing)
+            raise
+        change_errors = _tts_lexicon_change_errors(
+            briefing, existing, lexicon)
+        if change_errors:
+            atomic_write_json(lexicon_path, existing)
+            raise RuntimeError("; ".join(change_errors))
+        remaining = validate_tts_readiness(briefing, lexicon)
+        if not remaining:
+            break
     if remaining:
         raise RuntimeError(
             "TTS 词典受限修复后仍未就绪: " + "; ".join(remaining))
@@ -957,6 +986,23 @@ def merge_alias_repair_changes(changes, alias_repairs):
     if alias_repairs:
         merged.append(f"public_entity_alias_repairs: {int(alias_repairs)}")
     return merged
+
+
+def _claim_progress_is_current(folder, raw_path):
+    """A stale/failed claim-evidence checkpoint must be resumed, not skipped.
+
+    The quality gate rejects any non-completed progress file, so skipping the
+    stage just because content_map.json validates wastes a full writing run.
+    """
+    from scripts.claim_evidence import validate_progress
+    progress_path = Path(folder) / "claim_evidence_progress.json"
+    if not progress_path.exists():
+        return True
+    try:
+        return not validate_progress(
+            load_json(progress_path), load_json(raw_path))
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def run_content_pipeline(folder, title, run_report=None, force=False):
@@ -1112,8 +1158,10 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
             if stage is not None:
                 stage.metrics["unit_count"] = len(payload["units"])
 
+    claim_progress_ready = content_map_ready and _claim_progress_is_current(
+        folder, raw_path)
     with _stage(run_report, "subagent_claim_evidence") as stage:
-        if content_map_ready:
+        if claim_progress_ready:
             if stage is not None:
                 stage.metrics.update({
                     "skipped": True,

@@ -568,7 +568,21 @@ def review_and_repair(
             try:
                 if round_index >= max_rounds:
                     raise RuntimeError("来源/归因合同自动修复已达到轮数上限")
-                action = repair_contract_failure(folder, exc.diagnostic, model=model, effort=effort)
+                try:
+                    action = repair_contract_failure(
+                        folder, exc.diagnostic, model=model, effort=effort)
+                except ValueError as no_target_exc:
+                    if "没有可自动修复的合同阻断项" not in str(no_target_exc):
+                        raise
+                    # A malformed review (e.g. a disallowed verification_mode)
+                    # with no source/attribution target is not a content
+                    # problem and not a verdict: request one fresh independent
+                    # review instead of replaying the cached diagnostic.
+                    entry["repair_actions"].append(
+                        {"action": "fresh_re_review", "reason": str(no_target_exc)})
+                    checkpoint_re_review(None)
+                    pending_review = True
+                    continue
                 entry["repair_actions"].append(action)
                 if action.get("affected_units"):
                     repair_scope = {"affected_units": action["affected_units"],

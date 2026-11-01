@@ -165,7 +165,12 @@ def _chinese_tts_number(match):
 
 def normalize_tts_digits(text):
     """Shared exact number spelling for TTS and evidence-detail matching."""
-    return re.sub(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?%?", _chinese_tts_number, text)
+    # Keep digits that belong to a hyphenated/parenthesized identifier
+    # (GLP-1, COVID-19, 510(k)) intact; those need a tts_lexicon entry instead
+    # of a partial spelling like "GLP-一" that the lexicon can no longer match.
+    return re.sub(
+        r"(?<![A-Za-z0-9])(?<![A-Za-z]-)\d+(?:\.\d+)?%?(?!\.?\d)(?![(（][A-Za-z])",
+        _chinese_tts_number, text)
 
 
 def integer_to_chinese(value):
@@ -369,7 +374,14 @@ _AUDIT_NARRATION_PATTERNS = (
     re.compile(r"(?:summary_map|content_map|ai_review)\.(?:json)"),
     # Narrow editorial subjects, not general 不应/不能 or scientific uncertainty.
     re.compile(r"这里(?:应|需|要)保留[“\"]"),
-    re.compile(r"(?:公开稿|讲书稿|完整笔记)(?:中)?(?:应|需|必须|不得|不应)"),
+    re.compile(r"(?:公开稿|公开文本|公开表达|讲书稿|完整笔记)(?:中)?(?:应|需|必须|不得|不应)"),
+    re.compile(r"不在(?:公开稿|讲书稿|完整笔记)"),
+    re.compile(r"事实台账(?:提示|指出|显示|要求|认为|记录)"),
+    re.compile(r"这里(?:必须|需要)保留(?:一个|这个)?(?:关键|重要)?(?:限定|限制|归因)"),
+    re.compile(r"本稿替"),
+    re.compile(r"[，,](?:不应|不能)(?:被)?(?:写成|听成|包装为|包装成)"),
+    re.compile(r"(?:这|其|它)[^。；，\n]{0,10}(?:不应|不能)(?:被)?(?:写成|听成|包装为|包装成)"),
+    re.compile(r"不应将其写成"),
 )
 
 

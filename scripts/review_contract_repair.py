@@ -144,11 +144,26 @@ public_source 必须为直接支持该客观事实的公开材料；找不到时
         enable_search=True, model=model or None, timeout=600, effort=effort,
     )
     allowed = {(item["parent_claim_id"], item["repair_reason"]) for item in targets}
+    reasons_by_claim = {}
+    for item in targets:
+        reasons_by_claim.setdefault(item["parent_claim_id"], set()).add(
+            item["repair_reason"])
     accepted = []
     rejected = []
     for source in result["payload"].get("sources", [])[:12]:
         try:
-            if (source["parent_claim_id"], source["purpose"]) not in allowed:
+            source = dict(source)
+            key = (source.get("parent_claim_id"), source.get("purpose"))
+            reasons = reasons_by_claim.get(source.get("parent_claim_id"), set())
+            # A verified quote for a targeted claim is still a useful lead when
+            # the model mislabels its purpose (e.g. a study page returned as
+            # public_source for a speaker_reported research claim). Rebind it
+            # to the claim's only target reason; the next independent review
+            # re-checks the source. Untargeted claims stay rejected.
+            if key not in allowed and len(reasons) == 1:
+                source["original_purpose"] = source.get("purpose")
+                source["purpose"] = next(iter(reasons))
+            if (source.get("parent_claim_id"), source.get("purpose")) not in allowed:
                 raise ValueError("来源不属于本轮目标")
             # The shared fetcher rejects private hosts, checks TLS, pins public
             # addresses and bounds redirects/bytes. A model-supplied URL alone
@@ -328,17 +343,26 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
         edits = {name: [] for name in PROSE_FILES}
         original_prose = {name: (workspace / name).read_text(encoding="utf-8")
                           for name in PROSE_FILES}
+        skipped = []
         for replacement in plan.get("replacements", []):
-            name, old, new = (replacement[k] for k in ("file", "old", "new"))
+            name, old, new = (replacement.get(k, "") for k in ("file", "old", "new"))
             if name not in PROSE_FILES or not old.strip() or old == new:
                 raise ValueError("合同修复必须是受限的精确稿件替换")
             text = original_prose[name]
+            # A provider plan whose ``old`` does not match exactly once (or
+            # overlaps an accepted edit) is dropped, not applied fuzzily. One
+            # bad anchor must not discard the verified sources and the other
+            # exact edits of the same round: every change is still re-checked
+            # by the next independent review, and the round must still change
+            # prose or attach a real source (checked below).
             if text.count(old) != 1:
-                raise ValueError("合同修复的 old 必须唯一匹配")
+                skipped.append({"file": name, "old": old, "reason": "old 未唯一匹配"})
+                continue
             start = text.index(old)
             end = start + len(old)
             if any(start < stop and end > begin for begin, stop, _ in edits[name]):
-                raise ValueError("合同修复不允许重叠替换")
+                skipped.append({"file": name, "old": old, "reason": "重叠替换"})
+                continue
             edits[name].append((start, end, new))
             changed = True
         for name, replacements in edits.items():
@@ -347,6 +371,8 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
                 text = text[:start] + new + text[end:]
             atomic_write_text(workspace / name, text)
         if not changed and not sources:
+            if skipped:
+                raise ValueError("合同修复的 old 必须唯一匹配")
             raise ValueError("合同修复没有改变稿件或补充真实来源")
         _attach_sources(workspace, sources)
         removed = remove_claims(workspace, removed_ids, plan.get("remove_number_ids", []),
@@ -396,4 +422,5 @@ def repair_contract_failure(folder, diagnostic, *, model="", effort="max"):
             raise
     return {"action": "repair_review_contract_content", "target_count": len(targets),
             "sources": sources, "rejected_sources": rejected, "removed_claims": removed,
+            "skipped_replacements": skipped,
             "affected_units": sorted({t["parent_claim_id"].split("-", 1)[0] for t in targets})}
