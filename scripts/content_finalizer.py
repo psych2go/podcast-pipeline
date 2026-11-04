@@ -111,7 +111,8 @@ def _safe_split_chapter(block, mapping):
             or _zh_chars(right_body) > MAX_CHAPTER_CHARS):
         return None
 
-    title = block["title"]
+    # Strip a previous split suffix so re-finalizing never yields "：上篇：上篇".
+    title = re.sub(r"(?:[：:]\s*[上下]篇)+$", "", block["title"]).strip()
     left_mapping = copy.deepcopy(mapping)
     right_mapping = copy.deepcopy(mapping)
     left_mapping.update({
