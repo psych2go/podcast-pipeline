@@ -151,6 +151,53 @@ def _repair_internal_narration(folder, message):
     )
 
 
+SUMMARY_TITLE_MISMATCH_MARKERS = (
+    "无法安全重排 summary_map：需要唯一且匹配的章节标题",
+    "无法安全重排 summary_map：章节顺序不一致",
+)
+
+
+def build_summary_map_repair_request(folder):
+    """Ask the writer to realign summary_map chapters to the briefing headings.
+
+    The finalizer refuses to guess evidence allocation when the briefing has a
+    chapter the map lacks (or titles drift).  The writer, not code, re-derives
+    unit/claim IDs for the affected chapters from content_map.json.
+    """
+    from scripts.content_finalizer import _chapter_blocks
+    folder = Path(folder)
+    summary_path = folder / "summary_map.json"
+    briefing = (folder / "讲书稿.md").read_text(encoding="utf-8")
+    _preamble, blocks = _chapter_blocks(briefing)
+    titles = [block["title"] for block in blocks]
+    try:
+        old = [c.get("title") for c in json.loads(
+            summary_path.read_text(encoding="utf-8")).get("chapters", [])
+            if isinstance(c, dict)]
+    except Exception:
+        old = []
+    missing = [t for t in titles if t not in old]
+    extra = [t for t in old if t not in titles]
+    listed = "\n".join(f"{i}. {t}" for i, t in enumerate(titles, 1))
+    return {
+        "prompt": f"""summary_map.json 的 chapters 与 讲书稿.md 的章节标题不一致，定稿器拒绝猜测证据分配。
+讲书稿.md 的章节（按顺序，必须逐字一致、一一对应、不重复）：
+{listed}
+summary_map 缺少的章节：{missing or '无'}；多出/改名的章节：{extra or '无'}。
+只修改 summary_map.json：让 chapters 数组与上面列表完全同序同名；已有且标题一致的章节保留原有
+unit_ids/claim_ids 不动；对缺少或改名的章节，依据该章正文实际讲到的内容，从 content_map.json 中选取
+对应的 unit_ids 与 claim_ids（只能用 content_map 里存在的 ID，不得编造，不得把同一 unit 重复分给多章）。
+保持其他字段结构不变。不要修改 讲书稿.md 或 中文完整笔记.md。""",
+        "allowed_files": [summary_path],
+        "input_files": [
+            folder / "讲书稿.md",
+            folder / "content_map.json",
+            folder / "中文完整笔记.md",
+        ],
+        "required_files": [summary_path],
+    }
+
+
 def _finalize_with_depth_repair(folder):
     """Finalize content, retaining only monotonic bounded depth expansions."""
     folder = Path(folder)
@@ -163,10 +210,27 @@ def _finalize_with_depth_repair(folder):
     max_narration_rounds = max(0, int(os.environ.get(
         "CONTENT_NARRATION_REPAIR_MAX_ROUNDS", "2")))
     narration_rounds = 0
-    for attempt in range(max_expansions + max_narration_rounds + 1):
+    max_summary_rounds = max(0, int(os.environ.get(
+        "CONTENT_SUMMARY_MAP_REPAIR_MAX_ROUNDS", "2")))
+    summary_rounds = 0
+    for attempt in range(max_expansions + max_narration_rounds
+                         + max_summary_rounds + 1):
         try:
             return finalize_content_package(folder)
         except Exception as exc:
+            if (any(marker in str(exc) for marker in SUMMARY_TITLE_MISMATCH_MARKERS)
+                    and summary_rounds < max_summary_rounds):
+                summary_rounds += 1
+                request = build_summary_map_repair_request(folder)
+                run_edit_task(
+                    folder,
+                    request["prompt"],
+                    task_name="content_summary_map_repair",
+                    allowed_files=request["allowed_files"],
+                    input_files=request["input_files"],
+                    required_files=request["required_files"],
+                )
+                continue
             if ("包含面向内部的审查过程语言" in str(exc)
                     and narration_rounds < max_narration_rounds):
                 narration_rounds += 1
