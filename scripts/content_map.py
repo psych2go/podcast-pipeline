@@ -160,7 +160,7 @@ def _segments_for_timestamps(segments, timestamps):
     return selected
 
 
-def enrich_content_map_evidence(content_map, transcript):
+def enrich_content_map_evidence(content_map, transcript, _gap_pass=False):
     """Refresh unit evidence without inventing multi-claim evidence."""
     transcript = ensure_segment_ids(transcript)
     segments = transcript.get("segments", [])
@@ -268,6 +268,15 @@ def enrich_content_map_evidence(content_map, transcript):
         unit["claim_evidence_sha256"] = claim_hashes
         unit["claim_evidence_notes"] = claim_notes
     content_map["schema_version"] = CONTENT_MAP_SCHEMA_VERSION
+    if (
+        not _gap_pass
+        and mode != "text_anchor"
+        and source_segment_accountability(content_map, transcript)["missing_ids"]
+    ):
+        # Timestamp-derived evidence discards earlier gap repairs; attach the
+        # omitted segments (extending timestamps) and re-derive once.
+        repair_source_segment_gaps(content_map, transcript)
+        return enrich_content_map_evidence(content_map, transcript, _gap_pass=True)
     return canonicalize_claim_evidence_order(content_map, transcript), transcript
 
 
@@ -671,6 +680,11 @@ def repair_source_segment_gaps(payload, transcript):
         evidence["segment_ids"] = sorted(
             set(ids), key=lambda value: positions.get(value, len(segments))
         )
+        start, end = segment.get("start"), segment.get("end")
+        if start is not None and end is not None:
+            stamps = unit.get("timestamps")
+            if isinstance(stamps, list) and stamps:
+                unit["timestamps"] = stamps + [[start, end]]
     return payload
 
 
