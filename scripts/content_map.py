@@ -271,11 +271,13 @@ def enrich_content_map_evidence(content_map, transcript, _gap_pass=False):
     if (
         not _gap_pass
         and mode != "text_anchor"
-        and source_segment_accountability(content_map, transcript)["missing_ids"]
+        and _interior_missing_segment_ids(content_map, transcript)
     ):
-        # Timestamp-derived evidence discards earlier gap repairs; attach the
-        # omitted segments (extending timestamps) and re-derive once.
-        repair_source_segment_gaps(content_map, transcript)
+        # Timestamp-derived evidence discards earlier interior gap repairs;
+        # attach those omitted segments (extending timestamps) and re-derive
+        # once.  Leading/trailing unaccounted segments stay unassigned so a
+        # timestamp that only touches a neighbor's boundary is not absorbed.
+        repair_source_segment_gaps(content_map, transcript, interior_only=True)
         return enrich_content_map_evidence(content_map, transcript, _gap_pass=True)
     return canonicalize_claim_evidence_order(content_map, transcript), transcript
 
@@ -644,7 +646,33 @@ def source_segment_accountability(payload, transcript):
     }
 
 
-def repair_source_segment_gaps(payload, transcript):
+def _referenced_segment_positions(payload, positions):
+    referenced = []
+    for unit in payload.get("units", []) or []:
+        evidence = unit.get("evidence") if isinstance(unit, dict) else None
+        if not isinstance(evidence, dict):
+            continue
+        for value in evidence.get("segment_ids", []) or []:
+            key = str(value)
+            if key in positions:
+                referenced.append(positions[key])
+    return referenced
+
+
+def _interior_missing_segment_ids(payload, transcript):
+    """Return unaccounted segment IDs that sit between already-covered ones."""
+    transcript = ensure_segment_ids(transcript or {"segments": []})
+    segments = [s for s in transcript.get("segments", []) if (s.get("text") or "").strip()]
+    positions = {str(s["id"]): i for i, s in enumerate(segments)}
+    referenced = _referenced_segment_positions(payload, positions)
+    if not referenced:
+        return []
+    lo, hi = min(referenced), max(referenced)
+    missing = source_segment_accountability(payload, transcript)["missing_ids"]
+    return [segment_id for segment_id in missing if lo < positions.get(segment_id, -1) < hi]
+
+
+def repair_source_segment_gaps(payload, transcript, *, interior_only=False):
     """Deterministically attach omitted source segments to the next unit.
 
     LLM maps occasionally leave a one-segment gap between otherwise contiguous
@@ -660,8 +688,14 @@ def repair_source_segment_gaps(payload, transcript):
         if isinstance(evidence, dict):
             referenced.update(str(value) for value in evidence.get("segment_ids", []))
     missing = [s for s in segments if str(s["id"]) not in referenced]
+    referenced_positions = _referenced_segment_positions(payload, positions)
     for segment in missing:
         position = positions[str(segment["id"])]
+        if interior_only and not (
+            any(item < position for item in referenced_positions)
+            and any(item > position for item in referenced_positions)
+        ):
+            continue
         candidates = []
         for index, unit in enumerate(payload.get("units", []) or []):
             evidence = unit.get("evidence") if isinstance(unit, dict) else None

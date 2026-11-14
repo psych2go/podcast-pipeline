@@ -22,6 +22,21 @@ class EnrichGapRepairTest(unittest.TestCase):
         out, t = enrich_content_map_evidence(copy.deepcopy(cm), transcript)
         self.assertEqual(source_segment_accountability(out, t)["missing_ids"], [])
 
+    def test_trailing_boundary_segment_is_not_absorbed_during_enrichment(self):
+        transcript = {"segments": [
+            {"id": "S0001", "start": 0.0, "end": 2.0, "text": "a"},
+            {"id": "S0002", "start": 2.0, "end": 4.0, "text": "b"},
+        ]}
+        cm = {"source_accountability_version": 1, "units": [
+            {"id": "U0001", "status": "included", "claims": [],
+             "timestamps": [[0.0, 2.0]],
+             "evidence": {"mode": "timestamp", "segment_ids": ["S0001"]}},
+        ]}
+        out, t = enrich_content_map_evidence(copy.deepcopy(cm), transcript)
+        self.assertEqual(out["units"][0]["evidence"]["segment_ids"], ["S0001"])
+        self.assertEqual(source_segment_accountability(out, t)["missing_ids"], ["S0002"])
+
+
 
 if __name__ == "__main__":
     unittest.main()
