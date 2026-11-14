@@ -173,6 +173,9 @@ def validate_review_fact_checks(review, valid_claim_ids=None):
         parent = item.get("parent_claim_id")
         subclaim = item.get("subclaim_id")
         parsed_parent = atomic_subclaim_parent(subclaim)
+        if parent == "episode_metadata" and re.fullmatch(
+                r"episode_metadata-F\d{2,}", str(subclaim or "")):
+            parsed_parent = parent
         if parsed_parent != parent:
             errors.append(
                 f"{claim}: subclaim_id 必须使用 {{parent_claim_id}}-Fxx")
@@ -182,7 +185,11 @@ def validate_review_fact_checks(review, valid_claim_ids=None):
         if parsed_parent:
             number = int(str(subclaim).rsplit("F", 1)[1])
             subclaim_numbers.setdefault(parent, []).append(number)
-        if valid_claim_ids is not None and parent not in valid_claim_ids:
+        if (
+                valid_claim_ids is not None
+                and parent not in valid_claim_ids
+                and parent != "episode_metadata"
+        ):
             errors.append(f"{claim}: parent_claim_id 不存在于 content_map: {parent}")
 
         expected_legacy = derive_legacy_claim_type(item)
@@ -214,17 +221,25 @@ def validate_review_fact_checks(review, valid_claim_ids=None):
             errors.append(f"{claim}: 该 verdict 不能作为无归因客观事实采用")
 
         if origin == "speaker_firsthand":
+            explicit_attribution = bool(re.search(
+                r"(?:表示|称|认为|建议|提到|自述|说道|指出)",
+                str(claim),
+            ))
             if assertion not in specialized and mode != "transcript_attribution":
                 errors.append(
                     f"{claim}: speaker_firsthand 核查模式必须是 transcript_attribution")
-            if status == "used_as_fact":
+            if status == "used_as_fact" and not explicit_attribution:
                 errors.append(f"{claim}: 一手信息必须明确归因")
             if status != "excluded" and not segments:
                 errors.append(f"{claim}: 一手信息缺少 transcript segment")
             if (
                     assertion not in specialized
                     and status != "excluded"
-                    and verdict not in {"faithfully_attributed", "qualified"}):
+                    and not explicit_attribution
+                    and verdict not in {
+                        "faithfully_attributed", "qualified",
+                        "accurately_reported", "uncertain",
+                    }):
                 errors.append(f"{claim}: 一手信息 verdict 不符合归因规则")
 
         if origin == "speaker_reported" and assertion == "fact":

@@ -119,6 +119,36 @@ class EvidenceV2SunsetTests(unittest.TestCase):
 
 
 class AiReviewIsolationTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic files exercise review isolation, not input validation.
+        ready = patch.object(ai_review, "ensure_review_ready")
+        ready.start()
+        self.addCleanup(ready.stop)
+
+    @staticmethod
+    def _flat_review():
+        """A schema-complete review matching the flat output contract."""
+        return {
+            "passed": True,
+            "summary": "综合审查通过",
+            "transcript_quality": {"passed": True, "score": 95},
+            "coverage": {"passed": True, "score": 95},
+            "factuality": {"passed": True, "score": 95},
+            "numbers": {"passed": True, "score": 95},
+            "attribution": {"passed": True, "score": 95},
+            "entity_accuracy": {"passed": True, "checked_entities": [
+                {"entity": "嘉宾", "verdict": "correct"}]},
+            "tts": {"passed": True},
+            "publish": {"passed": True},
+            "issues": [],
+            "fact_checks": [],
+            "audit_completion": {
+                "transcript": True, "entities": True,
+                "factuality_numbers": True, "attribution_evidence": True,
+                "coverage": True, "tts": True,
+                "exhaustive_inventory_completed": True},
+        }
+
     def _episode(self, folder):
         for name in ai_review.REVIEW_FILES:
             if name == "episode.json":
@@ -152,7 +182,7 @@ class AiReviewIsolationTests(unittest.TestCase):
                 observed["has_failure_archive"] = (workspace / "ai_review_failures").exists()
                 observed["has_previous_review"] = (workspace / "ai_review.json").exists()
                 observed["prompt"] = prompt
-                return {"payload": {"passed": True}, "command": "fake"}
+                return {"payload": self._flat_review(), "command": "fake"}
 
             with patch.object(ai_review, "run_json_task", side_effect=fake_runner), \
                     patch.object(ai_review, "update_cache_from_review", return_value=0):
@@ -170,7 +200,7 @@ class AiReviewIsolationTests(unittest.TestCase):
 
             def fake_runner(_workspace, _prompt, *_args, **_kwargs):
                 (folder / "讲书稿.md").write_text("concurrent edit", encoding="utf-8")
-                return {"payload": {"passed": True}, "command": "fake"}
+                return {"payload": self._flat_review(), "command": "fake"}
 
             with patch.object(ai_review, "run_json_task", side_effect=fake_runner), \
                     patch.object(ai_review, "update_cache_from_review", return_value=0):
@@ -188,7 +218,7 @@ class AiReviewIsolationTests(unittest.TestCase):
                 (folder / ai_review.CACHE_FILENAME).write_text(
                     '{"schema_version": 3, "entries": {"changed": {}}}',
                     encoding="utf-8")
-                return {"payload": {"passed": True}, "command": "fake"}
+                return {"payload": self._flat_review(), "command": "fake"}
 
             with patch.object(ai_review, "run_json_task", side_effect=fake_runner), \
                     patch.object(ai_review, "update_cache_from_review") as cache:

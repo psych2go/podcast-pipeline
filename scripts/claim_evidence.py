@@ -435,6 +435,30 @@ def _retry_low_confidence_units(
     return merged, wrappers
 
 
+def _strip_claim_evidence(content_map, unit_ids):
+    """Drop stored claim evidence for the given units so they re-queue.
+
+    Validation can reject evidence that is structurally complete (e.g. the
+    narrowing rule): without this strip those units would never re-enter the
+    payload selection and the episode deadlocks across resumes.
+    """
+    stripped = set()
+    wanted = {str(value) for value in unit_ids}
+    for unit in content_map.get("units", []):
+        if not isinstance(unit, dict) or unit.get("id") not in wanted:
+            continue
+        if not unit.get("claims"):
+            continue
+        changed = False
+        for key in ("claim_evidence", "claim_evidence_notes"):
+            if unit.get(key):
+                unit.pop(key, None)
+                changed = True
+        if changed:
+            stripped.add(unit.get("id"))
+    return stripped
+
+
 def refine_claim_evidence(
         folder, model="", effort="high",
         max_batch_chars=DEFAULT_BATCH_CHARS,
@@ -509,28 +533,67 @@ def refine_claim_evidence(
     if not payloads:
         errors, warnings = validate_content_map(content_map, transcript)
         if errors:
-            _write_progress(
-                folder,
-                transcript,
-                target=target_unit_ids,
-                completed=completed_unit_ids,
-                pending=set(),
-                failed=target_unit_ids - completed_unit_ids,
-                status="invalid_input",
-            )
-            raise RuntimeError(
-                "没有待精炼 claim，但现有 content map 校验失败: "
-                + "; ".join(errors[:10]))
-        return {
-            "claim_count": 0,
-            "batch_count": 0,
-            "max_batch_chars": max_batch_chars,
-            "concurrency": concurrency,
-            "warning_count": len(warnings),
-            "reported_cost_usd": None,
-            "retry_count": 0,
-            "duration_ms": 0,
-        }
+            failed_from_validation = set(re.findall(
+                r"\bU\d{4,}\b", " ".join(errors))) & target_unit_ids
+            if not failed_from_validation:
+                failed_from_validation = set(target_unit_ids)
+            stripped = _strip_claim_evidence(
+                content_map, failed_from_validation)
+            if stripped:
+                save_json(content_map_path, content_map)
+                payloads = _unit_payloads(
+                    content_map,
+                    transcript,
+                    selected_ids,
+                    skip_complete=True,
+                    folder=folder,
+                )
+                completed_unit_ids -= stripped
+                pending_unit_ids = {
+                    payload.get("unit_id") for payload in payloads
+                    if payload.get("unit_id")
+                }
+                failed_unit_ids = set(stripped)
+                _write_progress(
+                    folder,
+                    transcript,
+                    target=target_unit_ids,
+                    completed=completed_unit_ids,
+                    pending=pending_unit_ids,
+                    failed=failed_unit_ids,
+                    status="running",
+                )
+                print(
+                    "[claim evidence][重排] 校验失败已剥离 "
+                    f"{len(stripped)} 个 unit 的证据，重新精炼: "
+                    + ", ".join(sorted(stripped)),
+                    flush=True,
+                )
+                _validate_payload_sources(payloads)
+            else:
+                _write_progress(
+                    folder,
+                    transcript,
+                    target=target_unit_ids,
+                    completed=completed_unit_ids,
+                    pending=set(),
+                    failed=target_unit_ids - completed_unit_ids,
+                    status="invalid_input",
+                )
+                raise RuntimeError(
+                    "没有待精炼 claim，但现有 content map 校验失败: "
+                    + "; ".join(errors[:10]))
+        else:
+            return {
+                "claim_count": 0,
+                "batch_count": 0,
+                "max_batch_chars": max_batch_chars,
+                "concurrency": concurrency,
+                "warning_count": len(warnings),
+                "reported_cost_usd": None,
+                "retry_count": 0,
+                "duration_ms": 0,
+            }
     batches = _batches(payloads, max_batch_chars)
     mappings = []
     wrappers = []
@@ -713,6 +776,18 @@ def refine_claim_evidence(
             r"\bU\d{4,}\b", " ".join(errors))) & target_unit_ids
         if not failed_from_validation:
             failed_from_validation = set(target_unit_ids)
+        # Re-queue rejected units instead of deadlocking: structurally
+        # complete but invalid evidence must be refined again on resume.
+        stripped = _strip_claim_evidence(
+            content_map, failed_from_validation)
+        if stripped:
+            save_json(content_map_path, content_map)
+            print(
+                "[claim evidence][重排] 精炼后校验失败，已剥离 "
+                f"{len(stripped)} 个 unit 的证据供重跑: "
+                + ", ".join(sorted(stripped)),
+                flush=True,
+            )
         _write_progress(
             folder,
             transcript,
