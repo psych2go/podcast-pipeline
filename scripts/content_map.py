@@ -160,7 +160,7 @@ def _segments_for_timestamps(segments, timestamps):
     return selected
 
 
-def enrich_content_map_evidence(content_map, transcript):
+def enrich_content_map_evidence(content_map, transcript, _gap_pass=False):
     """Refresh unit evidence without inventing multi-claim evidence."""
     transcript = ensure_segment_ids(transcript)
     segments = transcript.get("segments", [])
@@ -268,6 +268,17 @@ def enrich_content_map_evidence(content_map, transcript):
         unit["claim_evidence_sha256"] = claim_hashes
         unit["claim_evidence_notes"] = claim_notes
     content_map["schema_version"] = CONTENT_MAP_SCHEMA_VERSION
+    if (
+        not _gap_pass
+        and mode != "text_anchor"
+        and _interior_missing_segment_ids(content_map, transcript)
+    ):
+        # Timestamp-derived evidence discards earlier interior gap repairs;
+        # attach those omitted segments (extending timestamps) and re-derive
+        # once.  Leading/trailing unaccounted segments stay unassigned so a
+        # timestamp that only touches a neighbor's boundary is not absorbed.
+        repair_source_segment_gaps(content_map, transcript, interior_only=True)
+        return enrich_content_map_evidence(content_map, transcript, _gap_pass=True)
     return canonicalize_claim_evidence_order(content_map, transcript), transcript
 
 
@@ -635,7 +646,33 @@ def source_segment_accountability(payload, transcript):
     }
 
 
-def repair_source_segment_gaps(payload, transcript):
+def _referenced_segment_positions(payload, positions):
+    referenced = []
+    for unit in payload.get("units", []) or []:
+        evidence = unit.get("evidence") if isinstance(unit, dict) else None
+        if not isinstance(evidence, dict):
+            continue
+        for value in evidence.get("segment_ids", []) or []:
+            key = str(value)
+            if key in positions:
+                referenced.append(positions[key])
+    return referenced
+
+
+def _interior_missing_segment_ids(payload, transcript):
+    """Return unaccounted segment IDs that sit between already-covered ones."""
+    transcript = ensure_segment_ids(transcript or {"segments": []})
+    segments = [s for s in transcript.get("segments", []) if (s.get("text") or "").strip()]
+    positions = {str(s["id"]): i for i, s in enumerate(segments)}
+    referenced = _referenced_segment_positions(payload, positions)
+    if not referenced:
+        return []
+    lo, hi = min(referenced), max(referenced)
+    missing = source_segment_accountability(payload, transcript)["missing_ids"]
+    return [segment_id for segment_id in missing if lo < positions.get(segment_id, -1) < hi]
+
+
+def repair_source_segment_gaps(payload, transcript, *, interior_only=False):
     """Deterministically attach omitted source segments to the next unit.
 
     LLM maps occasionally leave a one-segment gap between otherwise contiguous
@@ -651,8 +688,14 @@ def repair_source_segment_gaps(payload, transcript):
         if isinstance(evidence, dict):
             referenced.update(str(value) for value in evidence.get("segment_ids", []))
     missing = [s for s in segments if str(s["id"]) not in referenced]
+    referenced_positions = _referenced_segment_positions(payload, positions)
     for segment in missing:
         position = positions[str(segment["id"])]
+        if interior_only and not (
+            any(item < position for item in referenced_positions)
+            and any(item > position for item in referenced_positions)
+        ):
+            continue
         candidates = []
         for index, unit in enumerate(payload.get("units", []) or []):
             evidence = unit.get("evidence") if isinstance(unit, dict) else None
@@ -671,6 +714,11 @@ def repair_source_segment_gaps(payload, transcript):
         evidence["segment_ids"] = sorted(
             set(ids), key=lambda value: positions.get(value, len(segments))
         )
+        start, end = segment.get("start"), segment.get("end")
+        if start is not None and end is not None:
+            stamps = unit.get("timestamps")
+            if isinstance(stamps, list) and stamps:
+                unit["timestamps"] = stamps + [[start, end]]
     return payload
 
 
