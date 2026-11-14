@@ -13,6 +13,53 @@ from scripts import subagent
 
 
 class SubagentIsolationTests(unittest.TestCase):
+    def test_model_chain_is_ordered_and_deduplicated(self):
+        with patch.dict(os.environ, {
+                "SUBAGENT_MODEL_CHAIN": "provider/a, provider/b,provider/a",
+            }, clear=False):
+            self.assertEqual(
+                subagent._model_candidates("content_writing", None),
+                ["provider/a", "provider/b"],
+            )
+
+    def test_explicit_model_wins_over_global_chain(self):
+        with patch.dict(os.environ, {
+                "SUBAGENT_MODEL_CHAIN": "provider/a,provider/b",
+            }, clear=False):
+            self.assertEqual(
+                subagent._model_candidates("review", "explicit/model"),
+                ["explicit/model"],
+            )
+
+    def test_model_chain_switches_only_after_model_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            episode = Path(tmp) / "episode"
+            episode.mkdir()
+            seen = []
+
+            def fake_process(cmd, *, cwd, env, timeout):
+                seen.append(cmd[cmd.index("--model") + 1])
+                if len(seen) == 1:
+                    return type("Result", (), {
+                        "returncode": 1,
+                        "stdout": '{"error":{"code":"model_not_found"}}',
+                        "stderr": "",
+                    })()
+                return type("Result", (), {
+                    "returncode": 0, "stdout": "ok", "stderr": "",
+                })()
+
+            with patch.dict(os.environ, {
+                    "SUBAGENT_COMMAND": "codex",
+                    "SUBAGENT_MODEL_CHAIN": "provider/bad,provider/good",
+                    "SUBAGENT_MAX_RETRIES": "0",
+                }, clear=False), patch(
+                    "scripts.subagent.shutil.which", return_value="/bin/codex"), patch(
+                    "scripts.subagent._run_process", side_effect=fake_process):
+                result = subagent._run(episode, "task", task_name="chain_test")
+            self.assertEqual(seen, ["provider/bad", "provider/good"])
+            self.assertEqual(result["model"], "provider/good")
+
     def test_codex_runner_preserves_provider_but_removes_hooks_and_mcps(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -118,6 +165,9 @@ class SubagentIsolationTests(unittest.TestCase):
                 "CODEX_HOME": str(source_home),
                 "SUBAGENT_COMMAND": "codex",
                 "SUBAGENT_MAX_RETRIES": "0",
+                # Neutralize a leaked SUBAGENT_MODEL_CHAIN from the loaded
+                # .env — the chain otherwise overrides SUBAGENT_MODEL here.
+                "SUBAGENT_MODEL_CHAIN": "",
             }
             with patch.dict(os.environ, {
                     **base_env, "SUBAGENT_MODEL": "glm-5.3-flash"}, clear=False), \

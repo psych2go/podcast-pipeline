@@ -148,6 +148,55 @@ def validate_canonical_entities(payload, transcript=None):
     return errors
 
 
+def _identity_types():
+    return {"person", "company", "product", "institution", "title", "place"}
+
+
+def collapse_public_alias_spacing(text, payload):
+    """Tighten CJK/ASCII boundary spacing inside allowed public names.
+
+    Chinese prose naturally inserts a space at script boundaries
+    (波音 707), while the canonical contract stores spaceless aliases
+    (波音707).  Rewriting the spaced variant into the exact allowed
+    name keeps the observed variant inside an allowed span without
+    touching any surrounding fact.  Returns (text, replacement_count).
+    """
+    if not text:
+        return text, 0
+    identity_types = _identity_types()
+
+    def is_cjk(ch):
+        return "\u3400" <= ch <= "\u9fff"
+
+    names = []
+    for item in (payload or {}).get("entities", []) or []:
+        if not isinstance(item, dict) or item.get("entity_type") not in identity_types:
+            continue
+        candidates = [item.get("canonical_name")]
+        candidates.extend(item.get("public_aliases") or [])
+        for name in candidates:
+            name = str(name or "").strip()
+            if (
+                    name
+                    and " " not in name
+                    and any(is_cjk(ch) for ch in name)
+                    and any(ch.isascii() and ch.isalnum() for ch in name)):
+                names.append(name)
+    count = 0
+    for name in dict.fromkeys(names):
+        pattern_chars = []
+        prev_cjk = None
+        for ch in name:
+            cjk = is_cjk(ch)
+            if prev_cjk is not None and cjk != prev_cjk:
+                pattern_chars.append(r"\s*")
+            pattern_chars.append(re.escape(ch))
+            prev_cjk = cjk
+        text, replaced = re.compile("".join(pattern_chars)).subn(name, text)
+        count += replaced
+    return text, count
+
+
 def public_entity_alias_errors(payload, *texts):
     """Reject leaked aliases for identity-bearing public entities.
 

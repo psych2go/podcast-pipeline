@@ -1094,5 +1094,64 @@ class TtsDisplaySpokenTests(unittest.TestCase):
         ))
 
 
+class ClaimEvidenceRequeueTests(unittest.TestCase):
+    def test_stale_full_reuse_evidence_is_stripped_and_refined(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            transcript = {
+                "meta": {"timestamped": True, "evidence_mode": "timestamp"},
+                "segments": [
+                    {"id": "S0001", "start": 0, "end": 5, "text": "one"},
+                    {"id": "S0002", "start": 5, "end": 10, "text": "two"},
+                ],
+            }
+            content_map = {
+                "schema_version": 3,
+                "evidence_mode": "timestamp",
+                "units": [{
+                    "id": "U0001", "topic": "topic",
+                    "claims": ["one", "two"],
+                    "importance": "high", "status": "included",
+                    "timestamps": [[0, 10]],
+                }],
+            }
+            content_map, transcript = claim_evidence.enrich_content_map_evidence(
+                content_map, transcript)
+            unit = content_map["units"][0]
+            unit["claim_evidence"] = {
+                "C01": list(unit["evidence"]["segment_ids"]),
+                "C02": list(unit["evidence"]["segment_ids"]),
+            }
+            unit["claim_evidence_notes"] = {
+                "C01": {"confidence": "high", "rationale": "完整的证据支持第一条主张。"},
+                "C02": {"confidence": "high", "rationale": "完整的证据支持第二条主张。"},
+            }
+            (folder / "transcript.raw.json").write_text(
+                json.dumps(transcript), encoding="utf-8")
+            (folder / "content_map.json").write_text(
+                json.dumps(content_map), encoding="utf-8")
+
+            def narrowed(_folder, batch, _model, _effort, _index):
+                item = batch[0]
+                claims = [{
+                    "claim_id": claim["claim_id"],
+                    "segment_ids": [item["segments"][index]["id"]],
+                    "confidence": "high",
+                    "rationale": "收窄后的最小片段直接支持主张。",
+                } for index, claim in enumerate(item["claims"])]
+                return {"claims": claims}, {"duration_ms": 1}
+
+            with mock.patch.object(
+                    claim_evidence, "_run_batch", side_effect=narrowed):
+                metrics = claim_evidence.refine_claim_evidence(
+                    folder, concurrency=1, max_batch_chars=100000)
+            saved = json.loads(
+                (folder / "content_map.json").read_text(encoding="utf-8"))
+        self.assertEqual(metrics["claim_count"], 2)
+        saved_evidence = saved["units"][0]["claim_evidence"]
+        self.assertEqual(saved_evidence["C01"], ["S0001"])
+        self.assertEqual(saved_evidence["C02"], ["S0002"])
+
+
 if __name__ == "__main__":
     unittest.main()

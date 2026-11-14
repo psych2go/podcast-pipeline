@@ -156,6 +156,36 @@ def _is_runner(command, name):
     return Path(command[0]).name.lower() == name
 
 
+def _model_chain_env_name(task_name):
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", str(task_name).upper()).strip("_")
+    return f"SUBAGENT_{normalized}_MODEL_CHAIN"
+
+
+def _model_candidates(task_name, model):
+    """Return a bounded, ordered model chain with duplicate entries removed."""
+    scoped = os.environ.get(_model_chain_env_name(task_name), "").strip()
+    raw = scoped or ("" if model else os.environ.get(
+        "SUBAGENT_MODEL_CHAIN", "").strip())
+    if raw:
+        values = [item.strip() for item in raw.split(",") if item.strip()]
+    else:
+        values = [model or os.environ.get("SUBAGENT_MODEL", "").strip()]
+    result = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result or [None]
+
+
+def _model_fallback_allowed(exc):
+    failure_kind = (getattr(exc, "failure_metrics", None) or {}).get(
+        "failure_kind")
+    return failure_kind in {
+        "model_not_found", "authentication", "timeout", "schema",
+        "empty_output", "overloaded", "rate_limit", "network", "server_error",
+    }
+
+
 def _pi_default_model():
     provider = (
         os.environ.get("SUBAGENT_PI_PROVIDER", "").strip()
@@ -364,6 +394,19 @@ def _json_from_text(text):
                 return json.loads(candidate)
             except json.JSONDecodeError:
                 continue
+    # Models sometimes prepend or append prose around the JSON payload
+    # (e.g. "以下是结果：{...}"). Extract the first balanced JSON value
+    # instead of failing the whole attempt on an unparseable surface form.
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char not in "[{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (dict, list)):
+            return value
     raise SubagentError(
         f"subagent 返回的不是有效 JSON: {text[-1000:]}"
     )
@@ -733,15 +776,45 @@ def _run(
         enable_search=False,
         model=None,
         timeout=None,
+        _model_candidates_override=None,
 ):
     folder = Path(folder).resolve()
+    candidates = (
+        _model_candidates_override
+        if _model_candidates_override is not None
+        else _model_candidates(task_name, model)
+    )
+    if len(candidates) > 1:
+        last_error = None
+        attempted = []
+        for candidate in candidates:
+            attempted.append(candidate or "runner-default")
+            try:
+                return _run(
+                    folder, task, task_name=task_name,
+                    schema_path=schema_path, write_files=write_files,
+                    enable_search=enable_search, model=candidate,
+                    timeout=timeout, _model_candidates_override=[candidate],
+                )
+            except SubagentError as exc:
+                last_error = exc
+                if not _model_fallback_allowed(exc):
+                    raise
+                print(
+                    f"[subagent] {task_name} 模型 {candidate or 'runner-default'}"
+                    f" 不可用，切换候选模型",
+                    flush=True,
+                )
+        if last_error is not None:
+            metrics = dict(getattr(last_error, "failure_metrics", {}) or {})
+            metrics["attempted_models"] = attempted
+            raise SubagentError(
+                f"{task_name} 所有候选模型均不可用: {', '.join(attempted)}",
+                metrics=metrics,
+            ) from last_error
     # Per-task model arguments (e.g. SUBAGENT_REVIEW_MODEL) take precedence;
     # SUBAGENT_MODEL fills the stages that do not select a model themselves.
-    model = (
-        model
-        or os.environ.get("SUBAGENT_MODEL", "").strip()
-        or None
-    )
+    model = model or os.environ.get("SUBAGENT_MODEL", "").strip() or None
     commands = _runner_commands()
     timeout = timeout or int(os.environ.get("SUBAGENT_TIMEOUT", "1800"))
     max_retries = int(os.environ.get("SUBAGENT_MAX_RETRIES", "2"))
@@ -867,7 +940,8 @@ def _run(
                                 if schema_failure:
                                     failure_kind, http_status = "schema", None
                                     schema_feedback = schema_failure
-                                    last_detail = "schema; exit=0"
+                                    last_detail = (
+                                        f"schema; exit=0; {schema_failure[:160]}")
                                 else:
                                     return {
                                         "response": response,
@@ -903,7 +977,8 @@ def _run(
                         total_retries += 1
                         wait = exponential_delay(attempt + 1, 2.0)
                         print(
-                            f"[subagent] {task_name} 失败，{wait:g}s 后重试 "
+                            f"[subagent] {task_name} 失败"
+                            f"（{last_detail[:200]}），{wait:g}s 后重试 "
                             f"{attempt + 1}/{max_retries}",
                             flush=True,
                         )

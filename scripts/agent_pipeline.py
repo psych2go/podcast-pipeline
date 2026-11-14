@@ -7,10 +7,11 @@ from difflib import SequenceMatcher
 from contextlib import nullcontext
 from pathlib import Path
 
-from scripts.atomic_io import atomic_write_json
+from scripts.atomic_io import atomic_write_json, atomic_write_text
 from scripts.canonical_entities import (
     GENERATION_SCHEMA as CANONICAL_ENTITIES_SCHEMA,
     SCHEMA_VERSION as CANONICAL_ENTITIES_VERSION,
+    collapse_public_alias_spacing,
     public_entity_alias_errors,
     validate_canonical_entities,
 )
@@ -231,6 +232,10 @@ def _content_map_is_valid(folder):
         content_map = load_json(path)
         transcript = load_json(raw_path)
         errors, _warnings = validate_content_map(content_map, transcript)
+        transcript_mode = (transcript.get("meta", {})
+                           .get("evidence_mode"))
+        if transcript_mode and content_map.get("evidence_mode") != transcript_mode:
+            return False
         return content_map.get("schema_version", 1) >= 3 and not errors
     except (OSError, ValueError, TypeError):
         return False
@@ -393,6 +398,81 @@ summary_map 先写结构，正文哈希与 writing_inputs 绑定由主流程最�
 """
 
 
+def _repair_public_entity_aliases(
+        folder, entities_payload, notes_path, briefing_path):
+    """Fix leaked entity aliases in public prose with minimal edits.
+
+    Deterministic spacing collapse runs first (波音 707 → 波音707). Any
+    remaining leak goes to a scoped edit subagent that may only substitute
+    the leaked name with the canonical name or an allowed public alias.
+    Returns True when any file was modified; the caller must re-read the
+    prose and re-run mapping enrichment because body hashes changed.
+    """
+    def current_errors():
+        return public_entity_alias_errors(
+            entities_payload,
+            notes_path.read_text(encoding="utf-8") if notes_path.exists() else "",
+            briefing_path.read_text(encoding="utf-8")
+            if briefing_path.exists() else "",
+        )
+
+    files_changed = False
+    for path in (notes_path, briefing_path):
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        collapsed, replaced = collapse_public_alias_spacing(
+            text, entities_payload)
+        if replaced and collapsed != text:
+            atomic_write_text(path, collapsed)
+            files_changed = True
+    if not current_errors():
+        return files_changed
+
+    alias_error_list = current_errors()
+    repair_prompt = f"""只修复公开文本中泄露的非规范实体名，不改动其他任何内容。
+
+确定性校验报错：
+{json.dumps(alias_error_list, ensure_ascii=False, indent=1)}
+
+读取 canonical_entities.json，把上述报错中出现的别名替换为对应实体的
+canonical_name 或 public_aliases 中的写法；中文行文优先使用中文公开别名。
+保持章节标题、数字、事实、归因和段落结构完全不变；只做替换级别的最小修改。
+中文完整笔记.md 和 讲书稿.md 都要检查并修复。完成后重新读取两个文件，
+确认不再出现报错中的别名。"""
+    for task_name, prompt in (
+            ("public_entity_alias_repair", repair_prompt),
+            ("public_entity_alias_repair_retry_1", repair_prompt +
+             "\n这是重试。逐行重新检查两个文件，确保每个报错别名都被替换；"
+             "不要遗漏任何一个报错条目。"),
+    ):
+        try:
+            run_edit_task(
+                folder,
+                prompt,
+                task_name=task_name,
+                allowed_files=[notes_path, briefing_path],
+                input_files=[folder / "canonical_entities.json",
+                             folder / "content_map.json"],
+                required_files=[
+                    path for path in (notes_path, briefing_path)
+                    if path.exists()],
+            )
+        except SubagentError:
+            continue
+        files_changed = True
+        for path in (notes_path, briefing_path):
+            if not path.exists():
+                continue
+            collapsed, replaced = collapse_public_alias_spacing(
+                path.read_text(encoding="utf-8"), entities_payload)
+            if replaced:
+                atomic_write_text(path, collapsed)
+        if not current_errors():
+            break
+    return files_changed
+
+
 def _repair_summary_map_contract(
         folder, briefing_path, summary_path, content_map_path, notes_path,
         error):
@@ -521,7 +601,24 @@ def _run_structured_correction(folder, raw):
             for segment in batch
         ]
         prompt_path = Path(__file__).resolve().parent / "纠错提示词.md"
-        task = prompt_path.read_text(encoding="utf-8").strip() + f"""
+        external_note = ""
+        source_registry = folder.parent / "external_transcript_sources.json"
+        try:
+            registry = load_json(source_registry)
+            episode_name = folder.name
+            source_info = (registry.get("sources", {})
+                            .get(episode_name, {}))
+            if source_info.get("url"):
+                external_note = f"""
+
+## 外部字幕交叉核对
+本期公开字幕来源：{source_info['url']}
+该来源只能作为独立的 external_transcript 交叉证据，不能冒充 human_audio。
+如果公开字幕与本地 ASR 明确一致，可用 verification=external_entity_source 仅修正可确认的专名、数字或短语；如果不一致，必须保留本地原文并标记 unresolved。
+"""
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        task = prompt_path.read_text(encoding="utf-8").strip() + external_note + f"""
 
 ## 本次结构化受限任务
 当前 source_kind='local_asr'。本次只处理第 {batch_index} 批。输入如下：
@@ -557,14 +654,37 @@ corrected_text 只包含该 segment 的英文正文，不要写 speaker 标签�
         if cached_items is not None:
             corrected_items.extend(cached_items)
             continue
-        result = run_json_task(
-            folder,
-            task,
-            schema,
-            task_name=f"transcript_correction_{batch_index}",
-            enable_search=True,
-            model=model,
-        )
+        try:
+            result = run_json_task(
+                folder,
+                task,
+                schema,
+                task_name=f"transcript_correction_{batch_index}",
+                enable_search=True,
+                model=model,
+            )
+        except SubagentError as exc:
+            # Safe machine-only degradation: a malformed model response must
+            # never certify the batch. Preserve every ASR word and carry the
+            # uncertainty forward so downstream evidence/quality gates can
+            # exclude or reject claims that depend on these segments.
+            if "schema" not in str(exc).lower():
+                raise
+            items = [{
+                "segment_id": segment.get("id"),
+                "status": "unresolved",
+                "corrected_text": str(segment.get("text", "")).strip(),
+                "change_types": [],
+                "verification": "unresolved",
+                "unresolved": ["纠错模型返回无效结构，保留本地 ASR 原文"],
+            } for segment in batch]
+            corrected_items.extend(items)
+            atomic_write_json(cache_path, {
+                "fingerprint": fingerprint,
+                "segments": items,
+                "fallback": "schema_failure_preserve_raw_unresolved",
+            })
+            continue
         payload = result.get("payload")
         if not isinstance(payload, dict):
             raise RuntimeError(
@@ -581,7 +701,7 @@ corrected_text 只包含该 segment 的英文正文，不要写 speaker 标签�
             if not isinstance(item, dict):
                 continue
             source = source_by_id.get(str(item.get("segment_id")))
-            if source is None or item.get("status") != "corrected":
+            if source is None:
                 continue
             if str(item.get("corrected_text", "")).strip() != str(
                     source.get("text", "")).strip():
@@ -591,7 +711,12 @@ corrected_text 只包含该 segment 的英文正文，不要写 speaker 标签�
                 or source.get("needs_review")
                 or source.get("speaker_alignment") == "unresolved"
             )
-            if flagged:
+            # A model may return an unchanged flagged segment directly rather
+            # than returning status=corrected.  Keep it explicitly unresolved;
+            # never let not_required imply audio verification.
+            if flagged and (
+                    item.get("status") in {"corrected", "unchanged", "unresolved"}
+                    or item.get("verification") == "not_required"):
                 item.update({
                     "status": "unresolved",
                     "corrected_text": str(source.get("text", "")).strip(),
@@ -1084,6 +1209,9 @@ def run_content_pipeline(folder, title, run_report=None, force=False):
                 required_files=[content_map_path],
             )
             payload = load_json(content_map_path)
+            transcript_mode = load_json(raw_path).get("meta", {}).get("evidence_mode")
+            if transcript_mode and payload.get("evidence_mode") != transcript_mode:
+                payload["evidence_mode"] = transcript_mode
             _normalized_map, ids_changed = normalize_generated_unit_ids(payload)
             normalize_detail_items(payload)
             payload["prewrite_fact_checks_version"] = (
@@ -1228,13 +1356,25 @@ JSON，不修改文件。""",
         summary_path = folder / "summary_map.json"
         # Recheck after upstream repairs: regeneration is not necessarily a
         # semantic change. Legacy prose without input bindings stays conservative.
-        alias_errors = public_entity_alias_errors(
-            load_json(entities_path),
-            notes_path.read_text(encoding="utf-8")
-            if notes_path.exists() else "",
-            briefing_path.read_text(encoding="utf-8")
-            if briefing_path.exists() else "",
-        ) if entities_path.exists() else ["canonical_entities.json 缺失"]
+        # Spacing that finalization would deterministically collapse must not
+        # trigger a full rewrite here, so evaluate the collapsed prose.
+        _entities_for_gate = (
+            load_json(entities_path) if entities_path.exists() else None)
+        alias_errors = (
+            public_entity_alias_errors(
+                _entities_for_gate,
+                collapse_public_alias_spacing(
+                    notes_path.read_text(encoding="utf-8"),
+                    _entities_for_gate)[0]
+                if notes_path.exists() else "",
+                collapse_public_alias_spacing(
+                    briefing_path.read_text(encoding="utf-8"),
+                    _entities_for_gate)[0]
+                if briefing_path.exists() else "",
+            )
+            if _entities_for_gate is not None
+            else ["canonical_entities.json 缺失"]
+        )
         review_path = folder / "ai_review.json"
         review_content_changed = False
         review_rejected = False
@@ -1299,6 +1439,11 @@ JSON，不修改文件。""",
                     review_path if review_path.exists() else None)
                 if path is not None and path.exists()
             ]
+            # When stale prose failed deterministic alias validation, the
+            # staging copy would let a no-op writer pass untouched files
+            # straight through the same gate forever.  Regenerate from a
+            # clean workspace so the required outputs are genuinely rebuilt.
+            force_rewrite = bool(alias_errors)
             try:
                 run_edit_task(
                     folder,
@@ -1307,6 +1452,7 @@ JSON，不修改文件。""",
                     allowed_files=[notes_path, briefing_path, summary_path],
                     input_files=writing_inputs,
                     required_files=[notes_path, briefing_path, summary_path],
+                    remove_missing_outputs=force_rewrite,
                 )
             except SubagentError:
                 retry_prompt = (
@@ -1324,6 +1470,7 @@ JSON，不修改文件。""",
                     allowed_files=[notes_path, briefing_path, summary_path],
                     input_files=writing_inputs,
                     required_files=[notes_path, briefing_path, summary_path],
+                    remove_missing_outputs=force_rewrite,
                 )
         missing = [
             path.name for path in (notes_path, briefing_path, summary_path)
@@ -1361,7 +1508,27 @@ JSON，不修改文件。""",
         normalization_changes = finalized["normalization_changes"]
         notes_text = (folder / "中文完整笔记.md").read_text(encoding="utf-8")
         briefing_text = (folder / "讲书稿.md").read_text(encoding="utf-8")
-        if (not writing_ready) or review_content_changed:
+        # Alias leaks are minimal prose substitutions: collapse deterministic
+        # spacing first, then let a scoped repair pass fix remaining leaks
+        # before any mapping enrichment hashes the prose.
+        alias_repaired = False
+        _entities_payload = (
+            load_json(entities_path) if entities_path.exists() else None)
+        if _entities_payload is not None and public_entity_alias_errors(
+                _entities_payload, notes_text, briefing_text):
+            alias_repaired = _repair_public_entity_aliases(
+                folder, _entities_payload,
+                folder / "中文完整笔记.md", folder / "讲书稿.md",
+            )
+            if alias_repaired:
+                notes_text = (folder / "中文完整笔记.md").read_text(
+                    encoding="utf-8")
+                briefing_text = (folder / "讲书稿.md").read_text(
+                    encoding="utf-8")
+        if (
+                (not writing_ready)
+                or review_content_changed
+                or alias_repaired):
             content_map, transcript = enrich_content_map_evidence(
                 content_map, transcript)
             summary_map = enrich_summary_map_evidence(
